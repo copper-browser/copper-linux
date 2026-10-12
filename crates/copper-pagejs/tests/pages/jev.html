@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Copper Jev fixture</title>
+<style>
+  body { margin: 0; padding: 16px; font: 16px/1.4 sans-serif; }
+  .tall { height: 2400px; }
+</style>
+</head>
+<body>
+<h1>Book a trip</h1>
+<p>Pick where and when.</p>
+<a href="/help">Help</a>
+<label for="where">Where to?</label>
+<input id="where" type="text" value="London">
+<select id="cabin" aria-label="Cabin">
+  <option value="e">Economy</option>
+  <option value="b">Business</option>
+  <option value="f" disabled>First</option>
+</select>
+<label><input id="direct" type="checkbox"> Direct only</label>
+<input type="password" aria-label="Secret">
+<button id="search">Search</button>
+<button disabled>Disabled</button>
+<div role="tab" aria-selected="true">Flights</div>
+<p id="status">idle</p>
+<div class="tall"></div>
+<button id="far">Far below</button>
+<script>
+  document.getElementById('search').addEventListener('click', function () {
+    document.getElementById('status').textContent = 'searched ' + document.getElementById('where').value;
+  });
+</script>
+</body>
+</html>

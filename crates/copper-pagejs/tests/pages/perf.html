@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Copper perf fixture</title>
+<style>
+  @keyframes glow { from { box-shadow: 0 0 0 #f80; } to { box-shadow: 0 0 20px #f80; } }
+  .glow { width: 100px; height: 40px; animation: glow 1s infinite alternate; }
+  .frost { width: 100px; height: 20px; backdrop-filter: blur(4px); }
+</style>
+</head>
+<body>
+<div class="glow">glow</div>
+<div class="frost">frost</div>
+<canvas width="64" height="32"></canvas>
+<p id="ticks">0</p>
+<script>
+  var n = 0;
+  function tick() { n++; document.getElementById('ticks').textContent = String(n); requestAnimationFrame(tick); }
+  requestAnimationFrame(tick);
+</script>
+</body>
+</html>

@@ -10,5 +10,16 @@ publish.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
+[dev-dependencies]
+gtk4.workspace = true
+glib.workspace = true
+webkit6.workspace = true
+
+# Runs every script in a real WebKitGTK view. GTK must own the process's main
+# thread, so this test brings its own main() instead of libtest's harness.
+[[test]]
+name = "webview"
+harness = false
+
 [lints]
 workspace = true

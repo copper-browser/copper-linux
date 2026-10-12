@@ -9,12 +9,19 @@ publish.workspace = true
 [dependencies]
 copper-engine.workspace = true
 gtk4.workspace = true
+gdk4.workspace = true
 glib.workspace = true
 gio.workspace = true
 webkit6.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
-anyhow.workspace = true
+futures-channel = "0.3"
+
+# GTK may only be used from the thread that initialised it, so the
+# integration test drives its own main loop instead of libtest's threads.
+[[test]]
+name = "integration"
+harness = false
 
 [lints]
 workspace = true

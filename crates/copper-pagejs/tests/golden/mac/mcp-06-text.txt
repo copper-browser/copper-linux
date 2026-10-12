@@ -1,0 +1,18 @@
+Copper fixture
+
+Plain words for the agent to read.
+
+Your name         I agree   Small   Large  Red
+Green
+Blue     Send  Disabled
+Custom control
+Clickable span
+Drag me
+Drop here
+Tall inner content
+First item
+Second item
+Hidden from the tree
+Results
+
+Nothing yet

@@ -1,0 +1,273 @@
+<!doctype html>
+<!--
+  Canvas host fixture: the page↔host bridge of docs/canvas.md (spec §4) over
+  a plain in-memory map instead of Yjs, drawn as a list of absolutely placed
+  divs. Updates are base64 of JSON ({"set":{id:props},"del":[ids]}), the
+  snapshot is base64 of {"state":{id:props}}. It exists so the Swift host can
+  be built and exercised end to end (bench, copper call canvas_*) without the
+  real bundle; it is not the product.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
+<title>Canvas</title>
+<style>
+  :root { --ground:#f6f5f2; --ink:#1d1d1f; --muted:#6e6e73; --line:#dcdad5; --paper:#fff; }
+  :root.dark { --ground:#1c1c1e; --ink:#f2f2f7; --muted:#98989d; --line:#3a3a3c; --paper:#2c2c2e; }
+  html, body { margin:0; height:100%; background:var(--ground); color:var(--ink); font:13px -apple-system, system-ui, sans-serif; overflow:hidden; }
+  #bar { position:fixed; top:0; left:0; right:0; height:36px; display:flex; align-items:center; gap:12px; padding:0 14px;
+         border-bottom:1px solid var(--line); background:color-mix(in srgb, var(--ground) 86%, transparent); z-index:10; }
+  #bar b { font-weight:600; } #bar span { color:var(--muted); }
+  #agents { margin-left:auto; display:flex; gap:6px; }
+  .agent { padding:2px 8px; border-radius:10px; color:#fff; font-size:11px; }
+  #board { position:absolute; inset:36px 0 0 0; overflow:auto; }
+  #plane { position:relative; width:6000px; height:6000px;
+           background-image:radial-gradient(var(--line) 1px, transparent 1px); background-size:24px 24px; }
+  .shape { position:absolute; box-sizing:border-box; border-radius:8px; padding:10px; overflow:hidden; white-space:pre-wrap;
+           box-shadow:0 1px 2px rgba(0,0,0,.08), 0 4px 14px rgba(0,0,0,.06); background:var(--paper); }
+  .shape.sel { outline:2px solid #0a84ff; outline-offset:2px; }
+  .shape .by { position:absolute; right:6px; bottom:4px; font-size:10px; color:rgba(0,0,0,.45); }
+  .frame { background:transparent; border:1.5px dashed var(--muted); box-shadow:none; }
+  .frame .title { position:absolute; top:-20px; left:2px; font-weight:600; color:var(--muted); }
+  .text { background:transparent; box-shadow:none; font-size:16px; }
+  .arrow { background:transparent; box-shadow:none; padding:0; border-top:2px solid var(--muted); border-radius:0; height:0 !important; }
+  .cursor { position:absolute; width:10px; height:10px; border-radius:50%; transform:translate(-5px,-5px); pointer-events:none; }
+  #empty { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); color:var(--muted); pointer-events:none; }
+</style>
+</head>
+<body>
+<div id="bar"><b id="name">Canvas</b><span id="kind"></span><span id="net"></span><div id="agents"></div></div>
+<div id="board"><div id="plane"></div></div>
+<div id="empty">Double-click to add a note</div>
+<script>
+(function () {
+  "use strict";
+  var COLORS = { yellow:"#fde68a", pink:"#fbcfe8", blue:"#bfdbfe", green:"#bbf7d0", purple:"#ddd6fe", gray:"#e5e7eb", white:"#ffffff" };
+  var SIZES = { sticky:[200,200], text:[240,60], frame:[480,320], link:[280,90], image:[320,240], arrow:[160,0] };
+  var TYPES = ["sticky","text","frame","arrow","image","link"];
+  var shapes = {}, agents = {}, selection = [], info = null, me = null, net = "offline", seq = 0;
+
+  function post(m) { try { window.webkit.messageHandlers.canvas.postMessage(m); } catch (e) {} }
+  function enc(o) { return btoa(unescape(encodeURIComponent(JSON.stringify(o)))); }
+  function dec(b) { return JSON.parse(decodeURIComponent(escape(atob(b)))); }
+  function now() { return Date.now(); }
+  function newId() { seq += 1; return "s" + now().toString(36) + seq.toString(36) + Math.floor(Math.random() * 1e4).toString(36); }
+  function log(level, msg) { post({ type:"log", level:level, msg:String(msg) }); }
+
+  function merge(set, del) {
+    Object.keys(set || {}).forEach(function (id) { shapes[id] = Object.assign({}, shapes[id] || {}, set[id]); });
+    (del || []).forEach(function (id) { delete shapes[id]; });
+  }
+  function absorb(o) {
+    if (!o) return;
+    if (o.state) { merge(o.state, null); return; }
+    merge(o.set, o.del);
+  }
+  function emit(set, del) { post({ type:"update", b64: enc({ set:set, del:del }) }); render(); }
+
+  function viewport() {
+    var b = document.getElementById("board");
+    return { x:b.scrollLeft, y:b.scrollTop, w:b.clientWidth, h:b.clientHeight, zoom:1 };
+  }
+  function overlaps(r) {
+    return Object.keys(shapes).some(function (id) {
+      var s = shapes[id]; if (s.type === "arrow") return false;
+      return r.x < s.x + s.w + 20 && r.x + r.w + 20 > s.x && r.y < s.y + s.h + 20 && r.y + r.h + 20 > s.y;
+    });
+  }
+  function place(w, h) {
+    var v = viewport(), cx = v.x + v.w / 2 - w / 2, cy = v.y + v.h / 2 - h / 2;
+    for (var ring = 0; ring < 30; ring++) {
+      for (var dx = -ring; dx <= ring; dx++) for (var dy = -ring; dy <= ring; dy++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue;
+        var r = { x: Math.max(0, Math.round(cx + dx * 220)), y: Math.max(0, Math.round(cy + dy * 160)), w:w, h:h };
+        if (!overlaps(r)) return r;
+      }
+    }
+    return { x: Math.round(cx), y: Math.round(cy), w:w, h:h };
+  }
+  function center(id) { var s = shapes[id]; return s ? { x:s.x + s.w / 2, y:s.y + s.h / 2 } : null; }
+
+  function applyOps(ops, who, origin) {
+    var by = (who && who.name) || (me && me.name) || "someone";
+    var set = {}, del = [], ids = [], errors = [], applied = 0;
+    ops.forEach(function (op, index) {
+      try {
+        var t = now();
+        switch (op && op.op) {
+          case "add": {
+            var s = Object.assign({}, op.shape || {});
+            if (TYPES.indexOf(s.type) < 0) throw new Error("unknown shape type " + s.type);
+            var size = SIZES[s.type];
+            s.w = s.w || size[0]; s.h = s.h == null ? size[1] : s.h;
+            if (s.x == null || s.y == null) { var r = place(s.w, s.h); s.x = r.x; s.y = r.y; }
+            s.id = s.id || newId();
+            if (shapes[s.id]) throw new Error("id " + s.id + " exists");
+            s.color = s.color || (s.type === "sticky" ? "yellow" : "white");
+            s.by = by; s.createdAt = t; s.updatedAt = t; s.z = Object.keys(shapes).length;
+            shapes[s.id] = s; set[s.id] = s; ids.push(s.id); break;
+          }
+          case "update": {
+            if (!shapes[op.id]) throw new Error("no shape " + op.id);
+            var p = Object.assign({}, op.patch || {}); delete p.id; p.by = by; p.updatedAt = t;
+            shapes[op.id] = Object.assign({}, shapes[op.id], p); set[op.id] = shapes[op.id]; ids.push(op.id); break;
+          }
+          case "move": {
+            if (!shapes[op.id]) throw new Error("no shape " + op.id);
+            var m = shapes[op.id]; m.x += +op.dx || 0; m.y += +op.dy || 0; m.by = by; m.updatedAt = t;
+            set[op.id] = m; ids.push(op.id); break;
+          }
+          case "resize": {
+            if (!shapes[op.id]) throw new Error("no shape " + op.id);
+            var z = shapes[op.id]; z.w = Math.max(10, +op.w || z.w); z.h = Math.max(0, +op.h || z.h); z.by = by; z.updatedAt = t;
+            set[op.id] = z; ids.push(op.id); break;
+          }
+          case "delete": {
+            if (!shapes[op.id]) throw new Error("no shape " + op.id);
+            delete shapes[op.id]; delete set[op.id]; del.push(op.id); ids.push(op.id); break;
+          }
+          case "connect": {
+            var a = center(op.from), b = center(op.to);
+            if (!a || !b) throw new Error("connect needs two existing shapes");
+            var id = newId();
+            var arrow = { id:id, type:"arrow", from:{ ref:op.from }, to:{ ref:op.to }, label:op.label || "",
+                          x:Math.min(a.x, b.x), y:Math.min(a.y, b.y), w:Math.abs(b.x - a.x) || 1, h:Math.abs(b.y - a.y),
+                          color:"gray", by:by, createdAt:t, updatedAt:t, z:Object.keys(shapes).length };
+            shapes[id] = arrow; set[id] = arrow; ids.push(id); break;
+          }
+          case "clear": {
+            if (!op.confirm) throw new Error("clear needs confirm:true");
+            Object.keys(shapes).forEach(function (id) { del.push(id); }); shapes = {}; set = {}; break;
+          }
+          default: throw new Error("unknown op " + (op && op.op));
+        }
+        applied += 1;
+      } catch (e) { errors.push({ index:index, op:(op && op.op) || "?", error:String(e.message || e) }); }
+    });
+    if (applied) emit(set, del); else render();
+    return { applied:applied, ids:ids, errors:errors };
+  }
+
+  function summary(s, full) {
+    var out = { id:s.id, type:s.type, x:s.x, y:s.y, w:s.w, h:s.h, color:s.color, by:s.by };
+    ["text","title","label","url"].forEach(function (k) {
+      if (s[k] != null && s[k] !== "") out[k] = full || String(s[k]).length <= 500 ? s[k] : String(s[k]).slice(0, 500) + "…";
+    });
+    if (s.type === "arrow") { out.from = s.from; out.to = s.to; }
+    return out;
+  }
+
+  function render() {
+    var plane = document.getElementById("plane");
+    plane.innerHTML = "";
+    var list = Object.keys(shapes).map(function (k) { return shapes[k]; }).sort(function (a, b) { return (a.z || 0) - (b.z || 0); });
+    list.forEach(function (s) {
+      var d = document.createElement("div");
+      d.className = "shape " + s.type + (selection.indexOf(s.id) >= 0 ? " sel" : "");
+      d.dataset.id = s.id;
+      d.style.left = s.x + "px"; d.style.top = s.y + "px"; d.style.width = s.w + "px"; d.style.height = s.h + "px";
+      if (s.type === "sticky") d.style.background = COLORS[s.color] || s.color || COLORS.yellow;
+      if (s.type === "sticky") d.style.color = "#1d1d1f";
+      if (s.type === "frame") { var t = document.createElement("div"); t.className = "title"; t.textContent = s.title || "Frame"; d.appendChild(t); }
+      else if (s.type === "link") d.textContent = (s.title || s.url || "") + "\n" + (s.url || "");
+      else if (s.type === "arrow") d.title = s.label || "";
+      else d.textContent = s.text || "";
+      if (s.by && s.type !== "arrow") { var by = document.createElement("div"); by.className = "by"; by.textContent = s.by; d.appendChild(by); }
+      plane.appendChild(d);
+    });
+    Object.keys(agents).forEach(function (k) {
+      var a = agents[k]; if (!a.cursor) return;
+      var c = document.createElement("div"); c.className = "cursor"; c.style.background = a.color || "#888";
+      c.style.left = a.cursor.x + "px"; c.style.top = a.cursor.y + "px"; plane.appendChild(c);
+    });
+    document.getElementById("empty").style.display = list.length ? "none" : "block";
+    var chips = document.getElementById("agents"); chips.innerHTML = "";
+    Object.keys(agents).forEach(function (k) {
+      var a = agents[k], c = document.createElement("span"); c.className = "agent"; c.style.background = a.color || "#888";
+      c.textContent = a.name + (a.status && a.status !== "idle" ? " · " + a.status : ""); chips.appendChild(c);
+    });
+    document.getElementById("net").textContent = info && info.online ? "· room " + net : "· on this Mac";
+  }
+
+  var board = document.getElementById("board");
+  board.addEventListener("dblclick", function (e) {
+    if (!info || info.readOnly || e.target.closest(".shape")) return;
+    var rect = board.getBoundingClientRect();
+    applyOps([{ op:"add", shape:{ type:"sticky", text:"New note", x:Math.round(e.clientX - rect.left + board.scrollLeft - 100),
+                                   y:Math.round(e.clientY - rect.top + board.scrollTop - 100) } }], me);
+  });
+  board.addEventListener("click", function (e) {
+    var hit = e.target.closest(".shape");
+    selection = hit ? [hit.dataset.id] : [];
+    post({ type:"selection", ids:selection }); render();
+  });
+  document.addEventListener("keydown", function (e) {
+    if ((e.key === "Backspace" || e.key === "Delete") && selection.length) {
+      applyOps(selection.map(function (id) { return { op:"delete", id:id }; }), me);
+      selection = []; post({ type:"selection", ids:[] });
+    }
+  });
+
+  window.copperCanvas = {
+    fixture: true,
+    init: function (o) {
+      info = o || {}; me = info.me || null; shapes = {}; agents = {}; selection = [];
+      if (info.state) { try { absorb(dec(info.state)); } catch (e) { log("error", "bad state: " + e); } }
+      document.getElementById("name").textContent = info.name || "Canvas";
+      document.getElementById("kind").textContent = info.kind || "";
+      if (info.online) post({ type:"wsOpen" });
+      render();
+      return true;
+    },
+    applyUpdate: function (b64) { try { absorb(dec(b64)); render(); } catch (e) { log("error", "bad update: " + e); } },
+    wsMessage: function (b64) { log("debug", "ws frame " + b64.length); },
+    wsState: function (s) {
+      net = s; render();
+      if (s === "closed" && info && info.online) setTimeout(function () { post({ type:"wsOpen" }); }, 1000);
+    },
+    apply: function (input) {
+      // {ops, as?} or a bare array, either as a JSON string.
+      var v = typeof input === "string" ? JSON.parse(input) : input;
+      var ops = Array.isArray(v) ? v : (v && v.ops) || [];
+      var who = (!Array.isArray(v) && v && v.as) || null;
+      if (typeof who === "string") who = { id: "agent:" + who.toLowerCase(), name: who };
+      who = who || { id: "agent", name: "Agent" };
+      var out = applyOps(ops, who);
+      if (out.applied) {
+        var last = out.ids.length ? center(out.ids[out.ids.length - 1]) : null;
+        agents[who.id] = { id: who.id, name: who.name, color: who.color || "#8E4EC6", status: "writing", cursor: last, updatedAt: now() };
+        render();
+        setTimeout(function () { if (agents[who.id]) { agents[who.id].status = "idle"; render(); } }, 1500);
+      }
+      return JSON.stringify(out);
+    },
+    read: function (opts) {
+      var o = typeof opts === "string" ? JSON.parse(opts || "{}") : (opts || {});
+      return JSON.stringify({
+        canvas: { id: info && info.docId, name: info && info.name, kind: info && info.kind },
+        viewport: viewport(),
+        shapes: Object.keys(shapes).map(function (k) { return summary(shapes[k], !!o.full); }),
+        agents: Object.keys(agents).map(function (k) { return agents[k]; }),
+        selection: selection
+      });
+    },
+    select: function (ids) { selection = (ids || []).filter(function (id) { return shapes[id]; }); post({ type:"selection", ids:selection }); render(); },
+    zoomTo: function (ids) {
+      var xs = (ids || []).map(function (id) { return shapes[id]; }).filter(Boolean);
+      if (!xs.length) return;
+      var minX = Math.min.apply(null, xs.map(function (s) { return s.x; })), minY = Math.min.apply(null, xs.map(function (s) { return s.y; }));
+      board.scrollTo({ left: Math.max(0, minX - 60), top: Math.max(0, minY - 60) });
+    },
+    setAgent: function (a) { if (!a || !a.id) return; agents[a.id] = Object.assign({}, agents[a.id] || {}, a, { updatedAt: now() }); render(); },
+    theme: function (t) { document.documentElement.classList.toggle("dark", t === "dark"); },
+    exportState: function () { return enc({ state: shapes }); }
+  };
+
+  if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) document.documentElement.classList.add("dark");
+  render();
+  post({ type:"ready" });
+})();
+</script>
+</body>
+</html>

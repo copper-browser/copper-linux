@@ -1,0 +1,19 @@
+[package]
+name = "backstage"
+description = "T-002 spike: off-screen agent tabs and trusted input on WebKitGTK 6.0."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+gtk4.workspace = true
+gdk4.workspace = true
+glib.workspace = true
+gio.workspace = true
+webkit6.workspace = true
+javascriptcore6.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

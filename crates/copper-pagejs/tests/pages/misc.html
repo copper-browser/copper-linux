@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Copper misc fixture</title>
+<link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/touch.png" sizes="180X180">
+<link rel="stylesheet" href="data:text/css,">
+<style>
+  body { margin: 0; font: 16px/1.4 sans-serif; }
+  #wide { width: 300px; overflow-x: auto; white-space: nowrap; }
+  #wide div { width: 1200px; height: 40px; }
+  .column { width: 600px; margin: 0 auto; }
+  .tall { height: 3000px; }
+</style>
+</head>
+<body>
+<div id="wide"><div>Wide strip that scrolls sideways</div></div>
+<img id="pic" alt="pixel" width="40" height="40" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40'><rect width='40' height='40' fill='red'/></svg>">
+<div class="column"><p id="para">A paragraph inside a column wide enough to be the thing a double tap zooms to. It has enough words to fill a few lines of text.</p></div>
+<p id="sel">Some selectable words</p>
+<div class="tall"></div>
+</body>
+</html>

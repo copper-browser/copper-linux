@@ -12,6 +12,7 @@ members = [
     "crates/copper-mcp",
     "crates/copper-app",
     "spikes/hello",
+    "spikes/backstage",
 ]
 
 [workspace.package]

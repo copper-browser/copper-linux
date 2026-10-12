@@ -1,0 +1,1 @@
+color g | color g | input Ada | change Ada | color b

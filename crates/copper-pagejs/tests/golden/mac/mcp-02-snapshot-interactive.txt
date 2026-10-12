@@ -1,0 +1,28 @@
+### Page
+- URL: http://127.0.0.1:18765/mcp.html?golden=1
+- Title: Copper MCP fixture
+- Tab: 340e161d (background — not on the user's screen)
+
+- link "Home" [ref=e1] /url: /home
+- link "Docs" [ref=e2] /url: /docs
+- label "Your name" [ref=e3]
+- textbox "Your name" [ref=e4]
+- textbox "Email address" [ref=e5] [value="a@example.test"]
+- searchbox "Search docs" [ref=e6]
+- label "I agree" [ref=e7]
+  - checkbox "I agree" [ref=e8] [checked=false]
+- label "Small" [ref=e9]
+  - radio "Small" [ref=e10] [checked=true]
+- label "Large" [ref=e11]
+  - radio "Large" [ref=e12] [checked=false]
+- combobox "color" [ref=e13] [value="r"]
+  - option "Red" [ref=e14]
+  - option "Green" [ref=e15]
+  - option "Blue" [ref=e16]
+- textbox "Notes" [ref=e17]
+- slider "Volume" [ref=e18]
+- button "Send" [ref=e19]
+- button "Disabled" [ref=e20] [disabled]
+- text "Editor" [ref=e21]
+- button "Custom control" [ref=e22] [expanded=false]
+- text "Clickable span" [ref=e23]

@@ -1,0 +1,11 @@
+### Page
+- URL: http://127.0.0.1:18765/mcp.html?golden=1
+- Title: Copper MCP fixture
+- Tab: 340e161d (background — not on the user's screen)
+
+- form
+  - label "Your name" [ref=e3]
+  - textbox "Your name" [ref=e4]
+  - textbox "Email address" [ref=e5] [value="a@example.test"]
+  - searchbox "Search docs" [ref=e6]
+… (truncated at 5 nodes; pass a selector or interactive: true for less)

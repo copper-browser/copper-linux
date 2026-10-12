@@ -1,0 +1,10 @@
+### Page
+- URL: http://127.0.0.1:18765/jev.html?golden=1
+- Title: Copper Jev fixture
+- Tab: 340e161d (background — not on the user's screen)
+
+### Elements
+[1] link       Help
+[2] textbox    Where to? · London (type/click)
+[3] combobox   Cabin · Economy · options: Business
+… 3 more

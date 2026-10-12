@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Copper autofill fixture</title>
+  <style>
+    body { max-width: 52rem; margin: 2rem auto; padding: 0 1rem; font: 16px/1.4 system-ui, sans-serif; color: #222; }
+    fieldset { margin: 1rem 0; padding: 1rem; border: 1px solid #bbb; border-radius: .5rem; }
+    legend { font-weight: 700; padding: 0 .35rem; }
+    label { display: block; margin: .55rem 0; }
+    input, select { box-sizing: border-box; width: 100%; max-width: 28rem; padding: .4rem; font: inherit; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 0 1rem; }
+    #events { padding: .75rem; background: #f3f3f3; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>Checkout autofill fixture</h1>
+  <p>Some controls use the standard <code>autocomplete</code> vocabulary; the rest
+    deliberately rely on their label, name, id, or placeholder.</p>
+
+  <form id="checkout" autocomplete="off">
+    <fieldset>
+      <legend>Shipping address</legend>
+      <div class="grid">
+        <label for="first-name">First name
+          <input id="first-name" name="firstName" autocomplete="given-name" placeholder="Given name"></label>
+        <label for="last-name">Last name
+          <input id="last-name" name="lastName" autocomplete="family-name" placeholder="Family name"></label>
+        <label for="email">Email
+          <input id="email" name="email" type="email" autocomplete="email" placeholder="you@example.com"></label>
+        <label for="phone">Phone
+          <input id="phone" name="phone" type="tel" autocomplete="tel" placeholder="Phone number"></label>
+        <label for="company">Company
+          <input id="company" name="company" autocomplete="organization" placeholder="Company"></label>
+        <label for="address-line-1">Address line 1
+          <input id="address-line-1" name="addressLine1" placeholder="Street address"></label>
+        <label for="apt">Apt / suite
+          <input id="apt" name="apt" placeholder="Apt, suite, or unit"></label>
+        <label for="city">City
+          <input id="city" name="city" placeholder="City"></label>
+        <label for="state">State
+          <select id="state" name="state" aria-label="State">
+            <option value="">Choose a state</option><option value="AL">Alabama</option><option value="AK">Alaska</option>
+            <option value="AZ">Arizona</option><option value="AR">Arkansas</option><option value="CA">California</option>
+            <option value="CO">Colorado</option><option value="CT">Connecticut</option><option value="DE">Delaware</option>
+            <option value="FL">Florida</option><option value="GA">Georgia</option><option value="HI">Hawaii</option>
+            <option value="ID">Idaho</option><option value="IL">Illinois</option><option value="IN">Indiana</option>
+            <option value="IA">Iowa</option><option value="KS">Kansas</option><option value="KY">Kentucky</option>
+            <option value="LA">Louisiana</option><option value="ME">Maine</option><option value="MD">Maryland</option>
+            <option value="MA">Massachusetts</option><option value="MI">Michigan</option><option value="MN">Minnesota</option>
+            <option value="MS">Mississippi</option><option value="MO">Missouri</option><option value="MT">Montana</option>
+            <option value="NE">Nebraska</option><option value="NV">Nevada</option><option value="NH">New Hampshire</option>
+            <option value="NJ">New Jersey</option><option value="NM">New Mexico</option><option value="NY">New York</option>
+            <option value="NC">North Carolina</option><option value="ND">North Dakota</option><option value="OH">Ohio</option>
+            <option value="OK">Oklahoma</option><option value="OR">Oregon</option><option value="PA">Pennsylvania</option>
+            <option value="RI">Rhode Island</option><option value="SC">South Carolina</option><option value="SD">South Dakota</option>
+            <option value="TN">Tennessee</option><option value="TX">Texas</option><option value="UT">Utah</option>
+            <option value="VT">Vermont</option><option value="VA">Virginia</option><option value="WA">Washington</option>
+            <option value="WV">West Virginia</option><option value="WI">Wisconsin</option><option value="WY">Wyoming</option>
+          </select></label>
+        <label for="zip">ZIP / postal code
+          <input id="zip" name="postal" placeholder="ZIP code"></label>
+        <label for="country">Country
+          <select id="country" name="country" aria-label="Country">
+            <option value="">Choose a country</option><option value="US">United States</option>
+            <option value="CA">Canada</option><option value="GB">United Kingdom</option>
+          </select></label>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Payment — combined expiry</legend>
+      <label for="cardholder">Cardholder name
+        <input id="cardholder" name="cardholder" autocomplete="cc-name" placeholder="Name on card"></label>
+      <label for="card-number">Card number
+        <input id="card-number" name="cardNumber" inputmode="numeric" autocomplete="cc-number" placeholder="Card number"></label>
+      <label for="card-exp">Expiry (MM/YY)
+        <input id="card-exp" name="expiration" inputmode="numeric" placeholder="MM/YY"></label>
+      <label for="cvc">CVC
+        <input id="cvc" name="securityCode" inputmode="numeric" placeholder="Security code"></label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Payment — separate expiry</legend>
+      <label for="cardholder-2">Cardholder name
+        <input id="cardholder-2" name="cardName2" placeholder="Name on card"></label>
+      <label for="card-number-2">Card number
+        <input id="card-number-2" name="pan2" autocomplete="cc-number" inputmode="numeric" placeholder="Card number"></label>
+      <label for="exp-month">Expiry month
+        <select id="exp-month" name="expMonth" autocomplete="cc-exp-month">
+          <option value="">MM</option><option value="01">01</option><option value="02">02</option><option value="03">03</option>
+          <option value="04">04</option><option value="05">05</option><option value="06">06</option><option value="07">07</option>
+          <option value="08">08</option><option value="09">09</option><option value="10">10</option><option value="11">11</option><option value="12">12</option>
+        </select></label>
+      <label for="exp-year">Expiry year
+        <select id="exp-year" name="expYear" autocomplete="cc-exp-year">
+          <option value="">YYYY</option><option value="2027">2027</option><option value="2028">2028</option><option value="2029">2029</option><option value="2030">2030</option>
+        </select></label>
+      <label for="cvc-2">CVC
+        <input id="cvc-2" name="cvc2" placeholder="Security code"></label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Account PIN</legend>
+      <label for="pin">PIN
+        <input id="pin" name="pin" type="text" inputmode="numeric" placeholder="PIN"></label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Sign in</legend>
+      <label for="sign-in-email">Email
+        <input id="sign-in-email" name="username" type="email" autocomplete="username" placeholder="Email"></label>
+      <label for="sign-in-password">Password
+        <input id="sign-in-password" name="password" type="password" autocomplete="current-password" placeholder="Password"></label>
+    </fieldset>
+  </form>
+
+  <h2>Observed events</h2>
+  <pre id="events">{} </pre>
+  <script>
+    (() => {
+      const counts = Object.create(null), output = document.getElementById('events');
+      const key = el => el.id || el.name || el.getAttribute('aria-label') || 'unnamed-field';
+      const render = () => { output.textContent = JSON.stringify(counts, null, 2); };
+      document.querySelectorAll('input, select, textarea').forEach(el => {
+        const name = key(el); counts[name] = { input: 0, change: 0 };
+        ['input', 'change'].forEach(type => el.addEventListener(type, () => {
+          counts[name][type] += 1; render();
+        }));
+      });
+      render();
+    })();
+  </script>
+</body>
+</html>
