@@ -1,11 +1,17 @@
-// Copper input placeholder (T-005): delivers copper_engine::InputEvent by
-// dispatching DOM events from script, so every event has isTrusted == false.
-// T-002 replaces this with trusted input where the engine allows it.
+// Copper input: the script half of copper_engine::PageView::input.
+//
+// Two jobs. (1) Deliver an InputEvent by dispatching DOM events from script
+// (isTrusted == false): the fallback for actions WebKit has no trusted path
+// for (right/middle/modified clicks, drag, wheel, most keys) and for pages
+// whose WebKit event controllers failed the self-check. (2) Help the Rust
+// side deliver trusted input (T-002 / D-006): `arm`/`settle` around pointer
+// actions emitted on WebKit's own GTK event controllers, `keys`/`fallback`
+// around WebKit editing commands.
 //
 // Runs as an async function body in the isolated world "copper-input" with
 // one argument, `ev`: the externally tagged JSON of an InputEvent, e.g.
-// {"click": {"x": 10, "y": 20, ...}} or {"type": "hello"}. Returns
-// {ok: true, target} or {ok: false, error}.
+// {"click": {"x": 10, "y": 20, ...}} or {"type": "hello"}, or of one of the
+// helper ops above. Returns {ok: true, target, ...} or {ok: false, error}.
 const kind = typeof ev === 'string' ? ev : Object.keys(ev)[0];
 const a = typeof ev === 'string' ? {} : ev[kind];
 const S = (globalThis.__copperInput ||= { x: NaN, y: NaN, over: null });
@@ -448,7 +454,108 @@ function scroll(a) {
   return { ok: true, target: describe(t.el) };
 }
 
+// --- Trusted-input helpers ------------------------------------------------
+
+// Before the engine delivers a pointer action at (x, y): check there is an
+// element under the point, remember the point (Scroll uses it), and listen
+// for the action's last trusted event (`until`: 'click' with detail >=
+// count, or 'mousemove'). `watch` is false when the point is in a
+// cross-origin frame, whose events never reach a listener out here.
+function arm(a) {
+  const t = hit(a.x, a.y);
+  if (!t) return { ok: false, error: `no element at ${a.x},${a.y}` };
+  S.x = a.x;
+  S.y = a.y;
+  S.over = t.el;
+  if (S.disarm) S.disarm();
+  S.pending = null;
+  if (t.el.tagName === 'IFRAME' || t.el.tagName === 'FRAME') {
+    return { ok: true, target: describe(t.el), watch: false };
+  }
+  const W = t.win;
+  const type = a.until;
+  const count = Math.max(1, a.count | 0);
+  let done;
+  S.pending = new Promise((r) => (done = r));
+  const disarm = () => {
+    W.removeEventListener(type, on, true);
+    if (S.disarm === disarm) S.disarm = null;
+  };
+  const on = (e) => {
+    if (!e.isTrusted || (type === 'click' && (e.detail | 0) < count)) return;
+    disarm();
+    done(true);
+  };
+  W.addEventListener(type, on, true);
+  S.disarm = disarm;
+  return { ok: true, target: describe(t.el), watch: true };
+}
+
+// Wait up to `ms` for the event `arm` listens for.
+async function settle(a) {
+  const p = S.pending;
+  S.pending = null;
+  if (!p) return { ok: true, seen: false };
+  let timer;
+  const late = new Promise((r) => (timer = setTimeout(() => r(false), a.ms)));
+  const seen = await Promise.race([p, late]);
+  clearTimeout(timer);
+  if (!seen && S.disarm) S.disarm();
+  return { ok: true, seen };
+}
+
+const shortcut = (m) => !!(m && (m.ctrl || m.alt || m.meta));
+function keyInit(key, m, W) {
+  const kc = keyCodeFor(key);
+  return Object.assign(
+    { key, code: codeFor(key), bubbles: true, cancelable: true, composed: true, view: W, keyCode: kc, which: kc },
+    mods(m),
+  );
+}
+
+// keyup for the previous key (after the engine ran its editing command),
+// then keydown (+ keypress when it types) for the next one. `proceed` is
+// false when the page cancelled it; `editable` says whether an editing
+// command has somewhere to go (unknown inside a cross-origin frame: yes).
+function keys(a) {
+  if (a.up) {
+    const el = deepActive();
+    const W = winOf(el);
+    el.dispatchEvent(new W.KeyboardEvent('keyup', keyInit(a.up.key, a.up.modifiers, W)));
+  }
+  if (!a.down) return { ok: true };
+  const d = a.down;
+  const el = deepActive();
+  const W = winOf(el);
+  const init = keyInit(d.key, d.modifiers, W);
+  let proceed = el.dispatchEvent(new W.KeyboardEvent('keydown', init));
+  if (proceed && d.text && !shortcut(d.modifiers)) {
+    const cc = d.text.codePointAt(0);
+    proceed = el.dispatchEvent(
+      new W.KeyboardEvent('keypress', Object.assign({}, init, { charCode: cc, keyCode: cc, which: cc })),
+    );
+  }
+  const opaque = el.tagName === 'IFRAME' || el.tagName === 'FRAME';
+  return { ok: true, proceed, editable: opaque || isTextField(el) || el.isContentEditable, target: describe(el) };
+}
+
+// A key's default action, from script, when the engine has no editing
+// command for it (Tab, Enter on a button or link…).
+function fallback(a) {
+  const el = deepActive();
+  defaultAction(el, a.key, a.modifiers);
+  return { ok: true, target: describe(el) };
+}
+
 switch (kind) {
+  case 'arm':
+    return arm(a);
+  case 'settle':
+    return await settle(a);
+  case 'keys':
+    return keys(a);
+  case 'fallback':
+    return fallback(a);
   case 'click':
     return click(a);
   case 'move':

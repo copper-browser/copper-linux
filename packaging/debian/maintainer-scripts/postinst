@@ -1,0 +1,27 @@
+#!/bin/sh
+# postinst for copper: register as an x-www-browser alternative and load the
+# AppArmor profile that lets WebKit's sandbox create a user namespace.
+set -e
+
+APP_PROFILE=/etc/apparmor.d/copper
+
+case "$1" in
+configure)
+	update-alternatives --install /usr/bin/x-www-browser x-www-browser /usr/bin/copper 40
+	update-alternatives --install /usr/bin/gnome-www-browser gnome-www-browser /usr/bin/copper 40
+
+	# Same as dh_apparmor: load (or reload) the profile only where AppArmor is
+	# present and enabled. A failure here must not leave the package
+	# half-configured, but it is said out loud: without the profile Copper's
+	# pages cannot start on Ubuntu 24.04.
+	if [ -f "$APP_PROFILE" ] && command -v apparmor_parser >/dev/null 2>&1; then
+		if aa-enabled --quiet 2>/dev/null || [ -d /sys/kernel/security/apparmor ]; then
+			apparmor_parser -r -T -W "$APP_PROFILE" ||
+				echo "copper: could not load $APP_PROFILE; web pages may fail to start (see 'journalctl -k | grep apparmor')" >&2
+		fi
+	fi
+	;;
+abort-upgrade | abort-remove | abort-deconfigure) ;;
+esac
+
+exit 0

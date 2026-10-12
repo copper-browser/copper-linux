@@ -8,10 +8,27 @@ publish.workspace = true
 
 [dependencies]
 copper-core.workspace = true
+copper-creds.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+url.workspace = true
 directories.workspace = true
+rusqlite = { version = "0.37", features = ["bundled"] }
+aes = "0.8"
+cbc = "0.1"
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+sha1 = "0.10"
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+# Writes a v11 key into a private Secret Service first: the bus address must
+# be in the environment before any thread exists.
+[[test]]
+name = "chrome"
+harness = false
 
 [lints]
 workspace = true

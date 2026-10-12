@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata for Copper for Linux, installed by the .deb and the
+     Flatpak into share/metainfo. Validation: see packaging/README.md. -->
+<component type="desktop-application">
+  <id>com.copperbrowser.Copper</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Copper</name>
+  <summary>A quiet WebKit browser with an agent built in</summary>
+  <developer id="com.copperbrowser">
+    <name>Copper</name>
+  </developer>
+  <description>
+    <p>
+      Copper is a small, fast browser on WebKit: one field, tabs in a column or a
+      row, and the page. The Linux build is native Rust on GTK 4, libadwaita and
+      WebKitGTK.
+    </p>
+    <ul>
+      <li>Spaces, pinned tabs and private tabs</li>
+      <li>A built-in ad blocker, hide-anything and reading mode</li>
+      <li>History, bookmarks, downloads and passwords in the system keyring</li>
+      <li>Copper Cloud sync with Copper on the Mac</li>
+      <li>A local MCP server so coding agents can drive a tab</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">com.copperbrowser.Copper.desktop</launchable>
+  <url type="homepage">https://github.com/copper-browser/copper-linux</url>
+  <url type="bugtracker">https://github.com/copper-browser/copper-linux/issues</url>
+  <url type="vcs-browser">https://github.com/copper-browser/copper-linux</url>
+  <categories>
+    <category>Network</category>
+    <category>WebBrowser</category>
+  </categories>
+  <keywords>
+    <keyword>web</keyword>
+    <keyword>browser</keyword>
+    <keyword>internet</keyword>
+  </keywords>
+  <provides>
+    <binary>copper</binary>
+    <mediatype>text/html</mediatype>
+    <mediatype>application/xhtml+xml</mediatype>
+  </provides>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.0.1" date="2026-10-12">
+      <description>
+        <p>First Linux build.</p>
+      </description>
+    </release>
+  </releases>
+</component>

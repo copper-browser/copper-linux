@@ -1,0 +1,18 @@
+#!/bin/sh
+# postrm for copper: unload the AppArmor profile when the package goes (it is
+# a conffile, so the file itself stays until purge — dpkg removes it then).
+set -e
+
+case "$1" in
+remove | purge)
+	if command -v apparmor_parser >/dev/null 2>&1 && [ -d /sys/kernel/security/apparmor ]; then
+		# Unload by name; harmless when it is not loaded.
+		echo "profile copper {}" | apparmor_parser -R >/dev/null 2>&1 || true
+	fi
+	if [ "$1" = purge ]; then
+		rm -f /etc/apparmor.d/local/copper
+	fi
+	;;
+esac
+
+exit 0

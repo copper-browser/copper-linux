@@ -1,0 +1,880 @@
+#!/usr/bin/env python3
+"""A stand-in for the 1Password CLI (`op` 2.x) for Copper's tests.
+
+It answers the subcommands Copper's 1Password backend uses, with op's JSON
+shapes, from a JSON state file instead of a 1Password account:
+
+    --version | account list | account add | signin | signout | whoami
+    vault list | item list | item get (ID, NAME or `-` on stdin) | item create - | item edit ID
+
+Sign-in works the three ways the real CLI does:
+
+* the 1Password app: with `app_integration` on, `op signin` "asks the app" and
+  is approved (`app_approve`, default on) or dismissed; nothing comes back on
+  stdout and later commands are authorised by the app session;
+* account password: `op signin --raw` reads the password from stdin and prints a
+  session token; later commands carry it in OP_SESSION_<user id>; `op account
+  add --signin --raw` takes the Secret Key from OP_SECRET_KEY;
+* service account: OP_SERVICE_ACCOUNT_TOKEN=ops_… (read-only unless the token
+  may write to a vault).
+
+Mock-only commands (not in the real CLI):
+
+    op mock show            the state without any secret (passwords as sha256 prefixes)
+    op mock expire          every session and app authorisation ends now
+    op mock set KEY VALUE   a flag: app_integration, app_approve, latency_ms, app_delay_ms,
+                            hang_ms (every command but `mock` sleeps this long first, outside
+                            the state lock — an op that hangs), malformed (item list/get
+                            answer with broken JSON)
+    op mock bulk N          add N generated logins (unicode titles, several URLs, shared hosts)
+    op mock reset           back to the seed
+    op mock check TITLE USER PASSWORD   does that login hold exactly this? (true/false)
+
+State lives in $OP_MOCK_STATE (default ~/.config/op-mock/state.json); every call
+is appended to calls.log beside it — argv and the *names* of OP_* variables,
+never their values or stdin — so a test can prove no secret went on argv.
+"""
+import datetime
+import fcntl
+import hashlib
+import hmac
+import json
+import os
+import secrets
+import struct
+import sys
+import time
+import urllib.parse
+
+VERSION = "2.39.0-mock"
+
+
+def stamp():
+    return datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
+
+
+class OpError(Exception):
+    pass
+
+
+def fail(message):
+    raise OpError(message)
+
+
+def now_iso():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def new_id():
+    alphabet = "abcdefghijklmnopqrstuvwxyz234567"
+    return "".join(secrets.choice(alphabet) for _ in range(26))
+
+
+def pad(prefix, upper=False):
+    value = (prefix + "0" * 26)[:26]
+    return value.upper() if upper else value.lower()
+
+
+# ---------------------------------------------------------------- the seed
+
+VAULT_PRIVATE = pad("vprivatemock")
+VAULT_SHARED = pad("vsharedmock")
+ALICE = pad("MOCKUSERALICE", True)
+NEWBIE = pad("MOCKUSERNEW", True)
+
+
+def field(fid, label, value, ftype="STRING", purpose=None, section=None):
+    out = {"id": fid, "type": ftype, "label": label, "value": value}
+    if purpose:
+        out["purpose"] = purpose
+    if section:
+        out["section"] = section
+    return out
+
+
+def login_item(iid, title, vault, user, password, urls, extra_fields=(), tags=(), totp=None):
+    fields = [
+        field("username", "username", user, "STRING", "USERNAME"),
+        field("password", "password", password, "CONCEALED", "PASSWORD"),
+        field("notesPlain", "notesPlain", "", "STRING", "NOTES"),
+    ]
+    sections = [{"id": "add more"}]
+    if totp:
+        fields.append(field("TOTP_" + iid[:8], "one-time password", totp, "OTP", section={"id": "add more"}))
+    if extra_fields:
+        sections.append({"id": "extra", "label": "Extra"})
+        for f in extra_fields:
+            f = dict(f)
+            f["section"] = {"id": "extra", "label": "Extra"}
+            fields.append(f)
+    item = {
+        "id": iid, "title": title, "version": 1, "vault": {"id": vault},
+        "category": "LOGIN", "last_edited_by": ALICE,
+        "created_at": "2026-09-01T10:00:00Z", "updated_at": "2026-09-01T10:00:00Z",
+        "additional_information": user,
+        "urls": [{"label": "website", "primary": i == 0, "href": u} for i, u in enumerate(urls)],
+        "sections": sections, "fields": fields,
+    }
+    if tags:
+        item["tags"] = list(tags)
+    return item
+
+
+def seed():
+    items = [
+        login_item(pad("itemlocalhostalice"), "Localhost", VAULT_PRIVATE, "alice@example.com", "alice-localhost-pw",
+                   ["http://localhost:8765/"],
+                   extra_fields=[field("pinfield", "PIN", "4321", "CONCEALED"),
+                                 field("acctfield", "Account number", "AC-1001", "STRING")],
+                   tags=["copper-test"],
+                   totp="otpauth://totp/Copper%20Mock:alice%40example.com?secret=JBSWY3DPEHPK3PXP&issuer=Copper%20Mock"),
+        login_item(pad("itemlocalhostbob"), "Localhost admin", VAULT_SHARED, "bob@example.com", "bob-localhost-pw",
+                   ["http://localhost"]),
+        login_item(pad("itemexampleorg"), "Example", VAULT_PRIVATE, "carol@example.org", "carol-example-pw",
+                   ["https://example.org/login"]),
+        {
+            "id": pad("itemidentityhome"), "title": "Home", "version": 1, "vault": {"id": VAULT_PRIVATE},
+            "category": "IDENTITY", "last_edited_by": ALICE,
+            "created_at": "2026-09-01T10:00:00Z", "updated_at": "2026-09-01T10:00:00Z",
+            "additional_information": "Ada Lovelace",
+            "sections": [{"id": "name", "label": "Identification"}, {"id": "address", "label": "Address"},
+                         {"id": "internet", "label": "Internet Details"}],
+            "fields": [
+                field("firstname", "first name", "Ada", section={"id": "name", "label": "Identification"}),
+                field("initial", "initial", "M", section={"id": "name", "label": "Identification"}),
+                field("lastname", "last name", "Lovelace", section={"id": "name", "label": "Identification"}),
+                field("company", "company", "Analytical Engines", section={"id": "name", "label": "Identification"}),
+                dict(field("address", "address", "12 Engine Row, Springfield, IL, 62701, us", "ADDRESS",
+                           section={"id": "address", "label": "Address"}),
+                     address={"street": "12 Engine Row", "city": "Springfield", "state": "IL", "zip": "62701", "country": "us"}),
+                field("defphone", "default phone", "+1 555 0100", "PHONE", section={"id": "address", "label": "Address"}),
+                field("email", "email", "ada@example.com", "EMAIL", section={"id": "internet", "label": "Internet Details"}),
+                field("notesPlain", "notesPlain", "", "STRING", "NOTES"),
+            ],
+        },
+        {
+            "id": pad("itemcardvisa"), "title": "Visa Personal", "version": 1, "vault": {"id": VAULT_SHARED},
+            "category": "CREDIT_CARD", "last_edited_by": ALICE,
+            "created_at": "2026-09-01T10:00:00Z", "updated_at": "2026-09-01T10:00:00Z",
+            "additional_information": "**** 1111",
+            "fields": [
+                field("cardholder", "cardholder name", "Ada Lovelace"),
+                field("type", "type", "visa", "CREDIT_TYPE"),
+                field("ccnum", "number", "4111111111111111", "CREDIT_CARD_NUMBER"),
+                field("cvv", "verification number", "123", "CONCEALED"),
+                field("expiry", "expiry date", "202812", "MONTH_YEAR"),
+                field("notesPlain", "notesPlain", "", "STRING", "NOTES"),
+            ],
+        },
+        {
+            "id": pad("itemrouterpassword"), "title": "Router admin", "version": 1, "vault": {"id": VAULT_PRIVATE},
+            "category": "PASSWORD", "last_edited_by": ALICE,
+            "created_at": "2026-09-01T10:00:00Z", "updated_at": "2026-09-01T10:00:00Z",
+            "additional_information": "",
+            "fields": [field("password", "password", "router-pw", "CONCEALED", "PASSWORD"),
+                       field("notesPlain", "notesPlain", "", "STRING", "NOTES")],
+        },
+    ]
+    return {
+        "flags": {"app_integration": False, "app_approve": True, "latency_ms": 0, "app_delay_ms": 0},
+        "latest_signin": "",
+        "accounts": [{
+            "url": "https://mock.1password.com", "email": "alice@example.com", "user_uuid": ALICE,
+            "account_uuid": pad("MOCKACCOUNTA", True), "shorthand": "mock",
+            "password": "correct horse battery staple", "secret_key": "A3-MOCK01-ABCDEF-GHIJK-LMNOP-QRSTU-VWXYZ",
+        }],
+        # Accounts that exist "on 1Password's servers" but not yet on this Mac.
+        "remote_accounts": [{
+            "url": "https://team.1password.com", "email": "new@example.com", "user_uuid": NEWBIE,
+            "account_uuid": pad("MOCKACCOUNTB", True), "shorthand": "team",
+            "password": "new account password", "secret_key": "A3-NEW123-ABCDEF-GHIJK-LMNOP-QRSTU-VWXYZ",
+        }],
+        "sessions": {},
+        "app_sessions": {},
+        "service_tokens": {
+            "ops_mockServiceTokenReadOnly0001": {"name": "Mock reader", "vaults": [VAULT_SHARED], "writable": []},
+            "ops_mockServiceTokenWriter0002": {"name": "Mock writer", "vaults": [VAULT_PRIVATE, VAULT_SHARED],
+                                               "writable": [VAULT_SHARED]},
+        },
+        "vaults": [
+            {"id": VAULT_PRIVATE, "name": "Private", "content_version": 10, "created_at": "2026-09-01T10:00:00Z",
+             "updated_at": "2026-09-01T10:00:00Z"},
+            {"id": VAULT_SHARED, "name": "Shared", "content_version": 4, "created_at": "2026-09-01T10:00:00Z",
+             "updated_at": "2026-09-01T10:00:00Z"},
+        ],
+        "items": items,
+    }
+
+
+# ---------------------------------------------------------------- state
+
+def state_path():
+    path = os.environ.get("OP_MOCK_STATE")
+    if not path:
+        path = os.path.join(os.path.expanduser("~"), ".config", "op-mock", "state.json")
+    return os.path.abspath(os.path.expanduser(path))
+
+
+class State:
+    def __enter__(self):
+        path = state_path()
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        self.lock = open(path + ".lock", "a+")
+        fcntl.flock(self.lock, fcntl.LOCK_EX)
+        self.path = path
+        if os.path.exists(path):
+            with open(path) as f:
+                self.data = json.load(f)
+        else:
+            self.data = seed()
+        self.dirty = not os.path.exists(path)
+        return self
+
+    def save(self):
+        self.dirty = True
+
+    def __exit__(self, *exc):
+        if self.dirty:
+            tmp = self.path + ".tmp"
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:
+                json.dump(self.data, f, indent=1)
+            os.replace(tmp, self.path)
+        fcntl.flock(self.lock, fcntl.LOCK_UN)
+        self.lock.close()
+        return False
+
+
+def log_call(argv, stdin_len):
+    try:
+        path = os.path.join(os.path.dirname(state_path()), "calls.log")
+        names = sorted(k for k in os.environ if k.startswith("OP_") and k != "OP_MOCK_STATE")
+        with open(path, "a") as f:
+            f.write(json.dumps({"t": now_iso(), "argv": argv, "op_env": names, "stdin_bytes": stdin_len}) + "\n")
+    except OSError:
+        pass
+
+
+# ---------------------------------------------------------------- argv
+
+VALUE_FLAGS = {"--account", "--format", "--session", "--vault", "--categories", "--permission", "--address",
+               "--email", "--shorthand", "--title", "--url", "--category", "--tags", "--fields", "--config",
+               "--encoding", "--cache", "--generate-password", "--template", "--group", "--user", "--out-file"}
+
+
+def parse(argv):
+    flags, positional = {}, []
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a.startswith("--") and "=" in a:
+            k, v = a.split("=", 1)
+            flags[k] = v
+        elif a in VALUE_FLAGS:
+            flags[a] = argv[i + 1] if i + 1 < len(argv) else ""
+            i += 1
+        elif a.startswith("--") or a in ("-h", "-f", "-v"):
+            flags[a] = True
+        else:
+            positional.append(a)
+        i += 1
+    return flags, positional
+
+
+def as_json(flags):
+    return flags.get("--format", os.environ.get("OP_FORMAT", "")) == "json"
+
+
+MALFORMED = False
+
+
+def emit(obj):
+    text = json.dumps(obj, indent=2) + "\n"
+    if MALFORMED:
+        text = text[: len(text) // 2] + "\n<<garbage>> }}} ]\n"
+    sys.stdout.write(text)
+
+
+# ---------------------------------------------------------------- auth
+
+def public_account(a):
+    return {k: a[k] for k in ("url", "email", "user_uuid", "account_uuid", "shorthand")}
+
+
+def find_account(st, query):
+    q = (query or "").lower()
+    for a in st.data["accounts"]:
+        host = urllib.parse.urlparse(a["url"]).netloc.lower()
+        if q in (a["user_uuid"].lower(), a["shorthand"].lower(), a["email"].lower(), host, a["url"].lower(),
+                 a["account_uuid"].lower()):
+            return a
+    return None
+
+
+def chosen_account(st, flags, required=True):
+    query = flags.get("--account") or os.environ.get("OP_ACCOUNT")
+    if query:
+        a = find_account(st, query)
+        if not a:
+            fail(f"no account found for filter {query}")
+        return a
+    if st.data.get("latest_signin"):
+        a = find_account(st, st.data["latest_signin"])
+        if a:
+            return a
+    if len(st.data["accounts"]) == 1:
+        return st.data["accounts"][0]
+    if not st.data["accounts"]:
+        if required:
+            fail("No accounts configured for use with 1Password CLI.")
+        return None
+    if required:
+        fail("multiple accounts found; use the --account flag to choose one")
+    return None
+
+
+class Principal:
+    def __init__(self, kind, account=None, token=None, spec=None):
+        self.kind, self.account, self.token, self.spec = kind, account, token, spec
+
+    def vaults(self, st):
+        if self.kind == "service":
+            return [v for v in st.data["vaults"] if v["id"] in self.spec["vaults"]]
+        return list(st.data["vaults"])
+
+    def writable(self, st):
+        if self.kind == "service":
+            return [v for v in st.data["vaults"] if v["id"] in self.spec["writable"]]
+        return list(st.data["vaults"])
+
+
+def authenticate(st, flags, command):
+    token = os.environ.get("OP_SERVICE_ACCOUNT_TOKEN")
+    if token:
+        spec = st.data["service_tokens"].get(token)
+        if not spec or spec.get("revoked"):
+            fail("failed to DecodeSACredentials: invalid service account token")
+        return Principal("service", token=token, spec=spec)
+    account = chosen_account(st, flags)
+    session = flags.get("--session") or os.environ.get("OP_SESSION_" + account["user_uuid"])
+    if session:
+        known = st.data["sessions"].get(session)
+        if not known or known["user_uuid"] != account["user_uuid"]:
+            fail("You are not currently signed in. Please run `op signin --help` for instructions")
+        if known.get("expired") or time.time() - known.get("last", 0) > 30 * 60:
+            known["expired"] = True
+            st.save()
+            fail("session expired, sign in to create a new session")
+        known["last"] = time.time()
+        st.save()
+        return Principal("human", account=account)
+    if st.data["flags"].get("app_integration"):
+        if st.data["app_sessions"].get(account["user_uuid"]):
+            return Principal("human", account=account)
+        if command == "whoami":
+            fail("account is not signed in")
+        if not st.data["flags"].get("app_approve", True):
+            fail("authorization prompt dismissed, please try again")
+        st.data["app_sessions"][account["user_uuid"]] = True
+        st.save()
+        return Principal("human", account=account)
+    if command == "whoami":
+        fail(f"no active session found for account {account['shorthand']}")
+    fail("You are not currently signed in. Please run `op signin --help` for instructions")
+
+
+def read_stdin(gap=2.0, cap=20.0):
+    """stdin, without ever hanging: nothing from a terminal, and from a pipe
+    only what arrives — a pipe nobody writes to or closes (a harness's
+    inherited stdin) gives up after `gap` seconds of silence."""
+    try:
+        if sys.stdin is None or sys.stdin.closed or sys.stdin.isatty():
+            return ""
+        fd = sys.stdin.fileno()
+    except (OSError, ValueError):
+        return ""
+    import select
+    chunks, started = [], time.time()
+    while time.time() - started < cap:
+        ready, _, _ = select.select([fd], [], [], gap)
+        if not ready:
+            break
+        block = os.read(fd, 65536)
+        if not block:
+            break
+        chunks.append(block)
+    return b"".join(chunks).decode("utf-8", "replace")
+
+
+def read_password(prompt):
+    data = read_stdin()
+    line = data.split("\n", 1)[0] if data else ""
+    if not line:
+        sys.stderr.write(prompt)
+        fail("operation not supported by device")
+    return line
+
+
+def new_session(st, account):
+    token = secrets.token_urlsafe(32)
+    st.data["sessions"][token] = {"user_uuid": account["user_uuid"], "expired": False, "last": time.time()}
+    st.data["latest_signin"] = account["shorthand"]
+    st.save()
+    return token
+
+
+def print_session(flags, account, token):
+    if flags.get("--raw"):
+        sys.stdout.write(token + "\n")
+    else:
+        sys.stdout.write(f'export OP_SESSION_{account["user_uuid"]}="{token}"\n'
+                         "# This command is meant to be used with your shell's eval function.\n")
+
+
+# ---------------------------------------------------------------- items
+
+CATEGORY_NAMES = {"login": "LOGIN", "password": "PASSWORD", "credit card": "CREDIT_CARD", "creditcard": "CREDIT_CARD",
+                  "identity": "IDENTITY", "secure note": "SECURE_NOTE", "securenote": "SECURE_NOTE"}
+
+
+def vault_ref(st, vid):
+    for v in st.data["vaults"]:
+        if v["id"] == vid:
+            return {"id": v["id"], "name": v["name"]}
+    return {"id": vid, "name": ""}
+
+
+def find_vault(st, query, pool):
+    for v in pool:
+        if query and (v["id"] == query or v["name"].lower() == query.lower()):
+            return v
+    return None
+
+
+def totp_code(uri):
+    secret, digits, period = uri, 6, 30
+    if uri.lower().startswith("otpauth://"):
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(uri).query)
+        secret = q.get("secret", [""])[0]
+        digits = int(q.get("digits", ["6"])[0])
+        period = int(q.get("period", ["30"])[0])
+    import base64
+    s = secret.upper().replace(" ", "").replace("=", "")
+    key = base64.b32decode(s + "=" * (-len(s) % 8))
+    counter = struct.pack(">Q", int(time.time() // period))
+    mac = hmac.new(key, counter, hashlib.sha1).digest()
+    o = mac[-1] & 0x0F
+    code = (struct.unpack(">I", mac[o:o + 4])[0] & 0x7FFFFFFF) % (10 ** digits)
+    return str(code).zfill(digits)
+
+
+def summary(st, item):
+    out = {k: item[k] for k in ("id", "title", "version") if k in item}
+    out["vault"] = vault_ref(st, item["vault"]["id"])
+    for k in ("category", "last_edited_by", "created_at", "updated_at", "additional_information", "tags", "urls"):
+        if k in item:
+            out[k] = item[k]
+    return out
+
+
+def full(st, item, reveal):
+    out = summary(st, item)
+    if "sections" in item:
+        out["sections"] = item["sections"]
+    fields = []
+    for f in item.get("fields", []):
+        f = dict(f)
+        f["reference"] = f"op://{out['vault']['name']}/{item['title']}/{f['label']}"
+        if f["type"] == "OTP" and f.get("value"):
+            try:
+                f["totp"] = totp_code(f["value"])
+            except Exception:
+                pass
+        if f["type"] in ("CONCEALED", "OTP") and not reveal and f.get("value"):
+            f["value"] = f"[use 'op item get {item['id']} --reveal' to reveal]"
+        fields.append(f)
+    out["fields"] = fields
+    return out
+
+
+def visible_items(st, principal):
+    ids = {v["id"] for v in principal.vaults(st)}
+    return [i for i in st.data["items"] if i["vault"]["id"] in ids]
+
+
+def find_item(st, principal, spec, vault=None):
+    pool = visible_items(st, principal)
+    if vault:
+        v = find_vault(st, vault, principal.vaults(st))
+        pool = [i for i in pool if v and i["vault"]["id"] == v["id"]]
+    for i in pool:
+        if i["id"] == spec:
+            return i
+    named = [i for i in pool if i["title"].lower() == str(spec).lower()]
+    if len(named) == 1:
+        return named[0]
+    if len(named) > 1:
+        fail(f'More than one item matches "{spec}". Try again and specify the item by its ID')
+    fail(f'"{spec}" isn\'t an item. Specify the item with its ID, name, or domain.')
+
+
+def specs_from_stdin():
+    raw = read_stdin()
+    text = raw.strip()
+    if not text:
+        return []
+    specs = []
+    try:
+        data = json.loads(text)
+        data = data if isinstance(data, list) else [data]
+        for d in data:
+            if isinstance(d, dict) and d.get("id"):
+                specs.append((d["id"], (d.get("vault") or {}).get("id")))
+        return specs
+    except json.JSONDecodeError:
+        pass
+    decoder, pos = json.JSONDecoder(), 0
+    try:
+        while pos < len(text):
+            while pos < len(text) and text[pos].isspace():
+                pos += 1
+            if pos >= len(text):
+                break
+            obj, pos = decoder.raw_decode(text, pos)
+            if isinstance(obj, dict) and obj.get("id"):
+                specs.append((obj["id"], (obj.get("vault") or {}).get("id")))
+        return specs
+    except json.JSONDecodeError:
+        return [(line.strip(), None) for line in text.splitlines() if line.strip()]
+
+
+def template_fields(template, existing=None):
+    fields = []
+    for f in template.get("fields", []):
+        f = {k: v for k, v in f.items() if k not in ("reference", "totp", "entropy", "password_details")}
+        f.setdefault("id", (f.get("label") or new_id()).replace(" ", "_"))
+        f.setdefault("label", f["id"])
+        f.setdefault("type", "STRING")
+        if isinstance(f.get("value"), str) and f["value"].startswith("[use 'op item get"):
+            old = next((o for o in (existing or []) if o.get("id") == f["id"]), None)
+            f["value"] = old.get("value", "") if old else ""
+        fields.append(f)
+    return fields
+
+
+def username_of(fields):
+    for f in fields:
+        if f.get("purpose") == "USERNAME":
+            return f.get("value", "")
+    return ""
+
+
+# ---------------------------------------------------------------- commands
+
+def cmd_account(st, flags, args):
+    sub = args[0] if args else ""
+    if sub in ("list", "ls"):
+        accounts = [public_account(a) for a in st.data["accounts"]]
+        if as_json(flags):
+            emit(accounts)
+        else:
+            print("URL                          EMAIL                 USER ID")
+            for a in accounts:
+                print(f"{a['url'].replace('https://', ''):<28} {a['email']:<21} {a['user_uuid']}")
+        return
+    if sub == "add":
+        address = (flags.get("--address") or "").lower().replace("https://", "").rstrip("/")
+        email = (flags.get("--email") or "").lower()
+        if not address or "." not in address or address.endswith(".invalid"):
+            fail("Can't sign in. Enter your full sign-in address.")
+        key = os.environ.get("OP_SECRET_KEY")
+        if not key:
+            fail("missing OP_SECRET_KEY environment variable")
+        password = read_password(f"Enter the password for {email} at {address}: ")
+        remote = None
+        for a in st.data["remote_accounts"] + st.data["accounts"]:
+            if a["email"].lower() == email and a["url"].replace("https://", "") == address:
+                remote = a
+        if not remote or remote["secret_key"] != key or remote["password"] != password:
+            fail("Couldn't sign in. Check your sign-in details then try again.")
+        if not find_account(st, remote["user_uuid"]):
+            st.data["accounts"].append(remote)
+            st.data["remote_accounts"] = [a for a in st.data["remote_accounts"] if a is not remote]
+        st.save()
+        if flags.get("--signin"):
+            print_session(flags, remote, new_session(st, remote))
+        return
+    if sub == "forget":
+        a = find_account(st, args[1] if len(args) > 1 else "")
+        if a:
+            st.data["accounts"].remove(a)
+            st.save()
+        return
+    fail(f"unknown command \"{sub}\" for \"op account\"")
+
+
+def cmd_signin(st, flags):
+    if st.data["flags"].get("app_integration"):
+        account = chosen_account(st, flags)
+        delay = st.data["flags"].get("app_delay_ms", 0)
+        if delay:
+            time.sleep(delay / 1000)
+        if not st.data["flags"].get("app_approve", True):
+            fail("authorization prompt dismissed, please try again")
+        st.data["app_sessions"][account["user_uuid"]] = True
+        st.data["latest_signin"] = account["shorthand"]
+        st.save()
+        return
+    account = chosen_account(st, flags)
+    host = urllib.parse.urlparse(account["url"]).netloc
+    password = read_password(f"Enter the password for {account['email']} at {host}: ")
+    if password != account["password"]:
+        fail("Authentication: (401) Unauthorized, You aren't authorized to perform this action.")
+    print_session(flags, account, new_session(st, account))
+
+
+def cmd_signout(st, flags):
+    token = os.environ.get("OP_SERVICE_ACCOUNT_TOKEN")
+    if token:
+        return
+    account = chosen_account(st, flags, required=False)
+    if not account:
+        return
+    for key, s in list(st.data["sessions"].items()):
+        if s["user_uuid"] == account["user_uuid"] or flags.get("--all"):
+            s["expired"] = True
+    st.data["app_sessions"][account["user_uuid"]] = False
+    if flags.get("--forget"):
+        st.data["accounts"] = [a for a in st.data["accounts"] if a["user_uuid"] != account["user_uuid"]]
+    st.save()
+
+
+def cmd_whoami(st, flags):
+    p = authenticate(st, flags, "whoami")
+    if p.kind == "service":
+        out = {"url": "https://mock.1password.com", "user_uuid": pad("MOCKSERVICE", True),
+               "account_uuid": pad("MOCKACCOUNTA", True), "user_type": "SERVICE_ACCOUNT"}
+    else:
+        a = p.account
+        out = {"url": a["url"], "email": a["email"], "user_uuid": a["user_uuid"],
+               "account_uuid": a["account_uuid"], "user_type": "HUMAN"}
+    if as_json(flags):
+        emit(out)
+    else:
+        for k, v in out.items():
+            print(f"{k.replace('_', ' ').title()}: {v}")
+
+
+def cmd_vault(st, flags, args):
+    if not args or args[0] not in ("list", "ls"):
+        fail("unknown vault command")
+    p = authenticate(st, flags, "vault")
+    pool = p.writable(st) if flags.get("--permission") else p.vaults(st)
+    out = []
+    for v in pool:
+        row = dict(v)
+        row["items"] = sum(1 for i in st.data["items"] if i["vault"]["id"] == v["id"])
+        out.append(row)
+    emit(out)
+
+
+def cmd_item(st, flags, args):
+    global MALFORMED
+    sub = args[0] if args else ""
+    p = authenticate(st, flags, "item")
+    MALFORMED = bool(st.data["flags"].get("malformed"))
+    latency = st.data["flags"].get("latency_ms", 0)
+    if latency:
+        time.sleep(latency / 1000)
+    if sub in ("list", "ls"):
+        pool = visible_items(st, p)
+        if flags.get("--vault"):
+            v = find_vault(st, flags["--vault"], p.vaults(st))
+            if not v:
+                fail(f"\"{flags['--vault']}\" isn't a vault in this account.")
+            pool = [i for i in pool if i["vault"]["id"] == v["id"]]
+        if flags.get("--categories"):
+            wanted = {CATEGORY_NAMES.get(c.strip().lower(), c.strip().upper().replace(" ", "_"))
+                      for c in flags["--categories"].split(",")}
+            pool = [i for i in pool if i["category"] in wanted]
+        emit([summary(st, i) for i in pool])
+        return
+    if sub == "get":
+        reveal = bool(flags.get("--reveal"))
+        spec = args[1] if len(args) > 1 else None
+        if spec == "-" or spec is None:
+            specs = specs_from_stdin()
+            for iid, vid in specs:
+                item = find_item(st, p, iid, vid)
+                emit(full(st, item, reveal))
+            return
+        if p.kind == "service" and not flags.get("--vault"):
+            fail("When using service accounts, you must specify a vault with the '--vault' flag or through piped input.")
+        item = find_item(st, p, spec, flags.get("--vault"))
+        if flags.get("--otp"):
+            otp = next((f for f in item.get("fields", []) if f["type"] == "OTP"), None)
+            if not otp:
+                fail(f"item \"{spec}\" does not contain a one-time password field")
+            print(totp_code(otp["value"]))
+            return
+        emit(full(st, item, reveal))
+        return
+    if sub == "create":
+        template = {}
+        if len(args) > 1 and args[1] == "-":
+            template = json.loads(read_stdin() or "{}")
+        vault = find_vault(st, flags.get("--vault") or "Private", p.vaults(st))
+        if not vault:
+            fail(f"\"{flags.get('--vault')}\" isn't a vault in this account.")
+        if vault["id"] not in {v["id"] for v in p.writable(st)}:
+            fail("You do not have permission to perform this action.")
+        fields = template_fields(template)
+        category = (flags.get("--category") or template.get("category") or "LOGIN").upper()
+        urls = template.get("urls") or ([{"label": "website", "primary": True, "href": flags["--url"]}]
+                                        if flags.get("--url") else [])
+        item = {
+            "id": new_id(), "title": flags.get("--title") or template.get("title") or "Untitled",
+            "version": 1, "vault": {"id": vault["id"]}, "category": category,
+            "last_edited_by": p.account["user_uuid"] if p.account else pad("MOCKSERVICE", True),
+            "created_at": now_iso(), "updated_at": now_iso(),
+            "additional_information": username_of(fields), "urls": urls,
+            "sections": template.get("sections") or [{"id": "add more"}], "fields": fields,
+        }
+        st.data["items"].append(item)
+        st.save()
+        emit(full(st, item, bool(flags.get("--reveal"))))
+        return
+    if sub == "edit":
+        if len(args) < 2:
+            fail("an item must be specified")
+        item = find_item(st, p, args[1], flags.get("--vault"))
+        if item["vault"]["id"] not in {v["id"] for v in p.writable(st)}:
+            fail("You do not have permission to perform this action.")
+        raw = read_stdin()
+        if raw.strip():
+            template = json.loads(raw)
+            if "fields" in template:
+                item["fields"] = template_fields(template, item.get("fields"))
+            for key in ("title", "urls", "tags", "sections"):
+                if key in template:
+                    item[key] = template[key]
+        if flags.get("--title"):
+            item["title"] = flags["--title"]
+        for a in args[2:]:
+            if "=" in a:
+                fail("the mock refuses assignment statements: Copper must send values through stdin")
+        item["additional_information"] = username_of(item["fields"]) if item["category"] == "LOGIN" else item.get("additional_information", "")
+        item["version"] = item.get("version", 1) + 1
+        item["updated_at"] = now_iso()
+        st.save()
+        emit(full(st, item, bool(flags.get("--reveal"))))
+        return
+    fail(f"unknown command \"{sub}\" for \"op item\"")
+
+
+def cmd_mock(st, args):
+    sub = args[0] if args else "show"
+    if sub == "reset":
+        st.data = seed()
+        st.save()
+        print("reset")
+    elif sub == "expire":
+        for s in st.data["sessions"].values():
+            s["expired"] = True
+        st.data["app_sessions"] = {}
+        st.save()
+        print("expired")
+    elif sub == "set":
+        key, value = args[1], args[2]
+        st.data["flags"][key] = json.loads(value) if value not in ("on", "off") else value == "on"
+        st.save()
+        print(json.dumps(st.data["flags"]))
+    elif sub == "bulk":
+        count = int(args[1]) if len(args) > 1 else 1500
+        vaults = [VAULT_PRIVATE, VAULT_SHARED]
+        names = ["Café", "Ünïcode 🔐", "日本語サイト", "Ελληνικά", "Plain", "Bank", "Mail"]
+        for n in range(count):
+            host = f"login.shop{n % 600}.com"
+            urls = [f"https://{host}/login"]
+            if n % 5 == 0:
+                urls.append(f"https://www.shop{n % 600}.com")
+            if n % 97 == 0:
+                urls = []  # an item without any website
+            user = f"user{n}+{names[n % len(names)].split()[0].lower()}@example.net"
+            st.data["items"].append(login_item(
+                pad(f"bulk{n:06d}"), f"{names[n % len(names)]} {n}", vaults[n % 2], user, f"bulk-pw-{n}", urls,
+                totp=("otpauth://totp/Bulk?secret=JBSWY3DPEHPK3PXP" if n % 50 == 0 else None)))
+        st.save()
+        print(f"bulk {count}")
+    elif sub == "check":
+        title, user, password = args[1], args[2], args[3]
+        hit = False
+        for i in st.data["items"]:
+            if i["title"] == title:
+                f = {x.get("purpose"): x.get("value") for x in i.get("fields", [])}
+                hit = hit or (f.get("USERNAME") == user and f.get("PASSWORD") == password)
+        print(json.dumps(hit))
+    else:
+        def fp(v):
+            return hashlib.sha256(v.encode()).hexdigest()[:10] if v else ""
+        out = {
+            "flags": st.data["flags"],
+            "accounts": [a["email"] for a in st.data["accounts"]],
+            "live_sessions": sum(1 for s in st.data["sessions"].values() if not s.get("expired")),
+            "app_sessions": [k for k, v in st.data["app_sessions"].items() if v],
+            "items": [{"title": i["title"], "vault": vault_ref(st, i["vault"]["id"])["name"],
+                       "category": i["category"], "version": i.get("version"),
+                       "user": username_of(i.get("fields", [])),
+                       "password_sha256": fp(next((f.get("value", "") for f in i.get("fields", [])
+                                                   if f.get("purpose") == "PASSWORD"), "")),
+                       "urls": [u["href"] for u in i.get("urls", [])]} for i in st.data["items"]],
+        }
+        print(json.dumps(out, indent=2))
+
+
+def main(argv):
+    if argv[:1] == ["mock"]:
+        with State() as st:
+            cmd_mock(st, argv[1:])
+        return 0
+    stdin_len = 0
+    log_call(argv, stdin_len)
+    try:
+        with open(state_path()) as f:
+            early = json.load(f).get("flags", {})
+    except (OSError, ValueError):
+        early = {}
+    if early.get("hang_ms"):
+        time.sleep(early["hang_ms"] / 1000)
+    flags, positional = parse(argv)
+    if flags.get("--version") or flags.get("-v"):
+        print(VERSION)
+        return 0
+    if os.environ.get("OP_CONFIG_DIR"):
+        sys.stderr.write(f'Using configuration at non-standard location "{os.environ["OP_CONFIG_DIR"]}"\n')
+    command = positional[0] if positional else ""
+    args = positional[1:]
+    try:
+        with State() as st:
+            if command == "account":
+                cmd_account(st, flags, args)
+            elif command == "signin":
+                cmd_signin(st, flags)
+            elif command == "signout":
+                cmd_signout(st, flags)
+            elif command == "whoami":
+                cmd_whoami(st, flags)
+            elif command == "vault":
+                cmd_vault(st, flags, args)
+            elif command == "item":
+                cmd_item(st, flags, args)
+            else:
+                fail(f"unknown command \"{command}\" for \"op\"")
+    except OpError as e:
+        sys.stderr.write(f"[ERROR] {stamp()} {e}\n")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

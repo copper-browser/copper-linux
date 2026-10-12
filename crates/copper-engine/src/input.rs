@@ -33,6 +33,36 @@ impl Modifiers {
     };
 }
 
+/// How an input action reached the page (`PageView::input`'s answer).
+///
+/// For trails, probes and benches; tools that only need the action done can
+/// ignore it. `keydown`/`keyup`/`keypress` are dispatched from script on
+/// every path (no engine API makes them trusted), so they never count here:
+/// typing is `Trusted` when the text went in through the engine's editor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Trust {
+    /// The engine's own input handling made the events the action is about
+    /// (pointer, mouse, `click`, `dblclick`, focus, `beforeinput`/`input`,
+    /// `submit`, `change`): `isTrusted == true`, as if a person did it.
+    Trusted,
+    /// Part of the action went each way (typing text that contains a Tab).
+    Mixed,
+    /// Every event was dispatched from script (`isTrusted == false`).
+    Script,
+}
+
+impl Trust {
+    /// The trust of an action made of two parts.
+    pub fn and(self, other: Trust) -> Trust {
+        if self == other { self } else { Trust::Mixed }
+    }
+
+    pub fn is_trusted(self) -> bool {
+        self == Trust::Trusted
+    }
+}
+
 /// One input action. See `PageView::input` for how faithful each one is.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -1,0 +1,16 @@
+{
+  "checksum": "fixture-account-two",
+  "version": 1,
+  "roots": {
+    "bookmark_bar": {"type": "folder", "children": [
+      {"type": "url", "name": "Beta", "url": "https://beta.example/"},
+      {"type": "url", "name": "Shared", "url": "https://shared.example/"}
+    ]},
+    "other": {"type": "folder", "children": [
+      {"type": "url", "name": "Second other", "url": "https://second-other.example/"}
+    ]},
+    "synced": {"type": "folder", "children": [
+      {"type": "url", "name": "Second mobile", "url": "https://second-mobile.example/"}
+    ]}
+  }
+}

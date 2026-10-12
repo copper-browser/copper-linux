@@ -9,11 +9,20 @@ publish.workspace = true
 [dependencies]
 copper-core.workspace = true
 copper-engine.workspace = true
+copper-pagejs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tokio.workspace = true
+reqwest.workspace = true
+url.workspace = true
+base64 = "0.22"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+uuid = { version = "1", features = ["v4"] }
+regex = "1"
+png = "0.17"
+jpeg-encoder = "0.6"
 
 [lints]
 workspace = true

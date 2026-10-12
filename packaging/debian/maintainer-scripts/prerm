@@ -1,0 +1,12 @@
+#!/bin/sh
+# prerm for copper: drop the x-www-browser alternatives before the binary goes.
+set -e
+
+case "$1" in
+remove | deconfigure)
+	update-alternatives --remove x-www-browser /usr/bin/copper || true
+	update-alternatives --remove gnome-www-browser /usr/bin/copper || true
+	;;
+esac
+
+exit 0

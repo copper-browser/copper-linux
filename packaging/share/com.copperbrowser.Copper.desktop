@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Copper
+GenericName=Web Browser
+Comment=A quiet WebKit browser with an agent built in
+Keywords=web;browser;internet;www;
+Exec=copper %U
+Icon=com.copperbrowser.Copper
+Terminal=false
+StartupNotify=true
+StartupWMClass=com.copperbrowser.Copper
+Categories=Network;WebBrowser;
+MimeType=text/html;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;

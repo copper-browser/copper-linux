@@ -1,15 +1,29 @@
 [package]
 name = "copper-shield"
-description = "Content-blocker rule builder (port of Shield.swift)."
+description = "Content-blocker rule builder (port of Shield.swift) and the hide-anything stylesheet lookup."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
 [dependencies]
+copper-core.workspace = true
+copper-engine.workspace = true
+copper-pagejs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-thiserror.workspace = true
+sha2 = "0.10"
+
+[dev-dependencies]
+copper-engine-webkitgtk.workspace = true
+gtk4.workspace = true
+glib.workspace = true
+
+# Compiles the list through WebKitGTK and loads pages with it. GTK must own
+# the process's main thread, so this test brings its own main().
+[[test]]
+name = "webkit"
+harness = false
 
 [lints]
 workspace = true

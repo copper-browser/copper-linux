@@ -83,6 +83,58 @@ const INPUT_PAGE: &str = r#"<!doctype html>
   document.addEventListener('mouseup', (e) => log.drag.push(['up', e.clientX | 0, e.clientY | 0]));
 </script></body></html>"#;
 
+/// The user's tab while an agent works backstage: counts its own rAF ticks
+/// and every input-ish event, none of which may happen.
+const USER_PAGE: &str = r#"<!doctype html>
+<html><head><meta charset="utf-8"><title>user page</title>
+<style>body{margin:0;font:28px/1.4 sans-serif;background:#f4efe6;color:#2b2b2b} main{padding:48px}</style></head>
+<body><main><h1>The user's tab</h1><p>Nothing here should change while an agent works.</p></main>
+<script>
+  window.uprobe = { raf: 0, events: [] };
+  (function tick() { uprobe.raf++; requestAnimationFrame(tick); })();
+  for (const t of ['mousemove', 'mousedown', 'click', 'keydown', 'input', 'focusin', 'contextmenu'])
+    document.addEventListener(t, (e) => uprobe.events.push(t + (e.isTrusted ? '!' : '?')), true);
+</script></body></html>"#;
+
+/// The agent's page (T-002 probe). Layout, CSS px from the viewport origin:
+///   #box   0,0     200x200  colour changes every rAF tick (liveness pixel)
+///   #btn   300,100 200x80   centre (400,140)
+///   #field 300,250 300x40   centre (450,270), in a form (Enter submits)
+///   #sel   300,320 200x30   centre (400,335), options a b c
+///   #file  300,380 200x30   centre (400,395)
+const PROBE_PAGE: &str = r#"<!doctype html>
+<html><head><meta charset="utf-8"><title>agent probe</title>
+<style>
+  body{margin:0;font:20px sans-serif;background:linear-gradient(90deg,#fff 0,#dfe9f3 60%,#c3d3e8 100%);height:100vh}
+  #box{position:absolute;left:0;top:0;width:200px;height:200px;background:hsl(0 80% 50%)}
+  #btn{position:absolute;left:300px;top:100px;width:200px;height:80px;font-size:22px}
+  #field{position:absolute;left:300px;top:250px;width:300px;height:40px;font-size:20px;box-sizing:border-box}
+  #sel{position:absolute;left:300px;top:320px;width:200px;height:30px}
+  #file{position:absolute;left:300px;top:380px;width:200px;height:30px}
+</style></head>
+<body>
+<div id="box"></div>
+<button id="btn">Press</button>
+<form id="form" onsubmit="return false"><input id="field" autocomplete="off"></form>
+<select id="sel"><option value="a">Alpha</option><option value="b">Bravo</option><option value="c">Charlie</option></select>
+<input id="file" type="file">
+<script>
+  window.probe = { raf: 0, clicks: [], dbl: [], moves: 0, movesTrusted: 0, keys: [], inputs: [], focus: [],
+                   submits: [], changes: [], cancels: 0 };
+  const box = document.getElementById('box');
+  (function tick() { probe.raf++; box.style.background = `hsl(${(probe.raf * 13) % 360} 80% 50%)`; requestAnimationFrame(tick); })();
+  const $ = (id) => document.getElementById(id);
+  $('btn').addEventListener('click', (e) => probe.clicks.push({ t: e.isTrusted, d: e.detail, p: e.pointerType ?? null }));
+  $('btn').addEventListener('dblclick', (e) => probe.dbl.push(e.isTrusted));
+  document.addEventListener('mousemove', (e) => { probe.moves++; if (e.isTrusted) probe.movesTrusted++; });
+  for (const ty of ['keydown', 'keyup']) $('field').addEventListener(ty, (e) => probe.keys.push(ty + ':' + e.key));
+  for (const ty of ['beforeinput', 'input']) $('field').addEventListener(ty, (e) => probe.inputs.push({ ty, it: e.inputType, t: e.isTrusted }));
+  $('field').addEventListener('focus', (e) => probe.focus.push(e.isTrusted));
+  $('form').addEventListener('submit', (e) => probe.submits.push(e.isTrusted));
+  $('sel').addEventListener('change', (e) => probe.changes.push({ v: e.target.value, t: e.isTrusted }));
+  $('file').addEventListener('cancel', () => probe.cancels++);
+</script></body></html>"#;
+
 /// 1x1 transparent GIF.
 const GIF: &[u8] = &[
     0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -129,6 +181,8 @@ fn handle(mut stream: TcpStream, hits: &Hits, icon: &[u8]) -> std::io::Result<()
         "/page2" => ("text/html; charset=utf-8", PAGE2.into()),
         "/filter" => ("text/html; charset=utf-8", FILTER_PAGE.into()),
         "/input" => ("text/html; charset=utf-8", INPUT_PAGE.into()),
+        "/user" => ("text/html; charset=utf-8", USER_PAGE.into()),
+        "/probe" => ("text/html; charset=utf-8", PROBE_PAGE.into()),
         "/allowed.js" => ("text/javascript", b"window.allowedRan = true;".to_vec()),
         "/blocked.js" => ("text/javascript", b"window.blockedRan = true;".to_vec()),
         "/tracker.gif" => ("image/gif", GIF.to_vec()),

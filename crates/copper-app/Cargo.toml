@@ -6,6 +6,10 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[lib]
+name = "copper_app"
+path = "src/lib.rs"
+
 [[bin]]
 name = "copper"
 path = "src/main.rs"
@@ -14,15 +18,21 @@ path = "src/main.rs"
 copper-core.workspace = true
 copper-engine.workspace = true
 copper-engine-webkitgtk.workspace = true
-copper-pagejs.workspace = true
-copper-shield.workspace = true
-copper-mcp.workspace = true
 gtk4.workspace = true
+gdk4.workspace = true
 libadwaita.workspace = true
 glib.workspace = true
+gio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+url.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+# Only the runtime-agnostic channels (`tokio::sync`): the control API is
+# driven from the GTK main loop and called from any thread.
+tokio.workspace = true
 
 [lints]
 workspace = true

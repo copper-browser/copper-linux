@@ -1,0 +1,20 @@
+{
+  "checksum": "fixture-local-one",
+  "version": 1,
+  "roots": {
+    "bookmark_bar": {"type": "folder", "children": [
+      {"type": "url", "name": "Local", "url": "https://local.example/"},
+      {"type": "url", "name": "Shared", "url": "https://shared.example/"},
+      {"type": "folder", "name": "Projects", "children": [
+        {"type": "url", "name": "Extra", "url": "https://extra.example/"}
+      ]}
+    ]},
+    "other": {"type": "folder", "children": [
+      {"type": "url", "name": "Reading", "url": "https://reading.example/"},
+      {"type": "url", "name": "Offline", "url": "https://offline.example/"}
+    ]},
+    "synced": {"type": "folder", "children": [
+      {"type": "url", "name": "Pocket", "url": "https://pocket.example/"}
+    ]}
+  }
+}

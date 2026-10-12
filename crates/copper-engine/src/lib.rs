@@ -18,6 +18,7 @@
 //! [`EventStream`] per call; each sees every event emitted after it was
 //! created. Drop a stream to unsubscribe.
 
+mod backstage;
 mod error;
 mod events;
 mod input;
@@ -28,13 +29,14 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
+pub use backstage::{Backstage, BackstageMode, BackstageStatus};
 pub use error::{EngineError, Result};
 pub use events::{
     ConsoleLevel, ConsoleMessage, CrashReason, DownloadEvent, DownloadState, EventSink,
     EventStream, LinkHover, LoadState, NewWindowRequest, PageEvent, PermissionKind,
     WindowDisposition,
 };
-pub use input::{InputEvent, Modifiers, MouseButton};
+pub use input::{InputEvent, Modifiers, MouseButton, Trust};
 pub use paths::EnginePaths;
 pub use types::{
     Cookie, DownloadId, FindOptions, Frames, Image, InjectionTime, PageOptions, PermissionId,
@@ -65,6 +67,8 @@ pub trait Engine {
     type Profile: Profile;
     type Filter: ContentFilter;
     type Page: PageView<Filter = Self::Filter>;
+    /// Keeps pages an agent works in rendering while they are not shown.
+    type Backstage: Backstage<Page = Self::Page>;
 
     /// On-disk layout this engine uses.
     fn paths(&self) -> &EnginePaths;
@@ -92,6 +96,9 @@ pub trait Engine {
 
     /// Delete a stored filter (pages already using it keep it until reset).
     fn remove_content_filter(&self, id: &str) -> LocalFuture<Result<()>>;
+
+    /// The engine's backstage (one per engine).
+    fn backstage(&self) -> &Self::Backstage;
 }
 
 /// A compiled content-blocker list, ready to attach to pages.
@@ -197,7 +204,7 @@ pub trait PageView {
 
     // -- capture, find ---------------------------------------------------------
     /// Paint the page into a PNG. `Visible` needs the page to be on screen
-    /// (mapped); see T-002 for off-screen agent tabs.
+    /// (mapped) or held by the engine's [`Backstage`].
     fn snapshot(&self, region: SnapshotRegion) -> LocalFuture<Result<Snapshot>>;
     /// Highlight matches of `query`, select the first; resolves to the number
     /// of matches (0 = not found, capped at `opts.max_matches`).
@@ -223,12 +230,28 @@ pub trait PageView {
     fn download(&self, url: &str) -> Result<DownloadId>;
 
     // -- input -----------------------------------------------------------------
-    /// Deliver an input action. Current implementations dispatch DOM events
-    /// from script (`isTrusted == false`): pointer/mouse events at the element
-    /// under the point (through same-origin iframes and open shadow roots),
-    /// keyboard events at the focused element, typing through the native
-    /// value setter + `beforeinput`/`input`. Resolves once dispatched.
-    fn input(&self, event: InputEvent) -> LocalFuture<Result<()>>;
+    /// Deliver an input action and say how it reached the page.
+    ///
+    /// Engines use their own input handling where they can, so the page sees
+    /// `isTrusted == true`; everything else is dispatched from script. On
+    /// WebKitGTK (D-006):
+    ///
+    /// | Action | Delivery | `isTrusted` |
+    /// |---|---|---|
+    /// | `Move` without modifiers | engine pointer | yes |
+    /// | `Click` left, no modifiers, any `count` | engine pointer (hover, down, up, click, dblclick, click-to-focus) | yes |
+    /// | `Type(text)` | script `keydown`/`keypress`, then the engine's editor inserts the text unless prevented, then script `keyup`; `\n` is Enter, `\t` is Tab | `beforeinput`/`input` yes, key events no |
+    /// | `Key` Enter / Backspace / Delete / arrows / Home / End in an editable element, Ctrl+A / Ctrl+Z / Ctrl+Y | script `keydown`, then the editor command (Enter in a form field submits it), then script `keyup` | edit, `input`, `submit` yes, key events no |
+    /// | other `Key`s (Tab, Escape, Enter on a button…), right/middle/modified clicks, `Drag`, `Scroll` | script | no |
+    ///
+    /// Script-dispatched pointer/mouse events go to the element under the
+    /// point (through same-origin iframes and open shadow roots), keyboard
+    /// events to the focused element, and script typing uses the native value
+    /// setter + `beforeinput`/`input`. A `<select>` popup a held page opened
+    /// takes `Key`/`Type` input itself (arrows, type-ahead, Enter, Escape).
+    /// A point with no element under it is `NotFound`. Resolves once the
+    /// action's last event was handled (or after about a second).
+    fn input(&self, event: InputEvent) -> LocalFuture<Result<Trust>>;
 
     // -- tools -------------------------------------------------------------------
     /// Open the web inspector (needs `PageOptions::developer_extras`).

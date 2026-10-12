@@ -1,15 +1,15 @@
 //! Pages: one `WebView` + `UserContentManager` each.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use copper_engine::{
     ConsoleLevel, ConsoleMessage, CrashReason, DownloadId, EngineError, EventSink, EventStream,
     FindOptions, Frames, InjectionTime, InputEvent, JsonMap, JsonValue, LinkHover, LoadState,
     LocalFuture, NewWindowHandler, NewWindowRequest, PageEvent, PageOptions, PageView,
     PermissionId, PermissionKind, Profile, Result, ScriptId, Snapshot, SnapshotRegion, StyleLevel,
-    StyleSheetId, UserScript, UserStyleSheet, WebsiteDataKinds, WindowDisposition, World,
+    StyleSheetId, Trust, UserScript, UserStyleSheet, WebsiteDataKinds, WindowDisposition, World,
 };
 use glib::prelude::*;
 use webkit6::prelude::*;
@@ -20,17 +20,15 @@ use webkit6::{
     WebView,
 };
 
+use crate::ghost::GhostHost;
+use crate::hands::{Hands, OpenMenu, TrustedInput};
 use crate::profile::WebKitProfile;
-use crate::{WebKitContentFilter, convert};
+use crate::{WebKitContentFilter, backstage, convert};
 
 /// Script that posts `console.*` calls to [`CONSOLE_HANDLER`].
 const CONSOLE_JS: &str = include_str!("console.js");
-/// Async function body behind `PageView::input` (JS-dispatched events).
-const INPUT_JS: &str = include_str!("input.js");
 /// Message handler (page world) used by `PageOptions::capture_console`.
 const CONSOLE_HANDLER: &str = "__copperConsole";
-/// Isolated world the input script runs in.
-const INPUT_WORLD: &str = "copper-input";
 /// Message handler registered in every isolated world a page uses, so the
 /// world (and its globals) outlives a single evaluation.
 const WORLD_PIN: &str = "__copperWorld";
@@ -61,11 +59,46 @@ struct PageInner {
 
 /// State shared with signal handlers. It never owns the view, so the view's
 /// handlers can hold it strongly without a reference cycle.
-struct Shared {
+pub(crate) struct Shared {
     sink: Rc<EventSink<PageEvent>>,
     permissions: RefCell<HashMap<PermissionId, webkit6::PermissionRequest>>,
     new_window: RefCell<Option<NewWindowHandler<WebKitPage>>>,
     hover: RefCell<Option<String>>,
+    /// WebKit's own event controllers (trusted input).
+    pub(crate) hands: Hands,
+    /// What the self-check allows on this page.
+    available: TrustedInput,
+    /// What `input` uses now (`set_trusted_input` can turn it off).
+    trusted: Cell<TrustedInput>,
+    /// Held by the backstage (set and cleared by `WebKitBackstage`).
+    pub(crate) held: Cell<bool>,
+    /// A `<select>` popup kept off screen while the page is backstage.
+    menu: RefCell<Option<Rc<OpenMenu>>>,
+}
+
+impl Shared {
+    /// The `<select>` popup kept for this page, if one is open. Cloned out so
+    /// the caller can close it (closing re-enters `menu`).
+    pub(crate) fn open_menu(&self) -> Option<Rc<OpenMenu>> {
+        self.menu.borrow().clone()
+    }
+
+    /// Held and not shown by the shell: nothing it opens may appear over
+    /// the user's window.
+    fn backstaged(&self, view: &WebView) -> bool {
+        self.held.get()
+            && match view.parent() {
+                None => true,
+                Some(p) => p.is::<GhostHost>() || !view.is_mapped(),
+            }
+    }
+
+    /// Count a popup swallowed for a backstage page; `true` for chaining.
+    fn blocked(&self, what: &str) -> bool {
+        tracing::debug!("backstage page: swallowed {what}");
+        backstage::note_blocked();
+        true
+    }
 }
 
 impl WebKitPage {
@@ -95,11 +128,18 @@ impl WebKitPage {
             None => builder.network_session(profile.session()).build(),
         };
 
+        let hands = Hands::find(&view);
+        let available = hands.available();
         let shared = Rc::new(Shared {
             sink: Rc::new(EventSink::new()),
             permissions: RefCell::default(),
             new_window: RefCell::default(),
             hover: RefCell::default(),
+            hands,
+            available,
+            trusted: Cell::new(available),
+            held: Cell::new(false),
+            menu: RefCell::default(),
         });
         profile.register_page(&view, Rc::downgrade(&shared.sink));
         let page = WebKitPage {
@@ -135,6 +175,32 @@ impl WebKitPage {
     /// The profile this page belongs to.
     pub fn profile(&self) -> &WebKitProfile {
         &self.inner.profile
+    }
+
+    /// What `PageView::input` delivers through WebKit itself (trusted) on
+    /// this page: the start-up self-check's answer, unless turned off with
+    /// [`set_trusted_input`](Self::set_trusted_input).
+    pub fn trusted_input(&self) -> TrustedInput {
+        self.inner.shared.trusted.get()
+    }
+
+    /// `false`: deliver every input action from script (`isTrusted ==
+    /// false`), as before T-002. `true`: back to what the self-check allows.
+    pub fn set_trusted_input(&self, enabled: bool) {
+        let shared = &self.inner.shared;
+        shared.trusted.set(if enabled {
+            shared.available
+        } else {
+            TrustedInput::NONE
+        });
+    }
+
+    pub(crate) fn view(&self) -> &WebView {
+        &self.inner.view
+    }
+
+    pub(crate) fn shared(&self) -> &Rc<Shared> {
+        &self.inner.shared
     }
 
     fn sink(&self) -> &EventSink<PageEvent> {
@@ -233,6 +299,12 @@ impl WebKitPage {
         let sh2 = sh.clone();
         view.connect_permission_request(move |v, req| {
             let sh = &sh2;
+            // A prompt for a page nobody is looking at would land over the
+            // user's window: held pages are refused without asking.
+            if sh.backstaged(v) {
+                req.deny();
+                return sh.blocked("permission request");
+            }
             if !sh.sink.has_subscribers() {
                 req.deny();
                 return true;
@@ -270,6 +342,8 @@ impl WebKitPage {
                 }
             }
         });
+
+        self.connect_backstage_popups();
 
         let s = sh.sink.clone();
         view.connect_decide_policy(move |_, decision, kind| match kind {
@@ -311,6 +385,64 @@ impl WebKitPage {
                 false
             }
             _ => false,
+        });
+    }
+
+    /// Everything WebKit would open over the window for a page: swallowed
+    /// while the page is held and not shown (D-006, risk R6).
+    fn connect_backstage_popups(&self) {
+        let view = &self.inner.view;
+        let sh = &self.inner.shared;
+
+        let sh2 = sh.clone();
+        view.connect_context_menu(move |v, _, _| sh2.backstaged(v) && sh2.blocked("context menu"));
+        // A <select> popup: kept, not shown; `input` routes keys to it.
+        let sh2 = Rc::downgrade(sh);
+        view.connect_show_option_menu(move |v, menu, _| {
+            let Some(sh) = sh2.upgrade() else {
+                return false;
+            };
+            if !sh.backstaged(v) {
+                return false;
+            }
+            if let Some(old) = sh.open_menu() {
+                old.cancel();
+            }
+            *sh.menu.borrow_mut() = Some(Rc::new(OpenMenu::new(menu)));
+            let weak: Weak<Shared> = Rc::downgrade(&sh);
+            menu.connect_close(move |m| {
+                if let Some(sh) = weak.upgrade() {
+                    let mut slot = sh.menu.borrow_mut();
+                    if slot.as_ref().is_some_and(|o| o.is(m)) {
+                        *slot = None;
+                    }
+                }
+            });
+            sh.blocked("<select> popup")
+        });
+        let sh2 = sh.clone();
+        view.connect_run_file_chooser(move |v, req| {
+            if !sh2.backstaged(v) {
+                return false;
+            }
+            req.cancel();
+            sh2.blocked("file chooser")
+        });
+        let sh2 = sh.clone();
+        view.connect_run_color_chooser(move |v, req| {
+            if !sh2.backstaged(v) {
+                return false;
+            }
+            req.cancel();
+            sh2.blocked("colour chooser")
+        });
+        let sh2 = sh.clone();
+        view.connect_print(move |v, _| sh2.backstaged(v) && sh2.blocked("print dialog"));
+        let sh2 = sh.clone();
+        view.connect_enter_fullscreen(move |v| sh2.backstaged(v) && sh2.blocked("full screen"));
+        let sh2 = sh.clone();
+        view.connect_show_notification(move |v, _| {
+            sh2.backstaged(v) && sh2.blocked("notification")
         });
     }
 
@@ -730,30 +862,8 @@ impl PageView for WebKitPage {
         Ok(self.inner.profile.track_download(&dl))
     }
 
-    fn input(&self, event: InputEvent) -> LocalFuture<Result<()>> {
-        let ev = match serde_json::to_value(&event) {
-            Ok(v) => v,
-            Err(e) => {
-                return Box::pin(std::future::ready(Err(EngineError::InvalidArgument(
-                    e.to_string(),
-                ))));
-            }
-        };
-        let mut args = JsonMap::new();
-        args.insert("ev".into(), ev);
-        let fut = self.call_async(INPUT_JS, &args, &World::isolated(INPUT_WORLD));
-        Box::pin(async move {
-            let out = fut.await?;
-            if out.get("ok").and_then(JsonValue::as_bool) == Some(true) {
-                Ok(())
-            } else {
-                let why = out
-                    .get("error")
-                    .and_then(JsonValue::as_str)
-                    .unwrap_or("input was not delivered");
-                Err(EngineError::NotFound(why.to_owned()))
-            }
-        })
+    fn input(&self, event: InputEvent) -> LocalFuture<Result<Trust>> {
+        Box::pin(crate::hands::deliver(self.clone(), event))
     }
 
     fn show_inspector(&self) {

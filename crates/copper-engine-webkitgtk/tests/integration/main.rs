@@ -6,6 +6,7 @@
 //! any failure. libtest flags such as `--test-threads=1` are ignored. Needs
 //! a display (headless weston via `bin/dbx`).
 
+mod backstage;
 mod server;
 
 use std::future::Future;
@@ -17,8 +18,8 @@ use copper_engine_webkitgtk::copper_engine::{
     ConsoleLevel, ContentFilter, Cookie, CrashReason, DownloadEvent, DownloadId, DownloadState,
     Engine, EngineError, EnginePaths, EventStream, FindOptions, InjectionTime, InputEvent, JsonMap,
     JsonValue, LoadState, Modifiers, MouseButton, PageEvent, PageOptions, PageView, PermissionKind,
-    Profile, ProfileId, SnapshotRegion, StyleLevel, UserScript, UserStyleSheet, WebsiteDataKinds,
-    WindowDisposition, World,
+    Profile, ProfileId, SnapshotRegion, StyleLevel, Trust, UserScript, UserStyleSheet,
+    WebsiteDataKinds, WindowDisposition, World,
 };
 use copper_engine_webkitgtk::{WebKitEngine, WebKitPage, WebKitProfile};
 use gdk4::prelude::*;
@@ -53,6 +54,21 @@ const CHECKS: &[&str] = &[
     "hard-reload",
     "permission",
     "crash",
+    // T-002 / D-006: trusted input and the backstage.
+    "self-check",
+    "backstage-hold",
+    "backstage-raf",
+    "backstage-snapshot",
+    "trusted-click",
+    "trusted-type",
+    "enter-submits",
+    "backstage-popups",
+    "page-focus",
+    "handoff",
+    "stalled-clock",
+    "script-fallback",
+    "release",
+    "gtk-warnings",
 ];
 
 /// Three-rule WebKit content-blocker list (the JSON shape Shield.swift emits).
@@ -125,7 +141,7 @@ impl Tab {
         self.page.eval(code, world).await.map_err(|e| e.to_string())
     }
 
-    async fn input(&self, ev: InputEvent) -> Result<(), String> {
+    async fn input(&self, ev: InputEvent) -> Result<Trust, String> {
         self.page.input(ev).await.map_err(|e| e.to_string())
     }
 }
@@ -141,9 +157,11 @@ struct Ctx {
     b: Tab,
     e: Tab,
     saw_favicon: bool,
+    bench: Option<backstage::Bench>,
 }
 
 fn main() {
+    backstage::count_gtk_warnings();
     gtk4::init().expect("gtk init (is WAYLAND_DISPLAY/DISPLAY set?)");
     std::thread::spawn(|| {
         std::thread::sleep(WATCHDOG);
@@ -199,6 +217,7 @@ fn main() {
         b: Tab::new(b),
         e: Tab::new(e),
         saw_favicon: false,
+        bench: None,
     };
     let fails = glib::MainContext::default().block_on(async move {
         let mut fails = 0;
@@ -251,7 +270,7 @@ fn run_check<'a>(ctx: &'a mut Ctx, name: &str) -> Pin<Box<dyn Future<Output = Re
         "hard-reload" => Box::pin(check_hard_reload(ctx)),
         "permission" => Box::pin(check_permission(ctx)),
         "crash" => Box::pin(check_crash(ctx)),
-        _ => unreachable!("unknown check {name}"),
+        other => backstage::run(ctx, other),
     }
 }
 
@@ -878,9 +897,12 @@ async fn check_input(ctx: &mut Ctx) -> Res {
     let tab = &mut ctx.a;
     tab.load(&url).await?;
     // Button at (20,20) 120x40.
-    tab.input(InputEvent::click(80.0, 40.0)).await?;
+    let trust = tab.input(InputEvent::click(80.0, 40.0)).await?;
     let log = tab.js("window.log").await?;
-    ensure(log["clicks"] == 1, || format!("button clicks {log}"))?;
+    ensure(
+        log["clicks"] == 1 && log["trusted"] == true && trust == Trust::Trusted,
+        || format!("button clicks {log}, {trust:?}"),
+    )?;
     // Focus the field by clicking it, then type.
     tab.input(InputEvent::click(100.0, 95.0)).await?;
     let focused = tab.js("document.activeElement.id").await?;

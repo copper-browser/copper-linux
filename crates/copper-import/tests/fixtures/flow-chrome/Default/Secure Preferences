@@ -1,0 +1,46 @@
+{
+  "extensions": {
+    "settings": {
+      "chfcgbnkddlkfkhikikhpgobgkldlnge": {
+        "from_webstore": true, "location": 1, "state": 1,
+        "path": "Extensions/chfcgbnkddlkfkhikikhpgobgkldlnge/1.0.0_0",
+        "manifest": {"name": "Legacy on", "version": "1.0.0", "key": "fixture-public-key"}
+      },
+      "laidppjhcioemjfoccijjjljnoalaknk": {
+        "from_webstore": true, "location": 1, "state": 0,
+        "path": "Extensions/laidppjhcioemjfoccijjjljnoalaknk/1.0.0_0",
+        "manifest": {"name": "Legacy off", "version": "1.0.0", "key": "fixture-public-key"}
+      },
+      "oapfgjboacmhnapnjcdkknehbgkncfjh": {
+        "from_webstore": true, "location": 1, "disable_reasons": [],
+        "path": "Extensions/oapfgjboacmhnapnjcdkknehbgkncfjh/1.0.0_0",
+        "manifest": {"name": "Empty reasons on", "version": "1.0.0", "key": "fixture-public-key"}
+      },
+      "pkofjabddebjjolininjfgpdpgcoploh": {
+        "from_webstore": true, "location": 1, "disable_reasons": [1],
+        "path": "Extensions/pkofjabddebjjolininjfgpdpgcoploh/1.0.0_0",
+        "manifest": {"name": "Array reasons off", "version": "1.0.0", "key": "fixture-public-key"}
+      },
+      "dlemieilhfnlckjhbekagekefgdiffnb": {
+        "from_webstore": true, "location": 1, "disable_reasons": 1,
+        "path": "Extensions/dlemieilhfnlckjhbekagekefgdiffnb/1.0.0_0",
+        "manifest": {"name": "Integer reasons off", "version": "1.0.0", "key": "fixture-public-key"}
+      },
+      "pdjnbnaahaogmghbglpphffnebkiiihl": {
+        "from_webstore": true, "location": 1,
+        "path": "Extensions/pdjnbnaahaogmghbglpphffnebkiiihl/1.0.0_0",
+        "manifest": {"name": "Split reasons off", "version": "1.0.0", "key": "fixture-public-key"}
+      },
+      "dnbmiicpapilleohackflmdamggchhle": {
+        "from_webstore": true, "location": 1,
+        "path": "Extensions/dnbmiicpapilleohackflmdamggchhle/1.0.0_0",
+        "manifest": {"name": "No flags on", "version": "1.0.0", "key": "fixture-public-key"}
+      },
+      "oelmapckalofldpfdcfkiaabgeplebec": {
+        "from_webstore": true, "location": 1, "disable_reasons": 0,
+        "path": "Extensions/oelmapckalofldpfdcfkiaabgeplebec/1.0.0_0",
+        "manifest": {"name": "Zero reasons on", "version": "1.0.0", "key": "fixture-public-key"}
+      }
+    }
+  }
+}

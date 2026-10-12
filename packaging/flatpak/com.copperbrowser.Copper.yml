@@ -1,0 +1,63 @@
+# Flatpak manifest for Copper for Linux.
+#
+#   packaging/flatpak/build.sh        # vendor crates, build, export a .flatpak bundle
+#
+# Runtime: GNOME 51 (freedesktop 26.08 base). It ships WebKitGTK 6.0 (2.54),
+# GTK 4.24 and libadwaita 1.10, so nothing of WebKit is bundled here (PLAN F-6).
+# Rust comes from the rust-stable SDK extension of the same base; crates come
+# from cargo-sources.json (packaging/flatpak/vendor.sh), so the build itself
+# never touches the network.
+#
+# Permissions follow PLAN §7 Security: network, Wayland with X11 fallback,
+# DRI, audio, the Secret Service (passwords), and Downloads. Everything else —
+# saving elsewhere, Chrome import — goes through the file-chooser portal, not a
+# filesystem grant. WebKit's own web-process sandbox runs through the Flatpak
+# sandbox portal, which needs no extra permission (and no AppArmor profile).
+id: com.copperbrowser.Copper
+runtime: org.gnome.Platform
+runtime-version: "51"
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: copper
+
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  - --socket=pulseaudio
+  - --talk-name=org.freedesktop.secrets
+  - --filesystem=xdg-download
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+
+modules:
+  - name: copper
+    buildsystem: simple
+    build-options:
+      env:
+        CARGO_HOME: /run/build/copper/cargo
+        CARGO_NET_OFFLINE: "true"
+        CARGO_TERM_COLOR: never
+    build-commands:
+      - cargo --offline fetch --manifest-path Cargo.toml --verbose
+      - cargo --offline build --release --locked -p copper-app --bin copper
+      - install -Dm755 target/release/copper ${FLATPAK_DEST}/bin/copper
+      - install -Dm644 packaging/share/${FLATPAK_ID}.desktop ${FLATPAK_DEST}/share/applications/${FLATPAK_ID}.desktop
+      - install -Dm644 packaging/share/${FLATPAK_ID}.metainfo.xml ${FLATPAK_DEST}/share/metainfo/${FLATPAK_ID}.metainfo.xml
+      - install -Dm644 packaging/icons/${FLATPAK_ID}.svg ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/${FLATPAK_ID}.svg
+      - for n in 64 128 256 512; do install -Dm644 packaging/icons/hicolor/${n}x${n}/apps/${FLATPAK_ID}.png ${FLATPAK_DEST}/share/icons/hicolor/${n}x${n}/apps/${FLATPAK_ID}.png; done
+    sources:
+      # The checkout this manifest sits in. (Flathub would use a `git` source
+      # with a tag and commit instead; see packaging/README.md.)
+      - type: dir
+        path: ../..
+        skip:
+          - target
+          - .git
+          - .flatpak-builder
+          - packaging/flatpak/cargo-sources.json
+      - cargo-sources.json

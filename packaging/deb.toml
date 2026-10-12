@@ -1,0 +1,67 @@
+# Debian packaging for `copper` — a template, rendered by packaging/build-deb.sh.
+#
+# Why a separate manifest: cargo-deb only reads [package.metadata.deb] from a
+# package's Cargo.toml and has no `--config` flag, and the crate manifest
+# (crates/copper-app/Cargo.toml) is kept free of packaging. So build-deb.sh
+# renders this file into target/deb-shim/Cargo.toml — a tiny stand-alone
+# package (own [workspace], empty lib) that exists only to carry the metadata —
+# and runs `cargo deb --manifest-path target/deb-shim/Cargo.toml --no-build`
+# with CARGO_TARGET_DIR pointing at the workspace's target/, so the
+# `target/release/copper` asset below is the binary the workspace just built.
+#
+# Placeholders: @ROOT@ = absolute repo root, @VERSION@ = copper-app's version.
+# To move this into the crate instead, copy [package.metadata.deb] into
+# crates/copper-app/Cargo.toml and replace "@ROOT@/" with "../../".
+
+[package]
+name = "copper"
+version = "@VERSION@"
+edition = "2024"
+license = "MIT"
+description = "quiet WebKit browser with an agent built in"
+homepage = "https://github.com/copper-browser/copper-linux"
+repository = "https://github.com/copper-browser/copper-linux"
+publish = false
+
+[lib]
+path = "lib.rs"
+
+# Not a member of the copper-linux workspace.
+[workspace]
+
+[package.metadata.deb]
+name = "copper"
+maintainer = "Copper <copper-browser@users.noreply.github.com>"
+copyright = "2026, Copper contributors"
+license-file = ["@ROOT@/LICENSE", "0"]
+section = "web"
+priority = "optional"
+extended-description = """\
+Copper is a small, fast browser on WebKit: one field, tabs in a column or a \
+row, spaces, pinned and private tabs, a built-in ad blocker, reading mode, \
+passwords in the system keyring, Copper Cloud sync with Copper on the Mac, and \
+a local MCP server (127.0.0.1:4123) so coding agents can drive a tab. Native \
+Rust on GTK 4, libadwaita and WebKitGTK 6.0."""
+# $auto = dpkg-shlibdeps on the binary (exact sonames and minimum versions);
+# the named libraries are listed too so the intent is readable in `apt show`.
+depends = "$auto, libwebkitgtk-6.0-4, libgtk-4-1, libadwaita-1-0 (>= 1.5), libsecret-1-0"
+recommends = "xdg-desktop-portal-gtk | xdg-desktop-portal-gnome | xdg-desktop-portal-kde"
+suggests = "gnome-keyring | kwalletmanager"
+provides = "www-browser, gnome-www-browser"
+maintainer-scripts = "@ROOT@/packaging/debian/maintainer-scripts"
+# Written by build-deb.sh next to the rendered manifest (one entry, this version).
+changelog = "changelog"
+# Everything under /etc is a conffile (cargo-deb does that by itself; listed
+# so it is explicit): an admin's edit to the AppArmor profile survives upgrades.
+conf-files = ["/etc/apparmor.d/copper"]
+assets = [
+  ["target/release/copper", "usr/bin/", "755"],
+  ["@ROOT@/packaging/share/com.copperbrowser.Copper.desktop", "usr/share/applications/", "644"],
+  ["@ROOT@/packaging/share/com.copperbrowser.Copper.metainfo.xml", "usr/share/metainfo/", "644"],
+  ["@ROOT@/packaging/icons/com.copperbrowser.Copper.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+  ["@ROOT@/packaging/icons/hicolor/64x64/apps/com.copperbrowser.Copper.png", "usr/share/icons/hicolor/64x64/apps/", "644"],
+  ["@ROOT@/packaging/icons/hicolor/128x128/apps/com.copperbrowser.Copper.png", "usr/share/icons/hicolor/128x128/apps/", "644"],
+  ["@ROOT@/packaging/icons/hicolor/256x256/apps/com.copperbrowser.Copper.png", "usr/share/icons/hicolor/256x256/apps/", "644"],
+  ["@ROOT@/packaging/icons/hicolor/512x512/apps/com.copperbrowser.Copper.png", "usr/share/icons/hicolor/512x512/apps/", "644"],
+  ["@ROOT@/packaging/debian/copper.apparmor", "etc/apparmor.d/copper", "644"],
+]

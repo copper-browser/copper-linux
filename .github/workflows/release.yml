@@ -1,0 +1,320 @@
+name: release
+
+# Builds Copper for Linux and publishes it as a GitHub release of this repo —
+# the one place every Linux install path reads from:
+#
+#   curl -fsSL https://github.com/copper-browser/copper-linux/releases/latest/download/install.sh | sh
+#   https://github.com/copper-browser/copper-linux/releases/latest/download/copper_amd64.deb   (and _arm64)
+#   https://github.com/copper-browser/copper-linux/releases/latest/download/copper-x86_64.flatpak (and -aarch64)
+#   Copper's update check (crates/copper-app updates.rs → latest/download/copper-version.json)
+#
+# Trigger: pushing a tag v<version>, where <version> is [workspace.package]
+# version in Cargo.toml (the run fails otherwise, so About / --version / MCP
+# serverInfo always match the release). A tag with a pre-release suffix
+# (v0.2.0-rc.1) makes a GitHub pre-release, which /latest/ — and so the
+# installer and the update check — ignores.
+#
+# Assets per release (tag v<version>):
+#   copper_<version>_amd64.deb / _arm64.deb     immutable names
+#   copper_amd64.deb / copper_arm64.deb         stable names → releases/latest/download/…
+#   copper-<version>-x86_64.flatpak / -aarch64  immutable names
+#   copper-x86_64.flatpak / copper-aarch64.flatpak  stable names
+#   *.sha256                                    one per file above ("<hex>  <name>")
+#   copper-version.json                         manifest (packaging/version-manifest.py)
+#   install.sh (+ .sha256)                      the curl installer, verbatim from the repo root
+#
+# Every artifact is built on a native runner for its architecture
+# (ubuntu-24.04 / ubuntu-24.04-arm), without containers, and installed and
+# started once on that runner before it is published.
+#
+# workflow_dispatch = a dry run: builds, installs, smoke-tests and assembles
+# everything exactly the same way, keeps it as this run's artifact, and
+# publishes nothing (no tag, no release; no job is given a write token):
+#
+#   gh workflow run release.yml -R copper-browser/copper-linux --ref <branch>
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_DEB_VERSION: "3.8.0"
+  APT_BUILD_DEPS: >-
+    build-essential pkg-config
+    libwebkitgtk-6.0-dev libgtk-4-dev libadwaita-1-dev libsecret-1-dev
+
+jobs:
+  meta:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      commit: ${{ steps.meta.outputs.commit }}
+      published_at: ${{ steps.meta.outputs.published_at }}
+      publish: ${{ steps.meta.outputs.publish }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Version, tag, commit
+        id: meta
+        run: |
+          set -euo pipefail
+          cargo_version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml","rb"))["workspace"]["package"]["version"])')
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            tag="$GITHUB_REF_NAME"
+            publish=true
+          else
+            tag="v$cargo_version"
+            publish=false
+          fi
+          version="${tag#v}"
+          if [ "$version" != "$cargo_version" ]; then
+            echo "::error::tag $tag does not match Cargo.toml [workspace.package] version $cargo_version — bump Cargo.toml (and Cargo.lock) first"
+            exit 1
+          fi
+          meta_release=$(sed -n 's/.*<release version="\([^"]*\)".*/\1/p' packaging/share/com.copperbrowser.Copper.metainfo.xml | head -1)
+          if [ "$meta_release" != "$version" ]; then
+            echo "::warning::packaging/share/com.copperbrowser.Copper.metainfo.xml's newest <release> is $meta_release, not $version"
+          fi
+          prerelease=false
+          case "$version" in *-*) prerelease=true ;; esac
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "commit=$(git rev-parse HEAD)"
+            echo "published_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "publish=$publish"
+            echo "prerelease=$prerelease"
+          } | tee -a "$GITHUB_OUTPUT"
+
+  deb:
+    name: deb (${{ matrix.arch }})
+    needs: meta
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, arch: amd64 }
+          - { runner: ubuntu-24.04-arm, arch: arm64 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -q
+          # shellcheck disable=SC2086 # the package lists split on purpose
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends $APT_BUILD_DEPS dpkg-dev lintian
+      - name: Toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: release-${{ matrix.arch }}
+      - name: cargo-deb
+        run: cargo install --locked cargo-deb --version "$CARGO_DEB_VERSION"
+      - name: Build the .deb
+        id: deb
+        run: |
+          set -euo pipefail
+          deb=$(packaging/build-deb.sh --locked --version "$VERSION" --out dist)
+          name=$(basename "$deb")
+          echo "name=$name" >>"$GITHUB_OUTPUT"
+          dpkg-deb -I "$deb"
+          dpkg-deb -c "$deb"
+      - name: lintian
+        run: lintian --fail-on error --suppress-tags no-manual-page,initial-upload-closes-no-bugs "dist/${{ steps.deb.outputs.name }}"
+      - name: Install, start, remove
+        env:
+          NAME: ${{ steps.deb.outputs.name }}
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y "./dist/$NAME"
+          dpkg -L copper
+          out=$(timeout 30 copper --version)
+          echo "$out"
+          [ "$out" = "copper $VERSION" ] || { echo "::error::copper --version said '$out', expected 'copper $VERSION'"; exit 1; }
+          sudo cat /sys/kernel/security/apparmor/profiles | grep -w '^copper' || { echo "::error::AppArmor profile copper is not loaded"; exit 1; }
+          update-alternatives --query x-www-browser | grep -q /usr/bin/copper
+          sudo apt-get purge -y copper
+          if command -v copper; then echo "::error::copper still installed after purge"; exit 1; fi
+      - name: Stable name and checksums
+        env:
+          NAME: ${{ steps.deb.outputs.name }}
+        run: |
+          set -euo pipefail
+          cd dist
+          # Release names use the Cargo version: cargo-deb's file name carries
+          # the Debian one (0.1.0~rc.1-1), and GitHub rewrites "~" in asset names.
+          versioned="copper_${VERSION}_${ARCH}.deb"
+          [ "$NAME" = "$versioned" ] || mv "$NAME" "$versioned"
+          cp "$versioned" "copper_${ARCH}.deb"
+          for f in "$versioned" "copper_${ARCH}.deb"; do sha256sum "$f" >"$f.sha256"; done
+          ls -la
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: deb-${{ matrix.arch }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  flatpak:
+    name: flatpak (${{ matrix.arch }})
+    needs: meta
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, arch: x86_64 }
+          - { runner: ubuntu-24.04-arm, arch: aarch64 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install flatpak-builder
+        run: |
+          sudo apt-get update -q
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
+            flatpak flatpak-builder python3-aiohttp python3-tomlkit
+      - name: Build the Flatpak
+        run: |
+          set -euo pipefail
+          [ "$(flatpak --default-arch)" = "$ARCH" ]
+          packaging/flatpak/build.sh --out dist --name "copper-$VERSION-$ARCH.flatpak"
+      - name: Install, start, remove
+        run: |
+          set -euo pipefail
+          flatpak install --user -y --noninteractive "dist/copper-$VERSION-$ARCH.flatpak"
+          flatpak info --user --show-permissions com.copperbrowser.Copper
+          out=$(timeout 60 flatpak run --user com.copperbrowser.Copper --version)
+          echo "$out"
+          [ "$out" = "copper $VERSION" ] || { echo "::error::copper --version said '$out', expected 'copper $VERSION'"; exit 1; }
+          flatpak uninstall --user -y --noninteractive com.copperbrowser.Copper
+      - name: Stable name and checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          cp "copper-$VERSION-$ARCH.flatpak" "copper-$ARCH.flatpak"
+          for f in "copper-$VERSION-$ARCH.flatpak" "copper-$ARCH.flatpak"; do sha256sum "$f" >"$f.sha256"; done
+          ls -la
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: flatpak-${{ matrix.arch }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  assemble:
+    needs: [meta, deb, flatpak]
+    runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      TAG: ${{ needs.meta.outputs.tag }}
+      COMMIT: ${{ needs.meta.outputs.commit }}
+      PUBLISHED_AT: ${{ needs.meta.outputs.published_at }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Installer and copper-version.json
+        run: |
+          set -euo pipefail
+          cp install.sh dist/install.sh
+          (cd dist && sha256sum install.sh >install.sh.sha256)
+          python3 packaging/version-manifest.py --dist dist --version "$VERSION" --tag "$TAG" \
+            --commit "$COMMIT" --repo "$GITHUB_REPOSITORY" --published-at "$PUBLISHED_AT" \
+            >dist/copper-version.json
+          cat dist/copper-version.json
+          (cd dist && sha256sum -c ./*.sha256)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: copper-${{ needs.meta.outputs.version }}-linux
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: [meta, assemble]
+    if: needs.meta.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      TAG: ${{ needs.meta.outputs.tag }}
+      COMMIT: ${{ needs.meta.outputs.commit }}
+      PRERELEASE: ${{ needs.meta.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: copper-${{ needs.meta.outputs.version }}-linux
+          path: dist
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/notes.md"
+          gist=$(python3 -c 'import json; print(json.load(open("dist/copper-version.json"))["notes"])')
+          {
+            echo "Copper ${VERSION} for Linux — built from ${GITHUB_REPOSITORY}@${COMMIT:0:12}."
+            echo
+            [ -n "$gist" ] && { echo "$gist"; echo; }
+            echo "**Install**"
+            echo
+            echo '```sh'
+            echo "curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/install.sh | sh"
+            echo '```'
+            echo
+            echo "or download a file below: the \`.deb\` for Ubuntu 24.04+ / Debian 13+ (\`sudo apt install ./copper_amd64.deb\`),"
+            echo "or the \`.flatpak\` for any other distribution (\`flatpak install --user copper-x86_64.flatpak\`; the GNOME 51 runtime comes from Flathub)."
+            echo "x86_64 and aarch64. Each file has a \`.sha256\` next to it."
+          } >"$notes"
+          flags=(--latest)
+          [ "$PRERELEASE" = "true" ] && flags=(--prerelease --latest=false)
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "Copper ${VERSION} for Linux" \
+            --notes-file "$notes" \
+            "${flags[@]}" \
+            dist/*
+      - name: Verify the published bytes
+        run: |
+          set -euo pipefail
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
+          for f in copper_amd64.deb copper_arm64.deb copper-x86_64.flatpak copper-aarch64.flatpak copper-version.json install.sh; do
+            curl -fsSL --retry 5 --retry-delay 3 -o "$RUNNER_TEMP/$f" "$base/$f"
+            want=$(sha256sum "dist/$f" | cut -d' ' -f1)
+            have=$(sha256sum "$RUNNER_TEMP/$f" | cut -d' ' -f1)
+            [ "$want" = "$have" ] || { echo "::error::$base/$f serves $have, expected $want"; exit 1; }
+            echo "OK $base/$f"
+          done

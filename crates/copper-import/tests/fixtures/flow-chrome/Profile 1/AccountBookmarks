@@ -1,0 +1,25 @@
+{
+  "checksum": "fixture-account-one",
+  "version": 1,
+  "roots": {
+    "bookmark_bar": {"type": "folder", "name": "Bookmarks bar", "children": [
+      {"type": "url", "name": "Alpha", "url": "https://alpha.example/"},
+      {"type": "folder", "name": "Projects", "children": [
+        {"type": "folder", "name": "Work", "children": [
+          {"type": "folder", "name": "Launch", "children": [
+            {"type": "url", "name": "Deep", "url": "https://deep.example/"}
+          ]}
+        ]}
+      ]},
+      {"type": "url", "name": "Shared", "url": "https://shared.example/"},
+      {"type": "url", "name": "Chrome settings", "url": "chrome://settings/"},
+      {"type": "url", "name": "Script", "url": "javascript:alert(1)"}
+    ]},
+    "other": {"type": "folder", "name": "Other bookmarks", "children": [
+      {"type": "url", "name": "Reading", "url": "https://reading.example/"}
+    ]},
+    "synced": {"type": "folder", "name": "Mobile bookmarks", "children": [
+      {"type": "url", "name": "Phone", "url": "https://phone.example/"}
+    ]}
+  }
+}

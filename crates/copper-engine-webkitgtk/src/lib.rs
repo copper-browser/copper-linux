@@ -3,14 +3,23 @@
 //! [`WebKitEngine`] implements [`copper_engine::Engine`]; its profiles are
 //! [`WebKitProfile`] (one `NetworkSession` each), its pages [`WebKitPage`]
 //! (one `WebView` + `UserContentManager` each) and its compiled filters
-//! [`WebKitContentFilter`]. The only GTK type in the public API is
-//! [`WebKitPage::widget`], which the shell needs to put the page on screen.
+//! [`WebKitContentFilter`], its backstage (pages an agent works in while
+//! nobody looks at them) [`WebKitBackstage`]. The GTK types in the public API
+//! are [`WebKitPage::widget`], which the shell needs to put the page on
+//! screen, and the `gtk4::Window` the backstage hosts pages in.
+//!
+//! `PageView::input` delivers pointer moves, left clicks and typing through
+//! WebKit's own input handling (`isTrusted == true`) and the rest from
+//! script; see `hands.rs` and [`WebKitPage::trusted_input`].
 //!
 //! Everything here is main-thread only: create the engine after
 //! `gtk4::init()` on the thread that runs the GTK main loop, and poll the
 //! returned futures on that loop.
 
+mod backstage;
 mod convert;
+mod ghost;
+mod hands;
 mod page;
 mod profile;
 
@@ -23,6 +32,8 @@ use copper_engine::{
 };
 use webkit6::{UserContentFilter, UserContentFilterError, UserContentFilterStore};
 
+pub use backstage::WebKitBackstage;
+pub use hands::TrustedInput;
 pub use page::WebKitPage;
 pub use profile::WebKitProfile;
 
@@ -39,16 +50,19 @@ struct EngineInner {
     paths: EnginePaths,
     profiles: RefCell<HashMap<(ProfileId, bool), Weak<profile::ProfileInner>>>,
     filters: RefCell<Option<UserContentFilterStore>>,
+    backstage: WebKitBackstage,
 }
 
 impl WebKitEngine {
     /// An engine storing its state under `paths`. Call after `gtk4::init()`.
     pub fn new(paths: EnginePaths) -> Self {
+        hands::self_check();
         WebKitEngine {
             inner: Rc::new(EngineInner {
                 paths,
                 profiles: RefCell::default(),
                 filters: RefCell::default(),
+                backstage: WebKitBackstage::new(),
             }),
         }
     }
@@ -76,6 +90,7 @@ impl Engine for WebKitEngine {
     type Profile = WebKitProfile;
     type Filter = WebKitContentFilter;
     type Page = WebKitPage;
+    type Backstage = WebKitBackstage;
 
     fn paths(&self) -> &EnginePaths {
         &self.inner.paths
@@ -146,6 +161,10 @@ impl Engine for WebKitEngine {
                 Err(e) => Err(EngineError::ContentFilter(format!("remove {id:?}: {e}"))),
             }
         })
+    }
+
+    fn backstage(&self) -> &WebKitBackstage {
+        &self.inner.backstage
     }
 }
 

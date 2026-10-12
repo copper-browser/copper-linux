@@ -1,0 +1,219 @@
+#!/usr/bin/env python3
+"""A stand-in for the Bitwarden CLI (`bw`) for copper-creds' tests.
+
+Answers the subcommands Copper's Bitwarden backend uses, with bw's JSON
+shapes, from a JSON state file ($BW_MOCK_STATE):
+
+    --version | status | config server URL | login --apikey | login EMAIL --passwordenv V
+    unlock --passwordenv V --raw | lock | logout | sync | list items | list folders
+    get password|totp|item ID | get template item | encode | create item | edit item ID
+    generate
+
+The master password is "correct horse"; API key client_id "user.mock",
+secret "mock-secret". Sessions are random tokens; a command that needs the
+vault checks BW_SESSION. Every call is appended to calls.log beside the state:
+argv and the *names* of BW_* variables, never their values or stdin.
+"""
+import base64
+import json
+import os
+import secrets
+import sys
+
+PASSWORD = "correct horse"
+EMAIL = "ann@example.com"
+
+
+def seed():
+    return {
+        "server": "https://vault.bitwarden.com",
+        "logged_in": False,
+        "sessions": [],
+        "folders": [{"id": "f-agents", "name": "Agents"}, {"id": "f-work", "name": "Work"}],
+        "items": [
+            {"id": "i-example", "type": 1, "name": "Example", "folderId": None, "notes": None,
+             "login": {"username": "ann@example.com", "password": "example-pw",
+                       "totp": "otpauth://totp/x?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",
+                       "uris": [{"uri": "https://example.com/login", "match": None}]},
+             "fields": [{"name": "PIN", "value": "9876", "type": 1},
+                        {"name": "Account", "value": "AC-7", "type": 0},
+                        {"name": "Remember", "value": "true", "type": 2}]},
+            {"id": "i-agent", "type": 1, "name": "Agent login", "folderId": "f-agents", "notes": None,
+             "login": {"username": "bot", "password": "bot-pw", "totp": None,
+                       "uris": [{"uri": "accounts.example.com", "match": 1}]}},
+            {"id": "i-local", "type": 1, "name": "Dev", "folderId": "f-work", "notes": None,
+             "login": {"username": "dev", "password": "dev-pw", "totp": None,
+                       "uris": [{"uri": "http://localhost:8765/", "match": None}]},
+             "fields": [{"name": "copper-agent", "value": "deny", "type": 0}]},
+            {"id": "i-card", "type": 3, "name": "Visa", "folderId": None, "notes": None,
+             "card": {"cardholderName": "Ann Example", "brand": "Visa", "number": "4111111111111111",
+                      "expMonth": 12, "expYear": "2030", "code": "321"}},
+            {"id": "i-who", "type": 4, "name": "Home", "folderId": None, "notes": None,
+             "identity": {"firstName": "Ann", "lastName": "Example", "email": "ann@example.com",
+                          "city": "Springfield", "postalCode": "62701"}},
+            {"id": "i-note", "type": 2, "name": "Wifi", "folderId": None, "notes": "the wifi is hunter2",
+             "secureNote": {"type": 0}},
+        ],
+    }
+
+
+def state_path():
+    return os.environ.get("BW_MOCK_STATE") or os.path.expanduser("~/.config/bw-mock/state.json")
+
+
+def load():
+    p = state_path()
+    if os.path.exists(p):
+        with open(p) as f:
+            return json.load(f)
+    return seed()
+
+
+def save(st):
+    p = state_path()
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "w") as f:
+        json.dump(st, f, indent=1)
+
+
+def log(argv):
+    p = os.path.join(os.path.dirname(state_path()), "calls.log")
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    names = sorted(k for k in os.environ if k.startswith("BW_") and k != "BW_MOCK_STATE")
+    with open(p, "a") as f:
+        f.write(json.dumps({"argv": argv, "bw_env": names,
+                            "appdata": os.environ.get("BITWARDENCLI_APPDATA_DIR", "")}) + "\n")
+
+
+def fail(msg):
+    sys.stderr.write(msg + "\n")
+    sys.exit(1)
+
+
+def out(obj):
+    sys.stdout.write(json.dumps(obj))
+
+
+def unlocked(st):
+    s = os.environ.get("BW_SESSION")
+    return bool(s) and s in st["sessions"]
+
+
+def need(st):
+    if not st["logged_in"]:
+        fail("You are not logged in.")
+    if not unlocked(st):
+        fail("Vault is locked.")
+
+
+def new_session(st):
+    tok = base64.b64encode(secrets.token_bytes(24)).decode()
+    st["sessions"].append(tok)
+    return tok
+
+
+def find(st, iid):
+    for i in st["items"]:
+        if i["id"] == iid:
+            return i
+    fail("Not found.")
+
+
+def main(argv):
+    log(argv)
+    st = load()
+    if argv[:1] == ["--version"]:
+        print("2026.9.0-mock")
+        return
+    cmd = argv[0] if argv else ""
+    rest = argv[1:]
+    if cmd == "status":
+        status = "unauthenticated"
+        if st["logged_in"]:
+            status = "unlocked" if unlocked(st) else "locked"
+        out({"serverUrl": st["server"], "lastSync": "2026-10-12T10:00:00.000Z",
+             "userEmail": EMAIL if st["logged_in"] else None, "status": status})
+    elif cmd == "config":
+        st["server"] = rest[1]
+        save(st)
+        print("Saved setting `config`.")
+    elif cmd == "login":
+        if "--apikey" in rest:
+            if os.environ.get("BW_CLIENTID") != "user.mock" or os.environ.get("BW_CLIENTSECRET") != "mock-secret":
+                fail("client_id or client_secret is incorrect. Try again.")
+            st["logged_in"] = True
+            save(st)
+            print("You are logged in!")
+            return
+        var = rest[rest.index("--passwordenv") + 1]
+        if rest[0] != EMAIL or os.environ.get(var) != PASSWORD:
+            fail("Username or password is incorrect. Try again.")
+        st["logged_in"] = True
+        tok = new_session(st)
+        save(st)
+        print(tok)
+    elif cmd == "unlock":
+        if not st["logged_in"]:
+            fail("You are not logged in.")
+        var = rest[rest.index("--passwordenv") + 1]
+        if os.environ.get(var) != PASSWORD:
+            fail("Invalid master password.")
+        tok = new_session(st)
+        save(st)
+        print(tok)
+    elif cmd == "lock":
+        st["sessions"] = []
+        save(st)
+        print("Your vault is locked.")
+    elif cmd == "logout":
+        st["sessions"] = []
+        st["logged_in"] = False
+        save(st)
+        print("You have logged out.")
+    elif cmd == "sync":
+        need(st)
+        print("Syncing complete.")
+    elif cmd == "list":
+        need(st)
+        out(st["items"] if rest[0] == "items" else st["folders"])
+    elif cmd == "get":
+        if rest[:2] == ["template", "item"]:
+            out({"organizationId": None, "folderId": None, "type": 1, "name": "Item name",
+                 "notes": "Some notes", "favorite": False, "fields": [], "login": None,
+                 "secureNote": None, "card": None, "identity": None, "reprompt": 0})
+            return
+        need(st)
+        item = find(st, rest[1])
+        if rest[0] == "password":
+            print(item["login"]["password"])
+        elif rest[0] == "totp":
+            print("123456")
+        elif rest[0] == "item":
+            out(item)
+    elif cmd == "encode":
+        data = sys.stdin.read()
+        json.loads(data)
+        sys.stdout.write(base64.b64encode(data.encode()).decode())
+    elif cmd in ("create", "edit"):
+        need(st)
+        if len(rest) > (2 if cmd == "edit" else 1):
+            fail("the mock refuses encoded items on argv")
+        raw = sys.stdin.read().strip()
+        obj = json.loads(base64.b64decode(raw))
+        if cmd == "create":
+            obj["id"] = "i-" + secrets.token_hex(4)
+            st["items"].append(obj)
+        else:
+            item = find(st, rest[1])
+            item.update(obj)
+            obj = item
+        save(st)
+        out(obj)
+    elif cmd == "generate":
+        print("Gen3rated-Passw0rd!xyz")
+    else:
+        fail(f"unknown command {cmd}")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
