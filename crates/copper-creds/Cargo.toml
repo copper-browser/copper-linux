@@ -1,0 +1,16 @@
+[package]
+name = "copper-creds"
+description = "Secret Service password store and Bitwarden / 1Password CLI bridges."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

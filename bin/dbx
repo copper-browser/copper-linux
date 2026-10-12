@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# dbx — run a command on the Linux devbox against a synced copy of this repo.
+#
+#   bin/dbx cargo build --workspace
+#   bin/dbx cargo run -p hello -- --selftest
+#   DBX_NO_SYNC=1 bin/dbx cargo test -p copper-core
+#
+# What it does:
+#   1. rsync this tree to $DBX_HOST:$DBX_REMOTE_DIR (skip with DBX_NO_SYNC=1).
+#      --delete removes files you deleted locally, but never touches the remote
+#      target/ or .git/ (excluded paths are protected from deletion).
+#      Concurrent syncs are serialised on the devbox with flock.
+#   2. On the devbox, in the repo dir, with ~/.cargo/env sourced, make sure a
+#      headless weston compositor (socket "copper-wl", 1440x900) and a session
+#      D-Bus are running (started once, shared by every invocation, guarded by
+#      flock + pidfiles), export WAYLAND_DISPLAY / XDG_RUNTIME_DIR / GDK_BACKEND
+#      / DBUS_SESSION_BUS_ADDRESS, then exec the command.
+#
+# Env:
+#   DBX_HOST        ssh host (default: devbox)
+#   DBX_REMOTE_DIR  remote repo dir (default: /home/farce/src/copper-linux)
+#   DBX_NO_SYNC=1   skip the rsync step (and the Cargo.lock pull-back)
+#   DBX_RESTART=1   kill and restart weston + dbus before running
+set -euo pipefail
+
+host=${DBX_HOST:-devbox}
+remote_dir=${DBX_REMOTE_DIR:-/home/farce/src/copper-linux}
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+
+if [[ $# -eq 0 ]]; then
+  echo "usage: bin/dbx <command...>" >&2
+  exit 2
+fi
+
+ssh_opts=(-o BatchMode=yes -o ControlMaster=auto -o "ControlPath=$HOME/.ssh/dbx-cm-%C" -o ControlPersist=10m)
+
+if [[ -z ${DBX_NO_SYNC:-} ]]; then
+  rsync -az --delete \
+    --exclude=/target/ --exclude=/.git/ --exclude=.DS_Store \
+    --rsync-path="mkdir -p $(printf %q "$remote_dir") && flock /tmp/copper-dbx-rsync.lock rsync" \
+    -e "ssh ${ssh_opts[*]}" \
+    "$root/" "$host:$remote_dir/"
+fi
+
+# The remote setup runs in bash on the devbox; the user's command follows as "$@".
+read -r -d '' setup <<'EOF' || true
+set -euo pipefail
+remote_dir=$1; shift
+[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+cd "$remote_dir"
+
+rt="/tmp/copper-dbx-$(id -u)"
+mkdir -p "$rt"
+chmod 700 "$rt"
+export XDG_RUNTIME_DIR="$rt"
+export WAYLAND_DISPLAY=copper-wl
+export GDK_BACKEND=wayland
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$rt/bus"
+export NO_AT_BRIDGE=1
+
+alive() { [ -f "$1" ] && kill -0 "$(cat "$1")" 2>/dev/null; }
+
+# Every daemon started below gets stdin, stdout AND stderr pointed away from
+# the ssh channel and the lock fd (9) closed; otherwise ssh never sees EOF and
+# the next dbx blocks on a lock a daemon still holds.
+(
+  if ! flock -w 60 9; then
+    echo "dbx: timed out waiting for $rt/dbx.lock" >&2
+    exit 1
+  fi
+  if [ -n "${DBX_RESTART:-}" ]; then
+    for p in "$rt/weston.pid" "$rt/dbus.pid"; do
+      alive "$p" && kill "$(cat "$p")" 2>/dev/null || true
+      rm -f "$p"
+    done
+    sleep 0.5
+  fi
+  if ! alive "$rt/dbus.pid" || [ ! -S "$rt/bus" ]; then
+    rm -f "$rt/bus"
+    dbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --fork --print-pid \
+      </dev/null >"$rt/dbus.pid" 2>"$rt/dbus.log" 9>&-
+    for _ in $(seq 1 100); do [ -S "$rt/bus" ] && break; sleep 0.05; done
+  fi
+  if ! alive "$rt/weston.pid" || [ ! -S "$rt/copper-wl" ]; then
+    rm -f "$rt/copper-wl" "$rt/copper-wl.lock"
+    setsid weston --backend=headless --renderer=pixman --socket=copper-wl \
+      --width=1440 --height=900 --idle-time=0 \
+      </dev/null >"$rt/weston.log" 2>&1 9>&- &
+    echo $! >"$rt/weston.pid"
+    for _ in $(seq 1 100); do [ -S "$rt/copper-wl" ] && break; sleep 0.05; done
+    if [ ! -S "$rt/copper-wl" ]; then
+      echo "dbx: weston did not start; see $rt/weston.log" >&2
+      tail -20 "$rt/weston.log" >&2 || true
+      exit 1
+    fi
+  fi
+) 9>"$rt/dbx.lock"
+
+exec "$@"
+EOF
+
+tty_opt=()
+[[ -t 0 && -t 1 ]] && tty_opt=(-t)
+
+remote_cmd="bash -c $(printf %q "$setup") dbx $(printf %q "$remote_dir") $(printf '%q ' "$@")"
+if [[ -n ${DBX_RESTART:-} ]]; then
+  remote_cmd="DBX_RESTART=1 $remote_cmd"
+fi
+rc=0
+ssh "${ssh_opts[@]}" ${tty_opt[@]+"${tty_opt[@]}"} "$host" "$remote_cmd" || rc=$?
+
+# Cargo resolves Cargo.lock on the devbox; bring it home so the next sync does
+# not delete it and the lockfile can be committed (skipped with DBX_NO_SYNC=1).
+if [[ -z ${DBX_NO_SYNC:-} ]]; then
+  rsync -a -e "ssh ${ssh_opts[*]}" "$host:$remote_dir/Cargo.lock" "$root/Cargo.lock" \
+    </dev/null >/dev/null 2>&1 || true
+fi
+exit "$rc"

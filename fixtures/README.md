@@ -1,0 +1,39 @@
+# Mac format fixtures
+
+These are **sanitized exports of one live macOS Copper data folder**, not hand-made examples. `python3 fixtures/scrub.py` reads `~/Library/Application Support/Copper/` without writing to it; it creates sanitized JSON directly in memory, never placing an unsanitized copy in the repository. Run from any directory; `--source`, `--output`, and `--verify` are available. A running browser can rewrite `session.json` between separate runs, so `--verify` compares to the *current* source snapshot; the exporter also checks determinism twice against the same in-memory snapshot on every invocation.
+
+The file list below maps to `Sources/Search/` in the read-only Mac source tree. Unless specified otherwise, Swift uses **the default `JSONEncoder`/`JSONDecoder` strategy for `Date`: a JSON number of seconds since 2001-01-01 00:00:00 UTC**, not Unix seconds and not milliseconds. The exporter leaves number and date values unchanged; IDs, booleans, nulls, all object keys, array order, and nesting are preserved. The only array reduction is `history.json` (1,398 → 200 entries, recent plus sampled long tail and unusual shapes).
+
+| Fixture in `mac/` | macOS source Swift type and file | Encoding / notes |
+|---|---|---|
+| `session.json` | `Session.Shape` / `Session.Entry`, `Session.swift`; `Space`, `Fork/Spaces.swift` | `tabs`, `pins`, four spaces, one empty; `seen` is **Unix seconds** (`Double`), not Swift `Date`. Pinned and sleeping/saved variants retained; private tabs are intentionally not persisted. |
+| `history.json` | `[Visit]`, `History.swift` | `last: Date` uses **2001-reference seconds**; only 200 of 1,398 visits retained; URL-derived `key` is anonymized consistently with `url`. |
+| `bookmarks.json` | `[Bookmark]`, `Bookmarks.swift` | Optional `children` supplies recursive folders; this Mac has one site and **no nested bookmark folders**, so none were fabricated. |
+| `windows.json` | `[Windows.Saved]`, `Fork/Windows.swift` | Empty array on this Mac. Modern entries contain a space UUID and active URL; legacy `tabs` / `active` decode but are not written. |
+| `groups.json` | `Groups.File` (`groups: [TabGroup]`), `Fork/Groups.swift` | 38 groups, including 13 nested ` › ` folder-path names; group/space UUIDs retained. |
+| `downloads.json` | `[Keep]`, `Loot.swift` | `date: Date` uses **2001-reference seconds**; paths are fake local paths; original filenames are not retained. |
+| `trails.json` | `Trails.Disk` (`Trail`, `Page`), `Fork/Trails/Trails.swift` | `created`, `used`, `rank`, `opened` are **Unix seconds** (`Double`), not `Date` fields. Page/trail IDs and parent links retained. |
+| `updates.json` | `Updates.Saved` (`Latest`, `Staged`, `Outcome`, `Pending`), `Fork/Updates.swift` | `checkedAt` and `outcome.at` use **2001-reference seconds**; `latest.publishedAt` is a date *string* as received from the feed. Archive URL and digest scrubbed. |
+| `cloud-sync.json` | `CloudSync.Saved` (`Base`), `Fork/Cloud/CloudSync.swift` | `docs` maps domain names to `{version, payload}`. `payload: Data` is **base64-encoded JSON**; every embedded document is decoded, scrubbed, and re-encoded. `remote` timestamps are Unix seconds. See standalone exports below. |
+| `chat.json` | `Agent.Config`, `Fork/Agent/Agent.swift` | Local agent *settings*, not the canvas chat transcript; no dates. |
+| `intelligence.json` | `Intelligence.Keys`, `Fork/Intelligence.swift` | Keys and non-enum free text redacted; model/lane/tier shape preserved; no dates. |
+| `agent.json` | `MCP.Config` and `AgentLink.Config`, `Fork/MCP/MCP.swift` and `Fork/MCP/Link.swift` | MCP bearer/link credentials redacted; port, switches, IDs, array shape retained. Not a usable credential file. |
+| `cloud.json` | `Cloud.Saved` (`Link`, `Account`, `SyncPrefs`), `Fork/Cloud/Cloud.swift` | Tokens, instance key and TLS fingerprint redacted; link URL and identities pseudonymized. `sync.pushedThrough` is Unix seconds. |
+| `cloud-intelligence.json` | `CloudProvided`, `Fork/Cloud/CloudIntelligence.swift` | Explicit `.iso8601` date strategy for `fetched_at`; `updated_at` is an RFC 3339 string supplied by the server. Gateway/Jev keys redacted. |
+| `claude.json` | `ClaudeAccount.Credential`, `Fork/ClaudeAccount.swift` | OAuth access/refresh redacted; `expires: Date` uses **2001-reference seconds**. |
+| `mcp.json` | Dynamic `Servers` configuration, `Fork/Agent/Servers.swift` | Parsed with `JSONSerialization`, not `Codable`; preserves arbitrary server object keys and transport shape; commands, args and credentials redacted. |
+| `canvases.json` | `[Canvases.Entry]`, `Fork/Canvas/Canvas.swift` | Actual source is **`canvas/canvases.json`**, not a root-level file. Explicit `.iso8601` strategy for `createdAt` / `updatedAt`; canvas/account IDs retained, owners/names pseudonymized. |
+| `crashes.json` | `Crashes.Index` (`Entry`, `Frame`, `Binary`), `Fork/Crashes.swift` | Actual source is **`crashes/crashes.json`**. Explicit `.iso8601` dates (`time`, `launched`, `through`); stack symbols, report names, filesystem paths, breadcrumbs sanitized; numeric addresses/offsets/IDs retained. |
+| `cloud-spaces.json` | `CloudDocs.Spaces` / `KeptTab`, `Fork/Cloud/CloudMerge.swift` | Standalone sanitized base64 payload from `cloud-sync.json` `docs.spaces`; older base keys use `UUID\|pin/saved\|host\|URL`, newer code uses an ordinal, both handled. |
+| `cloud-bookmarks.json` | `CloudDocs.Bookmarks`, `Fork/Cloud/CloudMerge.swift` | Standalone sanitized base64 payload from `docs.bookmarks` (tree plus schema version). |
+| `cloud-tabs.json` | `CloudDocs.Tabs` / `Tabs.Open`, `Fork/Cloud/CloudMerge.swift` | Standalone sanitized base64 payload from `docs.tabs:<device-id>`; `updated` is Unix seconds. |
+
+The `settings` cloud document is **also scrubbed** within `cloud-sync.json`'s base64 payload; it is not a fourth standalone export. Two other files in this directory, `tools-list.json` and `mcp-initialize.json`, are independently captured MCP JSON-RPC responses (`Fork/MCP/MCP.swift`, `Fork/MCP/Tools.swift`); they are not source data-folder files, not generated by `scrub.py`, and have no Swift `Date` fields.
+
+**No Mac fixture:** `hidden.json` (`[String: [Veil]]`, `Curtain.swift`, default `Date`) is absent; the global `userscripts.json` is absent (extension-local `_search/userscripts.json` is a separate `JSONSerialization` array in `ExtensionShims.swift`). The missing nested bookmark case is a real-data limitation, not an omitted export. The group folder paths and retained session variants supply other structural edge cases.
+
+## Privacy and reproducibility
+
+- Every URL becomes `https://example-<host-number>.test/<path-hash>`; home/deep URL relations are kept without original host/path/query. Titles become `Title <number>`, names `Person <number>` (including each folder-path segment), emails `user<number>@example.test`. Numbers are assigned from sorted distinct source values (not reversible public hashes); the same source snapshot yields the same aliases, but newly added source values can renumber them. The URL path is SHA-256 hashed. Empty strings remain empty.
+- Secret, token, password, fingerprint, cookie, OAuth and free-text fields are redacted or replaced with typed placeholders. IDs/dates/numbers/booleans retain their source values; a URL-derived history/kept-tab **key value** must change because it contains the original host/URL. JSON *object keys* do not change. Base64 cloud payloads are scrubbed recursively before output.
+- Validation (JSON **only**, because the scrubber's own code contains sensitive-pattern names): `jq empty fixtures/mac/*.json`; `rg -i -q --glob '*.json' 'bearer|ck_|exowatt|felipe|farce|sk-|password"[[:space:]]*:[[:space:]]*"[^R]' fixtures/mac` must have exit status **1** (no match). Run `python3 fixtures/scrub.py --verify` if the live source has not changed since export. Do not copy raw Mac JSON into a tracked directory.

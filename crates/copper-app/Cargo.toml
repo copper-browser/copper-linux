@@ -1,0 +1,28 @@
+[package]
+name = "copper-app"
+description = "Copper for Linux: the GTK4 / libadwaita browser shell."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "copper"
+path = "src/main.rs"
+
+[dependencies]
+copper-core.workspace = true
+copper-engine.workspace = true
+copper-engine-webkitgtk.workspace = true
+copper-pagejs.workspace = true
+copper-shield.workspace = true
+copper-mcp.workspace = true
+gtk4.workspace = true
+libadwaita.workspace = true
+glib.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

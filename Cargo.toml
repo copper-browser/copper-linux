@@ -1,0 +1,67 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/copper-core",
+    "crates/copper-engine",
+    "crates/copper-engine-webkitgtk",
+    "crates/copper-pagejs",
+    "crates/copper-shield",
+    "crates/copper-creds",
+    "crates/copper-import",
+    "crates/copper-cloud",
+    "crates/copper-mcp",
+    "crates/copper-app",
+    "spikes/hello",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/copper-browser/copper-linux"
+publish = false
+
+[workspace.dependencies]
+# GTK / WebKitGTK stack. webkit6 0.6.1 pins the gtk-rs 0.11 / glib 0.22 line.
+# Feature ceilings follow the oldest supported system: Ubuntu 24.04 ships
+# GTK 4.14, libadwaita 1.5; WebKitGTK 6.0 there is 2.52 (security updates).
+gtk4 = { version = "0.11", features = ["v4_14"] }
+gdk4 = { version = "0.11", features = ["v4_14"] }
+libadwaita = { package = "libadwaita", version = "0.9", features = ["v1_5"] }
+webkit6 = { version = "0.6.1", features = ["v2_52"] }
+javascriptcore6 = "0.6"
+soup3 = "0.9"
+glib = "0.22"
+gio = "0.22"
+
+# Shared non-GUI deps.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+directories = "6"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "http2"] }
+url = { version = "2", features = ["serde"] }
+
+# Workspace crates.
+copper-core = { path = "crates/copper-core" }
+copper-engine = { path = "crates/copper-engine" }
+copper-engine-webkitgtk = { path = "crates/copper-engine-webkitgtk" }
+copper-pagejs = { path = "crates/copper-pagejs" }
+copper-shield = { path = "crates/copper-shield" }
+copper-creds = { path = "crates/copper-creds" }
+copper-import = { path = "crates/copper-import" }
+copper-cloud = { path = "crates/copper-cloud" }
+copper-mcp = { path = "crates/copper-mcp" }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[profile.dev.package."*"]
+opt-level = 1

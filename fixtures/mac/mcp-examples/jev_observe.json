@@ -1,0 +1,13 @@
+{
+  "id": 4,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "### Page\n- URL: https://example.test/page/1\n- Title: Title 1\n- Tab: 00000001\n\n### Elements\n[1] button     Control 1\n[2] button     Control 2\n[3] button     Control 3\n[4] button     Control 4\n[5] button     Control 5\n[6] button     Control 6\n[7] button     Control 7\n[8] button     Control 8\n[9] button     Control 9\n[10] button     Control 10\n… 33 more",
+        "type": "text"
+      }
+    ],
+    "isError": false
+  }
+}
