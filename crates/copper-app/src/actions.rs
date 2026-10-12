@@ -187,8 +187,12 @@ pub fn run_command(shell: &Shell, id: &str) -> bool {
 }
 
 /// Later lanes register here: one call each.
-pub fn register_lanes(_shell: &Shell) {
-    // e.g. crate::shield::register(_shell);
+pub fn register_lanes(shell: &Shell) {
+    crate::features::register(shell);
+    crate::forms::register(shell);
+    crate::cloud::register(shell);
+    crate::canvas::register(shell);
+    crate::agents::register(shell);
 }
 
 fn with_active(s: &Shell, f: impl FnOnce(&Shell, &TabId)) {

@@ -273,9 +273,15 @@ name = "copper-app"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "copper-cloud",
  "copper-core",
+ "copper-creds",
  "copper-engine",
  "copper-engine-webkitgtk",
+ "copper-import",
+ "copper-mcp",
+ "copper-pagejs",
+ "copper-shield",
  "gdk4",
  "gio",
  "glib",

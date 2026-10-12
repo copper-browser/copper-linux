@@ -18,6 +18,11 @@
 //! | [`screenshot`] | PNG of the whole window (debug QA) |
 
 pub mod actions;
+pub mod agents;
+pub mod canvas;
+pub mod cloud;
+pub mod features;
+pub mod forms;
 pub mod app;
 pub mod control;
 pub mod crash;
