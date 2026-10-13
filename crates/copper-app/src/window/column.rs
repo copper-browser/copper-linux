@@ -136,6 +136,7 @@ impl Column {
                 m.set_menu_model(Some(&super::window_menu(&s)));
             }
         });
+        foot.append(&crate::features::door(shell));
         foot.append(&menu);
         widget.append(&foot);
 
@@ -369,6 +370,7 @@ fn fill(shell: &Shell, row: &Row, t: &TabView) {
     row.badge.set_icon_name(badge);
     row.badge.set_visible(badge.is_some());
     row.badge.set_tooltip_text(Some(tip).filter(|t| !t.is_empty()));
+    crate::agents::paint_badge(&t.id, &row.badge);
     let mut name = t.label.clone();
     if t.sleeping {
         name.push_str(", asleep");

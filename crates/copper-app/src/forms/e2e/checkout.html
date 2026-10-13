@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Copper checkout fixture</title>
+  <style>
+    body { max-width: 30rem; margin: 3rem auto; padding: 0 1rem; font: 16px/1.4 system-ui, sans-serif; color: #222; }
+    label { display: block; margin: .6rem 0; }
+    input { box-sizing: border-box; width: 100%; padding: .4rem; font: inherit; }
+  </style>
+</head>
+<body>
+  <!-- Card and address boxes for browser_autofill kind=card / identity. -->
+  <h1>Checkout</h1>
+  <form id="pay" action="#">
+    <label>Name on card <input id="cc-name" autocomplete="cc-name"></label>
+    <label>Card number <input id="cc-number" autocomplete="cc-number" inputmode="numeric"></label>
+    <label>Expiry <input id="cc-exp" autocomplete="cc-exp" placeholder="MM/YY"></label>
+    <label>Security code <input id="cc-csc" autocomplete="cc-csc"></label>
+  </form>
+  <form id="ship" action="#">
+    <label>First name <input id="given" autocomplete="given-name"></label>
+    <label>Last name <input id="family" autocomplete="family-name"></label>
+    <label>Email <input id="email" type="email" autocomplete="email"></label>
+    <label>City <input id="city" autocomplete="address-level2"></label>
+    <label>ZIP <input id="zip" autocomplete="postal-code"></label>
+  </form>
+</body>
+</html>

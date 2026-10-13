@@ -1094,6 +1094,99 @@ impl Browser {
         self.update_tab(id, |t| t.group = group.map(str::to_string))
     }
 
+    // MARK: cloud
+
+    /// Make the spaces these (Mac `Spaces.cloudAdopt`): each listed space is
+    /// added with its own id, or updated in place (matched by id, any case;
+    /// the id kept as it is here); the listed ones come first, in the given
+    /// order, and spaces not listed stay, after them. Tabs are untouched.
+    /// Returns whether anything changed.
+    pub fn adopt_spaces(&mut self, spaces: &[Space]) -> bool {
+        if spaces.is_empty() {
+            return false;
+        }
+        let before: Vec<Space> = self.spaces.iter().map(|r| r.space.clone()).collect();
+        let mut old: Vec<SpaceRow> = std::mem::take(&mut self.spaces);
+        let mut out: Vec<SpaceRow> = Vec::with_capacity(old.len().max(spaces.len()));
+        for wanted in spaces {
+            if out
+                .iter()
+                .any(|r| r.space.id.eq_ignore_ascii_case(&wanted.id))
+            {
+                continue;
+            }
+            match old
+                .iter()
+                .position(|r| r.space.id.eq_ignore_ascii_case(&wanted.id))
+            {
+                Some(i) => {
+                    let mut row = old.remove(i);
+                    let keep = row.space.id.clone();
+                    row.space = wanted.clone();
+                    row.space.id = keep;
+                    out.push(row);
+                }
+                None => out.push(SpaceRow {
+                    space: wanted.clone(),
+                    tabs: Vec::new(),
+                    active: None,
+                }),
+            }
+        }
+        out.extend(old);
+        self.spaces = out;
+        let after: Vec<Space> = self.spaces.iter().map(|r| r.space.clone()).collect();
+        if after == before {
+            return false;
+        }
+        self.changed(BrowserEvent::SpacesChanged);
+        true
+    }
+
+    /// Give a space another id (Mac: a space made here and never synced is
+    /// the same as a server one with the same name, and takes its id). Its
+    /// row, its tabs, the pins made there, the closed-tab stack and the
+    /// current space follow. Matched in any case; refused when `new` is
+    /// already another space's id.
+    pub fn rekey_space(&mut self, old: &str, new: &str) -> bool {
+        if new.is_empty() || old == new {
+            return false;
+        }
+        let Some(i) = self
+            .spaces
+            .iter()
+            .position(|r| r.space.id.eq_ignore_ascii_case(old))
+        else {
+            return false;
+        };
+        if self
+            .spaces
+            .iter()
+            .enumerate()
+            .any(|(j, r)| j != i && r.space.id.eq_ignore_ascii_case(new))
+        {
+            return false;
+        }
+        let was = self.spaces[i].space.id.clone();
+        self.spaces[i].space.id = new.to_string();
+        for tab in self.tabs.values_mut() {
+            if tab.space == was {
+                tab.space = new.to_string();
+            }
+        }
+        for closed in &mut self.closed {
+            if closed.space == was {
+                closed.space = new.to_string();
+            }
+        }
+        if self.current == was {
+            self.current = new.to_string();
+            self.changed(BrowserEvent::SpaceSwitched(new.to_string()));
+        }
+        self.changed(BrowserEvent::SpacesChanged);
+        true
+    }
+
     // MARK: helpers
 
     fn row_of(&self, space: &str) -> Option<&SpaceRow> {
@@ -1293,5 +1386,60 @@ mod tests {
         assert!(r.pins()[0].sleeping);
         assert!(r.tab(&t).is_none(), "ids are fresh per run");
         assert_eq!(r.to_session().tabs.len(), shape.tabs.len());
+    }
+
+    #[test]
+    fn adopt_spaces_adds_updates_orders_and_keeps_unlisted() {
+        let mut b = Browser::new();
+        let home = b.current_space_id().to_string();
+        let t = b.open_tab("https://h.test/", opts(true));
+        let local = b.add_space("Local");
+        b.take_events();
+        let mut renamed = b.space(&home).unwrap().clone();
+        renamed.id = home.to_lowercase();
+        renamed.name = "Home (cloud)".into();
+        renamed.hue = Some(0.5);
+        let server = Space {
+            id: "AAAAAAAA-0000-4000-8000-000000000001".into(),
+            name: "Server".into(),
+            ..Default::default()
+        };
+        assert!(b.adopt_spaces(&[server.clone(), renamed]));
+        let ids: Vec<String> = b.spaces().map(|s| s.id.clone()).collect();
+        assert_eq!(ids, vec![server.id.clone(), home.clone(), local]);
+        assert_eq!(b.space(&home).unwrap().name, "Home (cloud)");
+        assert_eq!(b.space(&home).unwrap().hue, Some(0.5));
+        assert_eq!(b.tab(&t).unwrap().space, home, "tabs untouched");
+        assert!(b.row(&server.id).is_empty());
+        assert!(b.take_events().contains(&BrowserEvent::SpacesChanged));
+        let again: Vec<Space> = b.spaces().take(2).cloned().collect();
+        assert!(!b.adopt_spaces(&again), "nothing new: no change");
+        assert!(b.take_events().is_empty());
+    }
+
+    #[test]
+    fn rekey_space_moves_tabs_pins_and_current() {
+        let mut b = Browser::new();
+        let home = b.current_space_id().to_string();
+        let t = b.open_tab("https://h.test/", opts(true));
+        let p = b.open_tab("https://p.test/", opts(false));
+        b.pin(&p, Some("P"));
+        let other = b.add_space("Other");
+        b.switch_space(&home);
+        b.take_events();
+        let new = "BBBBBBBB-0000-4000-8000-000000000002";
+        assert!(b.rekey_space(&home.to_lowercase(), new));
+        assert_eq!(b.current_space_id(), new);
+        assert!(b.space(&home).is_none());
+        assert_eq!(b.tab(&t).unwrap().space, new);
+        assert_eq!(b.tab(&p).unwrap().space, new);
+        assert_eq!(b.row(new).len(), 1);
+        let ev = b.take_events();
+        assert!(ev.contains(&BrowserEvent::SpaceSwitched(new.into())));
+        assert!(ev.contains(&BrowserEvent::SpacesChanged));
+        assert!(!b.rekey_space(new, &other), "never onto another space's id");
+        assert!(!b.rekey_space("missing", "X"));
+        let shape = b.to_session();
+        assert_eq!(shape.space.as_deref(), Some(new));
     }
 }

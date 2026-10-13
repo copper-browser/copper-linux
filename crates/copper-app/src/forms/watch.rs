@@ -1,0 +1,640 @@
+//! Every live page gets the forms relay and is listened to (`officeForms`
+//! messages and load events), on its own event stream beside the shell's.
+//!
+//! * A sign-in the page sends is held; it is judged once the page moved on
+//!   (a new document, or its boxes went away by themselves and stayed away),
+//!   and offered for saving only when the page no longer asks for a
+//!   password — the sign-in took ([`copper_creds::offer`]).
+//! * The caret landing in a name or password box offers that site's saved
+//!   accounts in a list under the box; a code box offers the one-time codes.
+//!   Nothing is filled until a row is clicked.
+
+use super::offer::{self, OfferData};
+use super::picker::{self, Row, RowKind};
+use super::{Forms, rt, site_host};
+use crate::control::ShellEvent;
+use crate::shell::Shell;
+use crate::shell::pages::PageSlot;
+use copper_core::TabId;
+use copper_creds::credential::{self, Credential, Source};
+use copper_creds::offer::{self as judge, Context, Decision, Outcome, Sent, Settle, SignInWatch};
+use copper_engine::{JsonMap, LoadState, PageEvent, PageView, UserScript, World};
+use copper_engine_webkitgtk::WebKitPage;
+use copper_pagejs::Call;
+use copper_pagejs::messages::{FORMS, FieldInfo, FieldRect, FormsMessage};
+use gtk4 as gtk;
+use serde::de::DeserializeOwned;
+use std::rc::Rc;
+use std::time::Duration;
+
+/// One tab's forms state; dropped with its page.
+pub(crate) struct TabForms {
+    widget: glib::WeakRef<gtk::Widget>,
+    pump: Option<glib::JoinHandle<()>>,
+    pub watch: SignInWatch,
+    pub offer: Option<offer::Offer>,
+    pub picker: Option<picker::Picker>,
+    /// A row was picked into this sign-in: the list stays down until the
+    /// caret leaves the boxes.
+    picked_into: bool,
+    /// The account last filled here (its code goes first on the next page).
+    pub signed_with: Option<Credential>,
+    /// The field the list is up for (`kind|label`).
+    anchor: Option<String>,
+    /// Bumped on every caret move: an answer for an older one is dropped.
+    focus_gen: u64,
+    lowering: Option<glib::SourceId>,
+}
+
+impl Drop for TabForms {
+    fn drop(&mut self) {
+        if let Some(p) = self.pump.take() {
+            p.abort();
+        }
+        if let Some(t) = self.lowering.take() {
+            t.remove();
+        }
+        if let Some(o) = self.offer.take() {
+            o.remove();
+        }
+        if let Some(p) = self.picker.take() {
+            p.remove();
+        }
+    }
+}
+
+/// The engine form of a curated user script.
+pub fn engine_script(s: &copper_pagejs::UserScript) -> UserScript {
+    use copper_engine::{Frames, InjectionTime};
+    let mut u = UserScript::new(s.source.clone());
+    u.injection_time = match s.injection {
+        copper_pagejs::Injection::DocumentStart => InjectionTime::DocumentStart,
+        copper_pagejs::Injection::DocumentEnd => InjectionTime::DocumentEnd,
+    };
+    u.frames = match s.frames {
+        copper_pagejs::Frames::MainFrame => Frames::TopOnly,
+        copper_pagejs::Frames::AllFrames => Frames::All,
+    };
+    u.world = engine_world(s.world);
+    u
+}
+
+pub fn engine_world(w: copper_pagejs::World) -> World {
+    match w {
+        copper_pagejs::World::Page => World::Page,
+        copper_pagejs::World::Isolated(n) => World::Isolated(n.to_string()),
+    }
+}
+
+/// Run a curated call in a page and decode its answer. The arguments
+/// (a password, a code) go into the page and nowhere else.
+pub async fn call<T: DeserializeOwned>(page: &WebKitPage, call: &Call<T>) -> Result<T, String> {
+    let world = engine_world(call.world());
+    let v = page
+        .call_async(&call.function_body(), &JsonMap::new(), &world)
+        .await
+        .map_err(|e| e.to_string())?;
+    call.decode_value(v).map_err(|e| e.to_string())
+}
+
+/// Listen to the shell: every page that appears gets the relay.
+pub fn start(forms: &Rc<Forms>, shell: &Shell) {
+    let mut rx = shell.hub().subscribe();
+    let weak = Rc::downgrade(forms);
+    glib::spawn_future_local(async move {
+        loop {
+            let ev = rx.recv().await;
+            let Some(f) = weak.upgrade() else { break };
+            match ev {
+                Ok(ShellEvent::TabClosed(id)) => {
+                    f.tabs.borrow_mut().remove(&id);
+                }
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => f.sweep(),
+                Err(_) => break,
+            }
+        }
+    });
+    // Pages also appear without an event (a profile change rebuilds them).
+    let weak = Rc::downgrade(forms);
+    glib::timeout_add_local(Duration::from_millis(700), move || match weak.upgrade() {
+        Some(f) => {
+            f.sweep();
+            glib::ControlFlow::Continue
+        }
+        None => glib::ControlFlow::Break,
+    });
+    forms.sweep();
+}
+
+impl Forms {
+    fn now(&self) -> f64 {
+        self.epoch.elapsed().as_secs_f64()
+    }
+
+    /// Attach to every page not yet attached; forget pages that went away.
+    pub(crate) fn sweep(self: &Rc<Self>) {
+        let Some(shell) = self.shell.upgrade() else {
+            return;
+        };
+        let pages: Vec<(TabId, Rc<PageSlot>)> = shell
+            .pages_map()
+            .borrow()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let fresh: Vec<(TabId, Rc<PageSlot>)> = {
+            let mut tabs = self.tabs.borrow_mut();
+            tabs.retain(|id, _| pages.iter().any(|(p, _)| p == id));
+            pages
+                .into_iter()
+                .filter(|(id, slot)| {
+                    let w = slot.page.widget();
+                    tabs.get(id)
+                        .is_none_or(|t| t.widget.upgrade().as_ref() != Some(&w))
+                })
+                .collect()
+        };
+        for (id, slot) in fresh {
+            let state = self.attach(&id, &slot);
+            self.tabs.borrow_mut().insert(id, state);
+        }
+    }
+
+    fn attach(self: &Rc<Self>, id: &TabId, slot: &Rc<PageSlot>) -> TabForms {
+        let page = slot.page.clone();
+        page.add_message_handler(FORMS, &World::Page);
+        let relay = copper_pagejs::forms::relay();
+        page.add_user_script(&engine_script(&relay));
+        // The document already there (the relay is idempotent).
+        let now = page.eval(&relay.source, &World::Page);
+        glib::spawn_future_local(async move {
+            let _ = now.await;
+        });
+        let mut events = page.events();
+        let weak = Rc::downgrade(self);
+        let tab = id.clone();
+        let pump = glib::spawn_future_local(async move {
+            while let Some(ev) = events.next().await {
+                let Some(f) = weak.upgrade() else { break };
+                f.on_event(&tab, ev);
+            }
+        });
+        let widget = glib::WeakRef::new();
+        widget.set(Some(&page.widget()));
+        TabForms {
+            widget,
+            pump: Some(pump),
+            watch: SignInWatch::default(),
+            offer: None,
+            picker: None,
+            picked_into: false,
+            signed_with: None,
+            anchor: None,
+            focus_gen: 0,
+            lowering: None,
+        }
+    }
+
+    fn with_tab<R>(&self, id: &TabId, f: impl FnOnce(&mut TabForms) -> R) -> Option<R> {
+        self.tabs.borrow_mut().get_mut(id).map(f)
+    }
+
+    fn on_event(self: &Rc<Self>, tab: &TabId, ev: PageEvent) {
+        match ev {
+            PageEvent::ScriptMessage { name, body } if name == FORMS => {
+                match serde_json::from_value::<FormsMessage>(body) {
+                    Ok(FormsMessage::Submit { user, password }) => {
+                        self.on_submit(tab, user, password)
+                    }
+                    Ok(FormsMessage::Settled) => self.settle(tab, false),
+                    Ok(FormsMessage::Focus {
+                        typing,
+                        rect,
+                        field,
+                        hint,
+                    }) => self.on_focus(tab, typing, rect, field, hint),
+                    Ok(_) => {}
+                    Err(e) => tracing::debug!(error = %e, "officeForms message"),
+                }
+            }
+            PageEvent::Load(LoadState::Started { .. }) => {
+                self.lower_now(tab);
+                self.with_tab(tab, |t| {
+                    t.picked_into = false;
+                });
+            }
+            PageEvent::Load(LoadState::Finished { .. }) => self.settle(tab, true),
+            PageEvent::Crashed(_) => {
+                self.lower_now(tab);
+                self.with_tab(tab, |t| t.watch.clear());
+            }
+            _ => {}
+        }
+    }
+
+    fn page_of(&self, tab: &TabId) -> Option<(Shell, Rc<PageSlot>)> {
+        let shell = self.shell.upgrade()?;
+        let slot = shell.slot(tab)?;
+        Some((shell, slot))
+    }
+
+    fn is_private(&self, tab: &TabId) -> bool {
+        self.shell
+            .upgrade()
+            .is_some_and(|s| s.browser().tab(tab).is_none_or(|t| t.private))
+    }
+
+    // MARK: saving
+
+    fn on_submit(self: &Rc<Self>, tab: &TabId, user: String, password: String) {
+        if self.is_private(tab) {
+            return;
+        }
+        let Some((_, slot)) = self.page_of(tab) else {
+            return;
+        };
+        let host = slot.page.url().as_deref().and_then(site_host);
+        let now = self.now();
+        self.with_tab(tab, |t| {
+            t.watch.sent(host.as_deref(), &user, &password, now)
+        });
+    }
+
+    fn settle(self: &Rc<Self>, tab: &TabId, navigated: bool) {
+        let now = self.now();
+        let Some(next) = self.with_tab(tab, |t| t.watch.settle(navigated, now)) else {
+            return;
+        };
+        self.follow(tab, next);
+    }
+
+    fn follow(self: &Rc<Self>, tab: &TabId, next: Settle) {
+        match next {
+            Settle::Nothing => {}
+            Settle::RecheckAfter { delay, stamp } => {
+                let weak = Rc::downgrade(self);
+                let tab = tab.clone();
+                glib::timeout_add_local_once(delay, move || {
+                    let Some(f) = weak.upgrade() else { return };
+                    let now = f.now();
+                    if let Some(next) = f.with_tab(&tab, |t| t.watch.recheck(stamp, now)) {
+                        f.follow(&tab, next);
+                    }
+                });
+            }
+            Settle::AskPage => self.ask(tab),
+        }
+    }
+
+    fn ask(self: &Rc<Self>, tab: &TabId) {
+        let Some((_, slot)) = self.page_of(tab) else {
+            return;
+        };
+        let fut = slot.page.eval(judge::HAS_PASSWORD_JS, &World::Page);
+        let weak = Rc::downgrade(self);
+        let tab = tab.clone();
+        glib::spawn_future_local(async move {
+            let still = fut.await.ok().and_then(|v| v.as_bool());
+            let Some(f) = weak.upgrade() else { return };
+            let took = f.with_tab(&tab, |t| t.watch.page_answered(still)).flatten();
+            if let Some(sent) = took {
+                f.judge(&tab, sent).await;
+            }
+        });
+    }
+
+    /// A sign-in that took: offer to save it, offer an update, or just
+    /// mark the kept one used.
+    async fn judge(self: &Rc<Self>, tab: &TabId, sent: Sent) {
+        let Some(shell) = self.shell.upgrade() else {
+            return;
+        };
+        let (saves, never) = {
+            let s = shell.settings();
+            (s.saves_passwords(), super::never_list(&shell))
+        };
+        let private = self.is_private(tab);
+        let snap = self.vault.snapshot();
+        let target = judge::save_target(
+            super::chosen_backend(&shell),
+            snap.bw_unlocked(),
+            snap.op_unlocked(),
+            snap.op_save_vault.is_some(),
+        );
+        let v = self.vault.clone();
+        let host = sent.host.clone();
+        let known = rt::run(async move { v.known_users(target, &host).await })
+            .await
+            .unwrap_or_default();
+        if target == Source::Keychain && !self.vault.snapshot().keyring_ready() {
+            tracing::info!("no Secret Service: not offering to save");
+            return;
+        }
+        let ctx = Context {
+            saves_passwords: saves,
+            private_tab: private,
+            never: &never,
+            target,
+            known_users: &known,
+        };
+        let changed = match judge::decide(&sent, &ctx) {
+            Decision::Ignore => return,
+            Decision::OfferSave => false,
+            Decision::Compare => {
+                let v = self.vault.clone();
+                let (host, user) = (sent.host.clone(), sent.user.clone());
+                let kept = rt::run(async move { v.kept(target, &host, &user).await })
+                    .await
+                    .unwrap_or(Err(()));
+                let current = match &kept {
+                    Ok(p) => Ok(p.as_deref()),
+                    Err(()) => Err(()),
+                };
+                match judge::after_compare(&sent, current) {
+                    Outcome::Touch => {
+                        let v = self.vault.clone();
+                        let c = copper_creds::Login {
+                            host: sent.host.clone(),
+                            user: sent.user.clone(),
+                            used: None,
+                        }
+                        .credential();
+                        rt::run(async move { v.touch(&c).await }).await;
+                        return;
+                    }
+                    Outcome::OfferUpdate => true,
+                    Outcome::OfferSave => false,
+                }
+            }
+        };
+        self.show_offer(
+            tab,
+            OfferData {
+                sent,
+                target,
+                changed,
+            },
+        );
+    }
+
+    fn show_offer(self: &Rc<Self>, tab: &TabId, data: OfferData) {
+        let Some((shell, slot)) = self.page_of(tab) else {
+            return;
+        };
+        // One offer at a time, as on the Mac.
+        for t in self.tabs.borrow_mut().values_mut() {
+            if let Some(o) = t.offer.take() {
+                o.remove();
+            }
+        }
+        let o = offer::show(&shell, self, tab, &slot, data);
+        self.with_tab(tab, |t| t.offer = Some(o));
+    }
+
+    /// The offer was answered: take it down.
+    pub(crate) fn drop_offer(&self, tab: &TabId) {
+        if let Some(o) = self.with_tab(tab, |t| t.offer.take()).flatten() {
+            o.remove();
+        }
+    }
+
+    /// Whether `tab` shows a save offer (self-test, agents).
+    pub fn offering(&self, tab: &TabId) -> bool {
+        self.tabs
+            .borrow()
+            .get(tab)
+            .is_some_and(|t| t.offer.is_some())
+    }
+
+    // MARK: the list under the box
+
+    fn on_focus(
+        self: &Rc<Self>,
+        tab: &TabId,
+        typing: bool,
+        rect: Option<FieldRect>,
+        field: Option<FieldInfo>,
+        hint: String,
+    ) {
+        let stamp = self
+            .with_tab(tab, |t| {
+                t.focus_gen += 1;
+                t.focus_gen
+            })
+            .unwrap_or(0);
+        let (Some(rect), Some(field), true) = (rect, field, typing) else {
+            self.with_tab(tab, |t| t.picked_into = false);
+            self.lower_soon(tab);
+            return;
+        };
+        let kind = field.kind.as_str();
+        let login = matches!(kind, "username" | "password");
+        if !login && kind != "otp" {
+            self.with_tab(tab, |t| t.picked_into = false);
+            self.lower_soon(tab);
+            return;
+        }
+        let Some((shell, slot)) = self.page_of(tab) else {
+            return;
+        };
+        if !shell.settings().fills_passwords() || self.is_private(tab) {
+            return;
+        }
+        let picked = self.with_tab(tab, |t| t.picked_into).unwrap_or(false);
+        if login && picked {
+            return;
+        }
+        let key = format!("{kind}|{}", field.label);
+        let same = self
+            .with_tab(tab, |t| {
+                t.picker.is_some() && t.anchor.as_deref() == Some(&key)
+            })
+            .unwrap_or(false);
+        if same {
+            // The box moved (scroll, resize): the list follows it.
+            self.cancel_lowering(tab);
+            let zoom = slot.page.zoom();
+            self.with_tab(tab, |t| {
+                if let Some(p) = &t.picker {
+                    p.place(rect, zoom);
+                }
+            });
+            return;
+        }
+        let Some(host) = slot.page.url().as_deref().and_then(site_host) else {
+            return;
+        };
+        let signed = self.with_tab(tab, |t| t.signed_with.clone()).flatten();
+        let v = self.vault.clone();
+        let weak = Rc::downgrade(self);
+        let tab = tab.clone();
+        let want_code = kind == "otp";
+        glib::spawn_future_local(async move {
+            let h = host.clone();
+            let all = rt::run(async move { v.candidates(&h).await })
+                .await
+                .unwrap_or_default();
+            let Some(f) = weak.upgrade() else { return };
+            if f.with_tab(&tab, |t| t.focus_gen) != Some(stamp) {
+                return;
+            }
+            let rows: Vec<Row> = if want_code {
+                let mut coded: Vec<Credential> = all.into_iter().filter(|c| c.has_totp).collect();
+                if let Some(s) = signed.filter(|s| s.has_totp) {
+                    coded.retain(|c| c.id != s.id);
+                    coded.insert(0, s);
+                }
+                coded
+                    .into_iter()
+                    .map(|c| Row {
+                        credential: c,
+                        kind: RowKind::Code,
+                    })
+                    .collect()
+            } else {
+                credential::ranked(all, &host, &hint)
+                    .into_iter()
+                    .map(|c| Row {
+                        credential: c,
+                        kind: RowKind::Login,
+                    })
+                    .collect()
+            };
+            if rows.is_empty() {
+                f.lower_now(&tab);
+                return;
+            }
+            f.show_picker(&tab, key, rect, rows);
+        });
+    }
+
+    fn show_picker(self: &Rc<Self>, tab: &TabId, key: String, rect: FieldRect, rows: Vec<Row>) {
+        let Some((shell, slot)) = self.page_of(tab) else {
+            return;
+        };
+        self.cancel_lowering(tab);
+        if let Some(old) = self.with_tab(tab, |t| t.picker.take()).flatten() {
+            old.remove();
+        }
+        let p = picker::show(&shell, self, tab, &slot, rect, rows);
+        self.with_tab(tab, |t| {
+            t.picker = Some(p);
+            t.anchor = Some(key);
+        });
+    }
+
+    fn cancel_lowering(&self, tab: &TabId) {
+        if let Some(t) = self.with_tab(tab, |t| t.lowering.take()).flatten() {
+            t.remove();
+        }
+    }
+
+    /// The caret left: the list goes a beat later (a click on a row can
+    /// take the caret out of the page first).
+    fn lower_soon(self: &Rc<Self>, tab: &TabId) {
+        let up = self.with_tab(tab, |t| t.picker.is_some()).unwrap_or(false);
+        if !up {
+            return;
+        }
+        self.cancel_lowering(tab);
+        let weak = Rc::downgrade(self);
+        let id = tab.clone();
+        let source = glib::timeout_add_local_once(Duration::from_millis(220), move || {
+            if let Some(f) = weak.upgrade() {
+                f.with_tab(&id, |t| t.lowering = None);
+                if !f
+                    .with_tab(&id, |t| t.picker.as_ref().is_some_and(|p| p.busy()))
+                    .unwrap_or(false)
+                {
+                    f.lower_now(&id);
+                }
+            }
+        });
+        self.with_tab(tab, |t| t.lowering = Some(source));
+    }
+
+    pub(crate) fn lower_now(&self, tab: &TabId) {
+        self.cancel_lowering(tab);
+        if let Some(p) = self
+            .with_tab(tab, |t| {
+                t.anchor = None;
+                t.picker.take()
+            })
+            .flatten()
+        {
+            p.remove();
+        }
+    }
+
+    /// Whether `tab` shows the account list, and its rows' users.
+    pub fn picker_rows(&self, tab: &TabId) -> Option<Vec<String>> {
+        self.tabs
+            .borrow()
+            .get(tab)
+            .and_then(|t| t.picker.as_ref().map(|p| p.users()))
+    }
+
+    /// A row was clicked: fetch its secret (only now) and fill.
+    pub(crate) fn pick(self: &Rc<Self>, tab: &TabId, row: Row) {
+        let Some((shell, slot)) = self.page_of(tab) else {
+            return;
+        };
+        let v = self.vault.clone();
+        let weak = Rc::downgrade(self);
+        let tab = tab.clone();
+        let page = slot.page.clone();
+        glib::spawn_future_local(async move {
+            let id = row.credential.id.clone();
+            let code = row.kind == RowKind::Code;
+            let got = rt::run(async move {
+                if code {
+                    v.totp(&id).await
+                } else {
+                    v.secret(&id).await
+                }
+            })
+            .await
+            .unwrap_or_else(|| Err("Copper couldn't reach the vault".into()));
+            let Some(f) = weak.upgrade() else { return };
+            let value = match got {
+                Ok(v) => v,
+                Err(e) => {
+                    f.lower_now(&tab);
+                    shell.toast(&e);
+                    return;
+                }
+            };
+            let filled = if code {
+                call(&page, &copper_pagejs::forms::fill_otp(&value)).await
+            } else {
+                call(
+                    &page,
+                    &copper_pagejs::forms::fill_login(&row.credential.user, &value),
+                )
+                .await
+            };
+            drop(value);
+            f.lower_now(&tab);
+            if filled.ok().flatten() != Some(true) {
+                shell.toast(if code {
+                    "Couldn't find the code box anymore"
+                } else {
+                    "Couldn't find the sign-in fields anymore"
+                });
+                return;
+            }
+            let c = row.credential.clone();
+            f.with_tab(&tab, |t| {
+                t.picked_into = !code;
+                t.signed_with = Some(c.clone());
+            });
+            let v = f.vault.clone();
+            rt::run(async move { v.touch(&c).await }).await;
+        });
+    }
+
+    /// Remember the account an agent signed in with (its code comes next).
+    pub(crate) fn signed_in_with(&self, tab: &TabId, c: &Credential) {
+        self.with_tab(tab, |t| t.signed_with = Some(c.clone()));
+    }
+}

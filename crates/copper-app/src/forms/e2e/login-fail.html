@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Copper sign-in fixture (wrong password)</title>
+  <style>
+    body { max-width: 30rem; margin: 3rem auto; padding: 0 1rem; font: 16px/1.4 system-ui, sans-serif; color: #222; }
+    label { display: block; margin: .7rem 0; }
+    input { box-sizing: border-box; width: 100%; padding: .45rem; font: inherit; }
+    button { margin-top: .8rem; padding: .45rem 1rem; font: inherit; }
+    #result { margin-top: 1rem; color: #a00; }
+  </style>
+</head>
+<body>
+  <!-- A sign-in that never works: the form stays, the page says so. Copper
+       must not offer to save a password after this. -->
+  <h1>Sign in</h1>
+  <form id="login" action="#">
+    <label for="username">Email
+      <input id="username" name="username" type="email" autocomplete="username"></label>
+    <label for="password">Password
+      <input id="password" name="password" type="password" autocomplete="current-password"></label>
+    <button id="submit" type="submit">Sign in</button>
+  </form>
+  <p id="result"></p>
+  <script>
+    document.getElementById('login').addEventListener('submit', event => {
+      event.preventDefault();
+      setTimeout(() => {
+        document.getElementById('password').value = '';
+        document.getElementById('result').textContent = 'Wrong email or password';
+      }, 100);
+    });
+  </script>
+</body>
+</html>

@@ -18,7 +18,9 @@ pub fn dialog(shell: &Shell) -> adw::PreferencesDialog {
     let dialog = adw::PreferencesDialog::new();
     dialog.set_title("Settings");
     dialog.set_search_enabled(false);
-    dialog.add(&general(shell));
+    if !shell.registry().borrow().settings_pages.iter().any(|p| p.id == "general") {
+        dialog.add(&general(shell));
+    }
     let pages = shell.registry().borrow().settings_pages.clone();
     for p in pages {
         let page = (p.build)(shell);

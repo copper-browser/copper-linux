@@ -97,6 +97,7 @@ impl TopBar {
                 m.set_menu_model(Some(&super::window_menu(&s)));
             }
         });
+        bar.append(&crate::features::door(shell));
         bar.append(&menu);
         bar.append(&gtk::WindowControls::new(gtk::PackType::End));
 

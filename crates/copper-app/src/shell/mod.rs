@@ -1131,6 +1131,10 @@ impl Shell {
         self.0.history.borrow_mut()
     }
 
+    pub(crate) fn bookmarks_mut(&self) -> std::cell::RefMut<'_, Bookmarks> {
+        self.0.bookmarks.borrow_mut()
+    }
+
     pub(crate) fn browser_mut(&self) -> std::cell::RefMut<'_, Browser> {
         self.0.browser.borrow_mut()
     }

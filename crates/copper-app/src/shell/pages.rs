@@ -225,6 +225,7 @@ impl Shell {
         });
         slot.pump.replace(Some(handle));
         self.pages_map().borrow_mut().insert(id.clone(), slot);
+        crate::features::page_created(self, id, &page);
         if let Some(url) = url {
             page.load(url);
         }
