@@ -147,14 +147,20 @@ fn sentence(error: &str) -> String {
         return "The page could not be loaded.".into();
     }
     let mut c = e.chars();
-    let first = c.next().map(|f| f.to_uppercase().collect::<String>()).unwrap_or_default();
+    let first = c
+        .next()
+        .map(|f| f.to_uppercase().collect::<String>())
+        .unwrap_or_default();
     format!("{first}{}.", c.as_str())
 }
 
 /// A profile id the engine accepts, from a Mac profile name (`Work`,
 /// `Client A`): `[A-Za-z0-9._-]`, never leading `.`.
 pub fn profile_id(name: Option<&str>) -> copper_engine::ProfileId {
-    let raw = name.map(str::trim).filter(|n| !n.is_empty()).unwrap_or("default");
+    let raw = name
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .unwrap_or("default");
     let clean: String = raw
         .chars()
         .map(|c| {
@@ -166,7 +172,11 @@ pub fn profile_id(name: Option<&str>) -> copper_engine::ProfileId {
         })
         .collect();
     let clean = clean.trim_start_matches('.').to_string();
-    let clean = if clean.is_empty() { "default".to_string() } else { clean };
+    let clean = if clean.is_empty() {
+        "default".to_string()
+    } else {
+        clean
+    };
     let clean: String = clean.chars().take(128).collect();
     copper_engine::ProfileId::new(clean)
         .unwrap_or_else(|_| copper_engine::ProfileId::new("default").expect("valid id"))
@@ -186,15 +196,14 @@ impl Shell {
         let profile = if private {
             self.engine().profile(&crate::private::profile_id(id), true)
         } else {
-            self.engine().profile(&profile_id(profile.as_deref()), false)
+            self.engine()
+                .profile(&profile_id(profile.as_deref()), false)
         };
         let profile = match profile {
             Ok(p) => p,
             Err(e) => {
                 tracing::error!(error = %e, "profile unavailable; using the default");
-                self.engine()
-                    .profile(&profile_id(None), false)
-                    .ok()?
+                self.engine().profile(&profile_id(None), false).ok()?
             }
         };
         self.0.downloads.attach(self, &profile);
@@ -206,7 +215,13 @@ impl Shell {
 
     /// Give `page` to tab `id`: frame it, put it on the stage, listen to it,
     /// and load `url` if given.
-    pub(crate) fn adopt_page(&self, id: &TabId, page: WebKitPage, url: Option<&str>, private: bool) {
+    pub(crate) fn adopt_page(
+        &self,
+        id: &TabId,
+        page: WebKitPage,
+        url: Option<&str>,
+        private: bool,
+    ) {
         let slot = PageSlot::new(self, id, page.clone(), private);
         self.ui().stage.add_page(&slot);
         self.set_popup_handler(id, &page);
@@ -306,7 +321,10 @@ impl Shell {
                 if t.is_pinned() {
                     Some(0)
                 } else {
-                    b.row(&t.space).iter().position(|r| r.id == *opener).map(|p| p + 1)
+                    b.row(&t.space)
+                        .iter()
+                        .position(|r| r.id == *opener)
+                        .map(|p| p + 1)
                 }
             });
             b.open_tab(
@@ -405,7 +423,11 @@ impl Shell {
                 );
             }
             PageEvent::Crashed(reason) => {
-                let url = self.browser().tab(id).map(|t| t.url.clone()).unwrap_or_default();
+                let url = self
+                    .browser()
+                    .tab(id)
+                    .map(|t| t.url.clone())
+                    .unwrap_or_default();
                 slot.show_crash(reason);
                 if reason != CrashReason::TerminatedByApi || !slot.private {
                     crate::crash::record(self, id, &url, reason);
@@ -454,7 +476,11 @@ impl Shell {
                 if let Some(url) = url
                     && !slot.private
                 {
-                    let title = self.browser().tab(id).map(|t| t.title.clone()).unwrap_or_default();
+                    let title = self
+                        .browser()
+                        .tab(id)
+                        .map(|t| t.title.clone())
+                        .unwrap_or_default();
                     if self.history_mut().record(&url, &title) {
                         self.history_changed();
                     }
@@ -465,7 +491,11 @@ impl Shell {
                 slot.progress.set(1.0);
                 self.0.hub.send(ShellEvent::Loaded(id.clone()));
             }
-            LoadState::Failed { url, error, cancelled } => {
+            LoadState::Failed {
+                url,
+                error,
+                cancelled,
+            } => {
                 slot.loading.set(false);
                 if !cancelled {
                     slot.show_failure(&url, &error);
@@ -473,7 +503,9 @@ impl Shell {
             }
         }
         if active {
-            self.ui().stage.set_progress(slot.loading.get(), slot.progress.get());
+            self.ui()
+                .stage
+                .set_progress(slot.loading.get(), slot.progress.get());
             self.ui().refresh(self, &Refresh::chrome());
         }
         self.ui().refresh(self, &Refresh::tab(id));
@@ -520,14 +552,26 @@ impl Shell {
         let host = host.strip_prefix("www.").unwrap_or(&host).to_string();
         let clean: String = host
             .chars()
-            .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' })
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
             .collect();
-        (!clean.is_empty()).then(|| self.cache_dir().join("favicons").join(format!("{clean}.png")))
+        (!clean.is_empty()).then(|| {
+            self.cache_dir()
+                .join("favicons")
+                .join(format!("{clean}.png"))
+        })
     }
 
     /// Keep a site's icon for next time (sleeping tabs show it at launch).
     fn remember_icon(&self, url: &str, png: &[u8]) {
-        let Some(path) = self.icon_path(url) else { return };
+        let Some(path) = self.icon_path(url) else {
+            return;
+        };
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
@@ -539,7 +583,11 @@ impl Shell {
 
     /// The live icon of an open tab showing exactly `url`.
     pub(crate) fn open_icon(&self, url: &str) -> Option<gdk::Texture> {
-        let id = self.browser().all_tabs().find(|t| t.url == url).map(|t| t.id.clone())?;
+        let id = self
+            .browser()
+            .all_tabs()
+            .find(|t| t.url == url)
+            .map(|t| t.id.clone())?;
         self.favicons().borrow().get(&id).cloned()
     }
 
@@ -567,7 +615,11 @@ fn page_options() -> PageOptions {
 
 /// What a profile's downloads stream needs to know its profile by.
 pub fn profile_key<P: Profile>(p: &P) -> String {
-    format!("{}{}", p.id().as_str(), if p.is_ephemeral() { "#private" } else { "" })
+    format!(
+        "{}{}",
+        p.id().as_str(),
+        if p.is_ephemeral() { "#private" } else { "" }
+    )
 }
 
 #[cfg(test)]
@@ -585,7 +637,10 @@ mod tests {
 
     #[test]
     fn errors_read_as_sentences() {
-        assert_eq!(sentence("could not resolve host"), "Could not resolve host.");
+        assert_eq!(
+            sentence("could not resolve host"),
+            "Could not resolve host."
+        );
         assert_eq!(sentence(""), "The page could not be loaded.");
     }
 }

@@ -153,11 +153,12 @@ impl Stage {
             self.progress.set_fraction(1.0);
             let bar = self.progress.clone();
             let fade = self.fade.clone();
-            let id = glib::timeout_add_local_once(std::time::Duration::from_millis(220), move || {
-                bar.set_visible(false);
-                bar.set_fraction(0.0);
-                fade.borrow_mut().take();
-            });
+            let id =
+                glib::timeout_add_local_once(std::time::Duration::from_millis(220), move || {
+                    bar.set_visible(false);
+                    bar.set_fraction(0.0);
+                    fade.borrow_mut().take();
+                });
             self.fade.replace(Some(id));
         }
     }
@@ -175,8 +176,8 @@ impl Stage {
 
     /// Show or hide a registered panel ([`crate::actions::register_panel`]).
     pub fn toggle_panel(&self, shell: &Shell, id: &str) {
-        let showing = self.panel.reveals_child()
-            && self.panels.visible_child_name().as_deref() == Some(id);
+        let showing =
+            self.panel.reveals_child() && self.panels.visible_child_name().as_deref() == Some(id);
         if showing {
             self.panel.set_reveal_child(false);
             return;
@@ -281,7 +282,9 @@ impl FindBar {
                     s.ui().stage.find.close(&s);
                     glib::Propagation::Stop
                 }
-                Key::Return | Key::KP_Enter if state.contains(gtk::gdk::ModifierType::SHIFT_MASK) => {
+                Key::Return | Key::KP_Enter
+                    if state.contains(gtk::gdk::ModifierType::SHIFT_MASK) =>
+                {
                     s.ui().stage.find.step(&s, false);
                     glib::Propagation::Stop
                 }
@@ -348,7 +351,9 @@ impl FindBar {
     }
 
     fn search(&self, shell: &Shell) {
-        let Some(page) = shell.active_page() else { return };
+        let Some(page) = shell.active_page() else {
+            return;
+        };
         let query = self.text.text().to_string();
         let gen_ = self.generation.get() + 1;
         self.generation.set(gen_);

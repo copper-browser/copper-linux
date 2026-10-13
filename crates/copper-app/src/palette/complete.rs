@@ -156,7 +156,11 @@ pub fn rows(purpose: Purpose, inputs: &Inputs<'_>) -> Vec<Row> {
         // the shown form leaves out — under its title.
         if inputs.is_address
             && let Some(known) = known_place(
-                if inputs.full.trim().is_empty() { typed } else { inputs.full },
+                if inputs.full.trim().is_empty() {
+                    typed
+                } else {
+                    inputs.full
+                },
                 &inputs.tabs,
                 &inputs.visited,
             )
@@ -169,7 +173,12 @@ pub fn rows(purpose: Purpose, inputs: &Inputs<'_>) -> Vec<Row> {
                     known.title.clone()
                 },
                 detail: address::pretty_str(&known.url),
-                hint: if purpose == Purpose::Edit { "Go" } else { "Open" }.into(),
+                hint: if purpose == Purpose::Edit {
+                    "Go"
+                } else {
+                    "Open"
+                }
+                .into(),
                 action: Action::Go(known.url.clone()),
                 url: Some(known.url.clone()),
                 icon: None,
@@ -180,7 +189,12 @@ pub fn rows(purpose: Purpose, inputs: &Inputs<'_>) -> Vec<Row> {
                 kind: Kind::Address,
                 title: address::pretty_str(dest),
                 detail: String::new(),
-                hint: if purpose == Purpose::Edit { "Go" } else { "Open" }.into(),
+                hint: if purpose == Purpose::Edit {
+                    "Go"
+                } else {
+                    "Open"
+                }
+                .into(),
                 action: Action::Go(dest.clone()),
                 url: Some(dest.clone()),
                 icon: None,
@@ -224,7 +238,12 @@ pub fn rows(purpose: Purpose, inputs: &Inputs<'_>) -> Vec<Row> {
     }
     if purpose == Purpose::Palette {
         let needle = typed.trim_start_matches('/').to_lowercase();
-        for c in inputs.commands.iter().filter(|c| command_matches(&c.name, &needle)).take(4) {
+        for c in inputs
+            .commands
+            .iter()
+            .filter(|c| command_matches(&c.name, &needle))
+            .take(4)
+        {
             add(
                 &mut out,
                 Row {
@@ -240,7 +259,9 @@ pub fn rows(purpose: Purpose, inputs: &Inputs<'_>) -> Vec<Row> {
         }
     }
     for b in inputs.bookmarks.iter().take(3) {
-        let Some(url) = b.bookmark.url.clone() else { continue };
+        let Some(url) = b.bookmark.url.clone() else {
+            continue;
+        };
         add(
             &mut out,
             Row {
@@ -286,7 +307,11 @@ pub fn rows(purpose: Purpose, inputs: &Inputs<'_>) -> Vec<Row> {
 }
 
 /// The open tab or visit whose shown address is exactly `typed`.
-pub fn known_place<'a>(typed: &str, tabs: &'a [Suggestion], visited: &'a [Suggestion]) -> Option<&'a Suggestion> {
+pub fn known_place<'a>(
+    typed: &str,
+    tabs: &'a [Suggestion],
+    visited: &'a [Suggestion],
+) -> Option<&'a Suggestion> {
     let want = address::strip_typed(typed);
     let want = want.trim_end_matches('/');
     if want.is_empty() {
@@ -404,7 +429,11 @@ mod tests {
                 tab: Some(tab.clone()),
                 score: 12.0,
             }],
-            visited: vec![visited("rust-lang.org", "https://www.rust-lang.org/", "Rust")],
+            visited: vec![visited(
+                "rust-lang.org",
+                "https://www.rust-lang.org/",
+                "Rust",
+            )],
             commands: vec![CommandRow {
                 id: "x".into(),
                 name: "Rust Thing".into(),
@@ -416,9 +445,15 @@ mod tests {
         let field = rows(Purpose::Launch, &inputs);
         assert_eq!(field[0].kind, Kind::Search);
         assert_eq!(field[1].action, Action::Switch(tab.clone()));
-        assert!(field.iter().all(|r| r.kind != Kind::Command), "no commands in the field");
+        assert!(
+            field.iter().all(|r| r.kind != Kind::Command),
+            "no commands in the field"
+        );
         assert_eq!(
-            field.iter().filter(|r| r.url.as_deref() == Some("https://www.rust-lang.org/")).count(),
+            field
+                .iter()
+                .filter(|r| r.url.as_deref() == Some("https://www.rust-lang.org/"))
+                .count(),
             1,
             "the open tab and the visit fold into one row"
         );
@@ -438,7 +473,11 @@ mod tests {
 
     #[test]
     fn a_completed_address_goes_to_the_known_place_with_its_port() {
-        let v = vec![visited("127.0.0.1/essay", "http://127.0.0.1:47731/essay", "On Restraint")];
+        let v = vec![visited(
+            "127.0.0.1/essay",
+            "http://127.0.0.1:47731/essay",
+            "On Restraint",
+        )];
         let inputs = Inputs {
             typed: "127.0.0.1/essay",
             destination: Some("http://127.0.0.1/essay".into()),
@@ -447,7 +486,10 @@ mod tests {
             ..Default::default()
         };
         let r = rows(Purpose::Edit, &inputs);
-        assert_eq!(r[0].action, Action::Go("http://127.0.0.1:47731/essay".into()));
+        assert_eq!(
+            r[0].action,
+            Action::Go("http://127.0.0.1:47731/essay".into())
+        );
         assert_eq!(r[0].title, "On Restraint");
         assert_eq!(r.len(), 1, "the visit folds into the top row");
     }

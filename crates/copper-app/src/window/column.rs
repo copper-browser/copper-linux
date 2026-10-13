@@ -235,8 +235,12 @@ impl Column {
         let root = row.root.clone();
         let scroller = self.scroller.clone();
         glib::idle_add_local_once(move || {
-            let Some(child) = scroller.child() else { return };
-            let Some(b) = root.compute_bounds(&child) else { return };
+            let Some(child) = scroller.child() else {
+                return;
+            };
+            let Some(b) = root.compute_bounds(&child) else {
+                return;
+            };
             let adj = scroller.vadjustment();
             let (top, bottom) = (b.y() as f64, (b.y() + b.height()) as f64);
             if top < adj.value() {
@@ -355,7 +359,10 @@ fn fill(shell: &Shell, row: &Row, t: &TabView) {
         row.mark.append(&m);
         row.root.set_tooltip_text(Some(&t.label));
         row.root
-            .update_property(&[gtk::accessible::Property::Label(&format!("{}, pinned", t.label))]);
+            .update_property(&[gtk::accessible::Property::Label(&format!(
+                "{}, pinned",
+                t.label
+            ))]);
         return;
     }
     row.mark.append(&tabs::mark(shell, t, 16));
@@ -369,7 +376,8 @@ fn fill(shell: &Shell, row: &Row, t: &TabView) {
     };
     row.badge.set_icon_name(badge);
     row.badge.set_visible(badge.is_some());
-    row.badge.set_tooltip_text(Some(tip).filter(|t| !t.is_empty()));
+    row.badge
+        .set_tooltip_text(Some(tip).filter(|t| !t.is_empty()));
     crate::agents::paint_badge(&t.id, &row.badge);
     let mut name = t.label.clone();
     if t.sleeping {
@@ -378,7 +386,8 @@ fn fill(shell: &Shell, row: &Row, t: &TabView) {
     if t.private {
         name.push_str(", private");
     }
-    row.root.update_property(&[gtk::accessible::Property::Label(&name)]);
+    row.root
+        .update_property(&[gtk::accessible::Property::Label(&name)]);
 }
 
 /// A pin's letter: its own, else the site's first letter.

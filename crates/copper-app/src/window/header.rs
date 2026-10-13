@@ -135,10 +135,15 @@ impl Header {
     }
 
     fn place_dropdown(&self) {
-        let Some(root) = self.root.borrow().clone() else { return };
-        let Some(b) = self.field.compute_bounds(&root) else { return };
+        let Some(root) = self.root.borrow().clone() else {
+            return;
+        };
+        let Some(b) = self.field.compute_bounds(&root) else {
+            return;
+        };
         self.dropdown.set_margin_start(b.x() as i32 - 6);
-        self.dropdown.set_margin_top((b.y() + b.height()) as i32 + 6);
+        self.dropdown
+            .set_margin_top((b.y() + b.height()) as i32 + 6);
         self.dropdown.set_size_request(b.width() as i32 + 12, -1);
         self.dropdown.set_visible(true);
     }
@@ -199,12 +204,18 @@ impl Header {
         } else {
             self.field.remove_css_class("private");
         }
-        self.core.text.set_placeholder_text(Some("Search or enter an address"));
+        self.core
+            .text
+            .set_placeholder_text(Some("Search or enter an address"));
         if self.editing.get() {
             return;
         }
         self.field.set_visible(shell.active_id().is_some());
-        let url = shell.browser().active().map(|t| t.url.clone()).unwrap_or_default();
+        let url = shell
+            .browser()
+            .active()
+            .map(|t| t.url.clone())
+            .unwrap_or_default();
         let shown = if url.is_empty() || url == "about:blank" {
             String::new()
         } else {

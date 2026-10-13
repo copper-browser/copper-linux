@@ -50,9 +50,13 @@ mod tests {
         assert!(!day.dark);
         let h = day.hue.expect("a hue");
         assert!((0.66..0.78).contains(&h), "violet: {h}");
-        let copper = crate::spaces::colour::Tint::new(crate::spaces::colour::Theme::copper(), false);
+        let copper =
+            crate::spaces::colour::Tint::new(crate::spaces::colour::Theme::copper(), false);
         let (hp, _, _) = day.ground().to_hsv();
         let (hc, _, _) = copper.ground().to_hsv();
-        assert!((hp - hc).abs() > 0.3, "visibly not the copper column: {hp} vs {hc}");
+        assert!(
+            (hp - hc).abs() > 0.3,
+            "visibly not the copper column: {hp} vs {hc}"
+        );
     }
 }

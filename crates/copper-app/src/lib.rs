@@ -19,14 +19,14 @@
 
 pub mod actions;
 pub mod agents;
+pub mod app;
 pub mod canvas;
 pub mod cloud;
-pub mod features;
-pub mod forms;
-pub mod app;
 pub mod control;
 pub mod crash;
 pub mod downloads;
+pub mod features;
+pub mod forms;
 pub mod options;
 pub mod palette;
 pub mod private;

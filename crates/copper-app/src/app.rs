@@ -170,8 +170,15 @@ mod tests {
             command_line_url("data:text/html,<b>a b</b>").as_deref(),
             Some("data:text/html,<b>a b</b>")
         );
-        assert_eq!(command_line_url("https://example.com").as_deref(), Some("https://example.com/"));
-        assert_eq!(command_line_url("example.com"), None, "left to the field's rules");
+        assert_eq!(
+            command_line_url("https://example.com").as_deref(),
+            Some("https://example.com/")
+        );
+        assert_eq!(
+            command_line_url("example.com"),
+            None,
+            "left to the field's rules"
+        );
         assert_eq!(command_line_url("rust lifetimes"), None);
         assert!(command_line_url("/").unwrap().starts_with("file:///"));
     }

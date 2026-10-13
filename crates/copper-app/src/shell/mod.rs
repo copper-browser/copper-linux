@@ -441,7 +441,10 @@ impl Shell {
                     return Some(0);
                 }
                 let space = how.space.clone().unwrap_or_else(|| t.space.clone());
-                b.row(&space).iter().position(|r| r.id == *after).map(|p| p + 1)
+                b.row(&space)
+                    .iter()
+                    .position(|r| r.id == *after)
+                    .map(|p| p + 1)
             });
             b.open_tab(
                 url,
@@ -686,7 +689,9 @@ impl Shell {
 
     /// A new private tab, in front, with the card asking where to.
     pub fn new_private_tab(&self) {
-        self.ui().card.open(self, crate::palette::Mode::LaunchPrivate);
+        self.ui()
+            .card
+            .open(self, crate::palette::Mode::LaunchPrivate);
     }
 
     // MARK: the selected page
@@ -762,7 +767,11 @@ impl Shell {
         let now = p.zoom();
         let next = match step {
             None => 1.0,
-            Some(true) => STEPS.iter().copied().find(|z| *z > now + 0.001).unwrap_or(3.0),
+            Some(true) => STEPS
+                .iter()
+                .copied()
+                .find(|z| *z > now + 0.001)
+                .unwrap_or(3.0),
             Some(false) => STEPS
                 .iter()
                 .rev()
@@ -831,7 +840,10 @@ impl Shell {
 
     /// An emoji, `sf:<symbol>`, or `None` for the name's letter.
     pub fn set_space_icon(&self, id: &str, icon: Option<&str>) {
-        let icon = icon.map(str::trim).filter(|i| !i.is_empty()).map(str::to_string);
+        let icon = icon
+            .map(str::trim)
+            .filter(|i| !i.is_empty())
+            .map(str::to_string);
         self.with_browser(|b| b.update_space(id, |s| s.icon = icon));
     }
 
@@ -981,7 +993,11 @@ impl Shell {
         let Some(ui) = self.0.ui.get() else { return };
         match self.active_id() {
             Some(id) => {
-                let woke = self.0.browser.borrow_mut().update_tab(&id, |t| t.sleeping = false);
+                let woke = self
+                    .0
+                    .browser
+                    .borrow_mut()
+                    .update_tab(&id, |t| t.sleeping = false);
                 let _ = woke;
                 self.0.browser.borrow_mut().take_events();
                 self.ensure_page(&id);
@@ -1013,9 +1029,7 @@ impl Shell {
             self.0.saver.schedule_session(shape, true);
         }
         if self.0.settings_dirty.replace(false) {
-            self.0
-                .saver
-                .schedule(self.settings().values().clone());
+            self.0.saver.schedule(self.settings().values().clone());
         }
     }
 

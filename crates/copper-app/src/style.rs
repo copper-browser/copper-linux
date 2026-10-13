@@ -185,8 +185,16 @@ pub fn tint_css(column: &Tint, private: &Tint, bar: &Tint, accent: Rgb, dark: bo
 
     // The header over the page, the stage, the card: the app's own neutrals.
     let card_bg = if dark { Rgb::grey(0.155) } else { Rgb::WHITE };
-    let hover = if dark { Rgb::WHITE.css(0.07) } else { Rgb::BLACK.css(0.045) };
-    let selected = if dark { Rgb::WHITE.css(0.10) } else { Rgb::BLACK.css(0.06) };
+    let hover = if dark {
+        Rgb::WHITE.css(0.07)
+    } else {
+        Rgb::BLACK.css(0.045)
+    };
+    let selected = if dark {
+        Rgb::WHITE.css(0.10)
+    } else {
+        Rgb::BLACK.css(0.06)
+    };
     css.push_str(&format!(
         r#"
 .copper-header {{ background-color: {ground}; box-shadow: inset 0 -1px {hair}; }}
@@ -313,7 +321,13 @@ mod tests {
     fn tint_css_has_every_surface_for_both_looks() {
         for dark in [false, true] {
             let col = Tint::of(&Space::new("Home"), dark);
-            let css = tint_css(&col, &crate::private::tint(dark), &bar_tint(dark), accent(&col), dark);
+            let css = tint_css(
+                &col,
+                &crate::private::tint(dark),
+                &bar_tint(dark),
+                accent(&col),
+                dark,
+            );
             for needle in [
                 ".copper-column {",
                 ".copper-column.private {",
@@ -332,7 +346,10 @@ mod tests {
     #[test]
     fn the_tab_row_is_quiet() {
         let light = bar_tint(false).ground();
-        assert!(light.luminance() > 0.75 && light.luminance() < 0.95, "{light:?}");
+        assert!(
+            light.luminance() > 0.75 && light.luminance() < 0.95,
+            "{light:?}"
+        );
         assert!(bar_tint(true).ground().luminance() < 0.05);
     }
 }

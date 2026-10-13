@@ -61,7 +61,10 @@ fn ser_id<S: serde::Serializer>(id: &TabId, s: S) -> std::result::Result<S::Ok, 
     s.serialize_str(&id.0)
 }
 
-fn ser_opt_id<S: serde::Serializer>(id: &Option<TabId>, s: S) -> std::result::Result<S::Ok, S::Error> {
+fn ser_opt_id<S: serde::Serializer>(
+    id: &Option<TabId>,
+    s: S,
+) -> std::result::Result<S::Ok, S::Error> {
     match id {
         Some(id) => s.serialize_some(&id.0),
         None => s.serialize_none(),
@@ -499,7 +502,8 @@ impl Control {
 
     /// A PNG of the whole window.
     pub async fn screenshot(&self) -> Result<Option<Vec<u8>>> {
-        self.run(|s| crate::screenshot::window_png_bytes(s.window().upcast_ref())).await
+        self.run(|s| crate::screenshot::window_png_bytes(s.window().upcast_ref()))
+            .await
     }
 
     /// Write everything to disk now.
@@ -534,7 +538,11 @@ pub fn tab_infos(s: &Shell) -> Vec<TabInfo> {
             crashed: slot.as_ref().is_some_and(|x| x.crashed.get()),
         }
     };
-    let mut out: Vec<TabInfo> = visible.iter().filter_map(|id| b.tab(id)).map(info).collect();
+    let mut out: Vec<TabInfo> = visible
+        .iter()
+        .filter_map(|id| b.tab(id))
+        .map(info)
+        .collect();
     for space in b.spaces() {
         if space.id == b.current_space_id() {
             continue;
@@ -553,7 +561,9 @@ pub fn space_infos(s: &Shell) -> Vec<SpaceInfo> {
             name: sp.name.clone(),
             icon: sp.icon.clone(),
             hue: sp.hue,
-            colour: crate::spaces::colour::SpaceColour::of(sp).name().to_string(),
+            colour: crate::spaces::colour::SpaceColour::of(sp)
+                .name()
+                .to_string(),
             profile: sp.profile.clone(),
             current: sp.id == b.current_space_id(),
             tabs: b.row(&sp.id).len(),

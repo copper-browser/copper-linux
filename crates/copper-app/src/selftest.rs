@@ -18,8 +18,8 @@ use crate::app::{set_exit, settle};
 use crate::control::{TabInfo, tab_infos};
 use crate::palette::Mode;
 use crate::shell::{OpenTab, Shell};
-use copper_core::settings::{Look, TabsPosition};
 use copper_core::TabId;
+use copper_core::settings::{Look, TabsPosition};
 use copper_engine::PageView;
 use gtk4 as gtk;
 use gtk4::prelude::*;
@@ -149,7 +149,10 @@ async fn fresh(run: &Run) {
     let s = &run.shell;
     s.set_look(Look::Light);
     s.set_tabs_position(TabsPosition::Left);
-    run.check(s.browser().all_tabs().count() == 0, "a fresh world has no tabs");
+    run.check(
+        s.browser().all_tabs().count() == 0,
+        "a fresh world has no tabs",
+    );
     run.check(s.ui().card.is_open(), "an empty space opens the card");
     run.shot("00-first-run").await;
     s.ui().card.close(s);
@@ -175,19 +178,30 @@ async fn fresh(run: &Run) {
     s.set_saved(&notes, true);
     let infos = run.infos();
     run.check(infos.iter().filter(|t| t.pinned).count() == 3, "three pins");
-    run.check(infos.iter().filter(|t| t.saved && !t.pinned).count() == 2, "two kept tabs");
     run.check(
-        s.browser().tab(&long).is_some_and(|t| t.title.starts_with("A very long title")),
+        infos.iter().filter(|t| t.saved && !t.pinned).count() == 2,
+        "two kept tabs",
+    );
+    run.check(
+        s.browser()
+            .tab(&long)
+            .is_some_and(|t| t.title.starts_with("A very long title")),
         "titles come from the page",
     );
-    run.check(s.favicons().borrow().contains_key(&notes), "favicons come from the page");
+    run.check(
+        s.favicons().borrow().contains_key(&notes),
+        "favicons come from the page",
+    );
 
     // Reorder by dropping: weather before rust.
     s.drop_tab(&weather, &rust, false);
     let order: Vec<TabId> = s.visible_ids();
     let pw = order.iter().position(|i| *i == weather);
     let pr = order.iter().position(|i| *i == rust);
-    run.check(pw.is_some() && pw < pr, "a dropped tab lands before its target");
+    run.check(
+        pw.is_some() && pw < pr,
+        "a dropped tab lands before its target",
+    );
 
     // Close and reopen.
     s.select(&rust);
@@ -195,7 +209,9 @@ async fn fresh(run: &Run) {
     run.check(s.browser().tab(&rust).is_none(), "Ctrl+W closes");
     let back = s.reopen();
     run.check(
-        back.as_ref().and_then(|id| s.browser().tab(id).map(|t| t.url.ends_with("/rust"))) == Some(true),
+        back.as_ref()
+            .and_then(|id| s.browser().tab(id).map(|t| t.url.ends_with("/rust")))
+            == Some(true),
         "Ctrl+Shift+T brings it back",
     );
     let rust = back.unwrap_or(rust);
@@ -206,9 +222,15 @@ async fn fresh(run: &Run) {
     let before = s.active_id();
     s.cycle_tab(true);
     s.cycle_tab(false);
-    run.check(s.active_id() == before, "Ctrl+Tab then Ctrl+Shift+Tab come back");
+    run.check(
+        s.active_id() == before,
+        "Ctrl+Tab then Ctrl+Shift+Tab come back",
+    );
     s.select_nth(Some(0));
-    run.check(s.active_id().as_ref() == Some(&studio), "Ctrl+1 is the first pin");
+    run.check(
+        s.active_id().as_ref() == Some(&studio),
+        "Ctrl+1 is the first pin",
+    );
     s.select(&notes);
     run.wait_loaded(&notes).await;
 
@@ -228,7 +250,9 @@ async fn fresh(run: &Run) {
     let spaces = crate::control::space_infos(s);
     run.check(spaces.len() == 3, "three spaces");
     run.check(
-        spaces.iter().any(|x| x.name == "Work" && x.colour == "Teal" && x.profile.as_deref() == Some("Work")),
+        spaces.iter().any(|x| {
+            x.name == "Work" && x.colour == "Teal" && x.profile.as_deref() == Some("Work")
+        }),
         "Work is teal with its own cookies",
     );
     let home = spaces[0].id.clone();
@@ -239,18 +263,25 @@ async fn fresh(run: &Run) {
     run.wait_loaded(&notes).await;
     if let Some(p) = s.page(&notes) {
         let _ = p
-            .eval("document.cookie = 'copper_m2=home; path=/'; 1", &copper_engine::World::Page)
+            .eval(
+                "document.cookie = 'copper_m2=home; path=/'; 1",
+                &copper_engine::World::Page,
+            )
             .await;
     }
     s.switch_space(&work);
     s.select(&w2);
     run.wait_loaded(&w2).await;
     let seen = match s.page(&w2) {
-        Some(p) => p.eval("document.cookie", &copper_engine::World::Page).await.ok(),
+        Some(p) => p
+            .eval("document.cookie", &copper_engine::World::Page)
+            .await
+            .ok(),
         None => None,
     };
     run.check(
-        seen.as_ref().is_some_and(|v| !v.to_string().contains("copper_m2")),
+        seen.as_ref()
+            .is_some_and(|v| !v.to_string().contains("copper_m2")),
         "a profiled space does not see another space's cookies",
     );
     run.shot("10-work-light-left").await;
@@ -269,7 +300,10 @@ async fn fresh(run: &Run) {
     s.ui().header_text().set_text("");
     type_into(&s.ui().header_text(), "127.0.0.1/es").await;
     let shown = s.ui().header_text().text().to_string();
-    run.check(shown == "127.0.0.1/essay", &format!("the field completes a visited address inline ({shown})"));
+    run.check(
+        shown == "127.0.0.1/essay",
+        &format!("the field completes a visited address inline ({shown})"),
+    );
     run.shot("02-field-suggestions").await;
     run.check(
         REQUESTS.load(Ordering::SeqCst) == before,
@@ -281,10 +315,15 @@ async fn fresh(run: &Run) {
         run.wait_loaded(id).await;
     }
     run.check(
-        s.browser().active().is_some_and(|t| t.url == run.url("/essay")),
+        s.browser()
+            .active()
+            .is_some_and(|t| t.url == run.url("/essay")),
         "Return goes to the completed address in the same tab",
     );
-    run.check(here.as_ref() == Some(&notes), "the field navigates the selected tab");
+    run.check(
+        here.as_ref() == Some(&notes),
+        "the field navigates the selected tab",
+    );
     s.back();
     run.wait_loaded(&notes).await;
 
@@ -302,7 +341,10 @@ async fn fresh(run: &Run) {
     s.ui().card_text().set_text("");
     type_into(&s.ui().card_text(), "weather").await;
     s.ui().card_text().emit_by_name::<()>("activate", &[]);
-    run.check(s.active_id().as_ref() == Some(&weather), "Ctrl+K finds a tab by name and Return switches to it");
+    run.check(
+        s.active_id().as_ref() == Some(&weather),
+        "Ctrl+K finds a tab by name and Return switches to it",
+    );
     run.check(!s.ui().card.is_open(), "the card closes on Return");
     s.select(&notes);
     run.wait_loaded(&notes).await;
@@ -353,15 +395,23 @@ async fn fresh(run: &Run) {
         .unwrap_or(false);
     run.check(ephemeral, "a private tab is on an ephemeral profile");
     let cookie = match s.page(&private) {
-        Some(p) => p.eval("document.cookie", &copper_engine::World::Page).await.ok(),
+        Some(p) => p
+            .eval("document.cookie", &copper_engine::World::Page)
+            .await
+            .ok(),
         None => None,
     };
     run.check(
-        cookie.as_ref().is_some_and(|v| !v.to_string().contains("copper_m2")),
+        cookie
+            .as_ref()
+            .is_some_and(|v| !v.to_string().contains("copper_m2")),
         "a private tab does not see normal cookies",
     );
     run.shot("12-private-left").await;
-    let roots = [s.store().paths().data.clone(), crate::session::cache_dir(s.store())];
+    let roots = [
+        s.store().paths().data.clone(),
+        crate::session::cache_dir(s.store()),
+    ];
     let leaked = roots.iter().any(|r| tree_mentions(r, "private"));
     run.check(!leaked, "a private tab writes no profile folder");
     s.set_look(Look::Dark);
@@ -379,13 +429,19 @@ async fn fresh(run: &Run) {
         s.slot(&docs).is_some_and(|x| x.crashed.get()),
         "a killed web process shows the crashed page",
     );
-    let crashes = s.store().paths().file(copper_core::store::DataFile::Crashes);
+    let crashes = s
+        .store()
+        .paths()
+        .file(copper_core::store::DataFile::Crashes);
     s.saver().flush();
     run.check(crashes.exists(), "crashes.json is written");
     run.shot("14-crash").await;
     s.reload(&docs);
     run.wait_loaded(&docs).await;
-    run.check(s.slot(&docs).is_some_and(|x| !x.crashed.get()), "Reload brings it back");
+    run.check(
+        s.slot(&docs).is_some_and(|x| !x.crashed.get()),
+        "Reload brings it back",
+    );
 
     // A failed load.
     let failed = s.open(
@@ -397,12 +453,15 @@ async fn fresh(run: &Run) {
     );
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(8)
-        && !s.slot(&failed).is_some_and(|x| x.failed_url.borrow().is_some())
+        && !s
+            .slot(&failed)
+            .is_some_and(|x| x.failed_url.borrow().is_some())
     {
         glib::timeout_future(Duration::from_millis(100)).await;
     }
     run.check(
-        s.slot(&failed).is_some_and(|x| x.failed_url.borrow().is_some()),
+        s.slot(&failed)
+            .is_some_and(|x| x.failed_url.borrow().is_some()),
         "a failed load says why, with Try Again",
     );
     run.shot("15-failed").await;
@@ -426,12 +485,18 @@ async fn fresh(run: &Run) {
         let (m, n, _, _) = s.window().measure(gtk::Orientation::Horizontal, -1);
         (m, n)
     };
-    run.check(min_w <= 800, &format!("40 tabs fit 800 px with the column (min width {min_w})"));
+    run.check(
+        min_w <= 800,
+        &format!("40 tabs fit 800 px with the column (min width {min_w})"),
+    );
     run.shot("16-crowd-left-800").await;
     s.set_tabs_position(TabsPosition::Top);
     glib::timeout_future(Duration::from_millis(600)).await;
     let (min_w, _, _, _) = s.window().measure(gtk::Orientation::Horizontal, -1);
-    run.check(min_w <= 800, &format!("40 tabs fit 800 px in the row (min width {min_w})"));
+    run.check(
+        min_w <= 800,
+        &format!("40 tabs fit 800 px in the row (min width {min_w})"),
+    );
     run.shot("17-crowd-top-800").await;
     s.set_tabs_position(TabsPosition::Left);
     s.remove_space(&crowd, false);
@@ -445,7 +510,10 @@ async fn fresh(run: &Run) {
     s.save_now();
     let expect = layout(s);
     let path = run.out.join("expect.json");
-    if let Err(e) = std::fs::write(&path, serde_json::to_vec_pretty(&expect).unwrap_or_default()) {
+    if let Err(e) = std::fs::write(
+        &path,
+        serde_json::to_vec_pretty(&expect).unwrap_or_default(),
+    ) {
         run.check(false, &format!("write expect.json: {e}"));
     }
     run.check(
@@ -462,25 +530,40 @@ async fn restore(run: &Run) {
     run.check(expect.is_some(), "expect.json from the fresh phase");
     let now = layout(s);
     if let Some(e) = &expect {
-        run.check(*e == now, "order, pins, kept tabs, spaces and selection are back");
+        run.check(
+            *e == now,
+            "order, pins, kept tabs, spaces and selection are back",
+        );
         if *e != now {
             println!("expected {e}\n     got {now}");
         }
     }
     let infos = run.infos();
     let live = infos.iter().filter(|t| t.live).count();
-    run.check(live == 1, &format!("only the selected tab has a page ({live} live)"));
+    run.check(
+        live == 1,
+        &format!("only the selected tab has a page ({live} live)"),
+    );
     run.check(
         infos.iter().filter(|t| !t.active).all(|t| t.sleeping),
         "every other tab is asleep",
     );
-    run.check(infos.iter().all(|t| !t.private), "private tabs are not restored");
+    run.check(
+        infos.iter().all(|t| !t.private),
+        "private tabs are not restored",
+    );
     run.shot("20-restored").await;
-    let other = infos.iter().find(|t| !t.active && t.index.is_some()).map(|t| t.id.clone());
+    let other = infos
+        .iter()
+        .find(|t| !t.active && t.index.is_some())
+        .map(|t| t.id.clone());
     if let Some(id) = other {
         s.select(&id);
         run.wait_loaded(&id).await;
-        let woke = tab_infos(s).iter().find(|t| t.id == id).is_some_and(|t| t.live && !t.sleeping);
+        let woke = tab_infos(s)
+            .iter()
+            .find(|t| t.id == id)
+            .is_some_and(|t| t.live && !t.sleeping);
         run.check(woke, "selecting a sleeping tab wakes it");
     }
 }
@@ -488,11 +571,20 @@ async fn restore(run: &Run) {
 async fn mac(run: &Run) {
     let s = &run.shell;
     let spaces = crate::control::space_infos(s);
-    run.check(spaces.len() == 4, &format!("the Mac session's four spaces ({})", spaces.len()));
+    run.check(
+        spaces.len() == 4,
+        &format!("the Mac session's four spaces ({})", spaces.len()),
+    );
     let infos = run.infos();
     run.check(infos.len() > 100, &format!("its tabs ({})", infos.len()));
-    run.check(infos.iter().filter(|t| t.pinned).count() == 6, "its six pins");
-    run.check(infos.iter().filter(|t| t.live).count() <= 1, "nothing but the selected tab loads");
+    run.check(
+        infos.iter().filter(|t| t.pinned).count() == 6,
+        "its six pins",
+    );
+    run.check(
+        infos.iter().filter(|t| t.live).count() <= 1,
+        "nothing but the selected tab loads",
+    );
     run.shot("30-mac-session").await;
 }
 
@@ -525,7 +617,9 @@ fn layout(s: &Shell) -> serde_json::Value {
 
 /// Some file or folder under `root` has `needle` in its name.
 fn tree_mentions(root: &std::path::Path, needle: &str) -> bool {
-    let Ok(rd) = std::fs::read_dir(root) else { return false };
+    let Ok(rd) = std::fs::read_dir(root) else {
+        return false;
+    };
     rd.flatten().any(|e| {
         e.file_name().to_string_lossy().contains(needle)
             || (e.file_type().is_ok_and(|t| t.is_dir()) && tree_mentions(&e.path(), needle))
@@ -550,19 +644,110 @@ struct Page {
 }
 
 const PAGES: &[Page] = &[
-    Page { path: "/studio", title: "Office Commun", heading: "Office Commun", body: "Independent design studio working across research, identity and production. We work alongside the teams we make things for, from the first question to the live release.", hue: 0.0, letter: "O" },
-    Page { path: "/mail", title: "Inbox (3) — Mail", heading: "Inbox", body: "Three unread: the site visit schedule, a shipping notice, and the October invoice.", hue: 0.58, letter: "M" },
-    Page { path: "/arena", title: "Are.na / Blocks", heading: "Blocks", body: "A quiet place to collect references: images, links, and notes, arranged into channels.", hue: 0.08, letter: "A" },
-    Page { path: "/docs", title: "WebKitWebView — WebKitGTK 6.0 Reference", heading: "WebKitWebView", body: "The central class of the WebKitGTK API. It is responsible for managing the drawing of the content and forwarding of events.", hue: 0.62, letter: "W" },
-    Page { path: "/notes", title: "Field notes: thermal storage at desert sites, week 41", heading: "Field notes, week 41", body: "Charging held steady through the afternoon peak. The storage block reached its setpoint by two, and discharge carried the load well past sunset. Dust on the east array cost about three percent until the Thursday wash.", hue: 0.1, letter: "N" },
-    Page { path: "/rust", title: "Validating References with Lifetimes - The Rust Programming Language", heading: "Validating References with Lifetimes", body: "Lifetimes are another kind of generic that we’ve already been using. Rather than ensuring that a type has the behavior we want, lifetimes ensure that references are valid as long as we need them to be.", hue: 0.03, letter: "R" },
-    Page { path: "/long", title: "A very long title that goes on and on to check that the column ellipsizes it properly rather than ever scrolling sideways", heading: "A long title", body: "This page exists to have a title longer than any tab can show.", hue: 0.8, letter: "L" },
-    Page { path: "/weather", title: "Weather — Mojave, 34° and clear", heading: "34° and clear", body: "Clear skies through the weekend. Winds from the west, eight to twelve miles an hour.", hue: 0.14, letter: "W" },
-    Page { path: "/tracker", title: "Sprint 42 · Tracker", heading: "Sprint 42", body: "Eleven open, four in review, twenty-three done.", hue: 0.48, letter: "T" },
-    Page { path: "/design", title: "Column spacing — Design review", heading: "Column spacing", body: "Rows at thirty-four points, a single hairline between kept and today’s tabs.", hue: 0.9, letter: "D" },
-    Page { path: "/standup", title: "Standup notes — Tuesday", heading: "Tuesday", body: "Shell lands today; spaces after lunch.", hue: 0.36, letter: "S" },
-    Page { path: "/essay", title: "On Restraint in Interface Design", heading: "On restraint", body: "The best interface is the one you stop noticing. Every border, every badge, every animation has to earn its place against the page it frames.", hue: 0.7, letter: "E" },
-    Page { path: "/private", title: "Private window test", heading: "Nothing here is kept", body: "This tab has its own cookie jar, and it is forgotten when the tab closes.", hue: 0.75, letter: "P" },
+    Page {
+        path: "/studio",
+        title: "Office Commun",
+        heading: "Office Commun",
+        body: "Independent design studio working across research, identity and production. We work alongside the teams we make things for, from the first question to the live release.",
+        hue: 0.0,
+        letter: "O",
+    },
+    Page {
+        path: "/mail",
+        title: "Inbox (3) — Mail",
+        heading: "Inbox",
+        body: "Three unread: the site visit schedule, a shipping notice, and the October invoice.",
+        hue: 0.58,
+        letter: "M",
+    },
+    Page {
+        path: "/arena",
+        title: "Are.na / Blocks",
+        heading: "Blocks",
+        body: "A quiet place to collect references: images, links, and notes, arranged into channels.",
+        hue: 0.08,
+        letter: "A",
+    },
+    Page {
+        path: "/docs",
+        title: "WebKitWebView — WebKitGTK 6.0 Reference",
+        heading: "WebKitWebView",
+        body: "The central class of the WebKitGTK API. It is responsible for managing the drawing of the content and forwarding of events.",
+        hue: 0.62,
+        letter: "W",
+    },
+    Page {
+        path: "/notes",
+        title: "Field notes: thermal storage at desert sites, week 41",
+        heading: "Field notes, week 41",
+        body: "Charging held steady through the afternoon peak. The storage block reached its setpoint by two, and discharge carried the load well past sunset. Dust on the east array cost about three percent until the Thursday wash.",
+        hue: 0.1,
+        letter: "N",
+    },
+    Page {
+        path: "/rust",
+        title: "Validating References with Lifetimes - The Rust Programming Language",
+        heading: "Validating References with Lifetimes",
+        body: "Lifetimes are another kind of generic that we’ve already been using. Rather than ensuring that a type has the behavior we want, lifetimes ensure that references are valid as long as we need them to be.",
+        hue: 0.03,
+        letter: "R",
+    },
+    Page {
+        path: "/long",
+        title: "A very long title that goes on and on to check that the column ellipsizes it properly rather than ever scrolling sideways",
+        heading: "A long title",
+        body: "This page exists to have a title longer than any tab can show.",
+        hue: 0.8,
+        letter: "L",
+    },
+    Page {
+        path: "/weather",
+        title: "Weather — Mojave, 34° and clear",
+        heading: "34° and clear",
+        body: "Clear skies through the weekend. Winds from the west, eight to twelve miles an hour.",
+        hue: 0.14,
+        letter: "W",
+    },
+    Page {
+        path: "/tracker",
+        title: "Sprint 42 · Tracker",
+        heading: "Sprint 42",
+        body: "Eleven open, four in review, twenty-three done.",
+        hue: 0.48,
+        letter: "T",
+    },
+    Page {
+        path: "/design",
+        title: "Column spacing — Design review",
+        heading: "Column spacing",
+        body: "Rows at thirty-four points, a single hairline between kept and today’s tabs.",
+        hue: 0.9,
+        letter: "D",
+    },
+    Page {
+        path: "/standup",
+        title: "Standup notes — Tuesday",
+        heading: "Tuesday",
+        body: "Shell lands today; spaces after lunch.",
+        hue: 0.36,
+        letter: "S",
+    },
+    Page {
+        path: "/essay",
+        title: "On Restraint in Interface Design",
+        heading: "On restraint",
+        body: "The best interface is the one you stop noticing. Every border, every badge, every animation has to earn its place against the page it frames.",
+        hue: 0.7,
+        letter: "E",
+    },
+    Page {
+        path: "/private",
+        title: "Private window test",
+        heading: "Nothing here is kept",
+        body: "This tab has its own cookie jar, and it is forgotten when the tab closes.",
+        hue: 0.75,
+        letter: "P",
+    },
 ];
 
 type Icons = Arc<RwLock<Vec<Vec<u8>>>>;
@@ -599,10 +784,19 @@ fn answer(mut stream: std::net::TcpStream, icons: &[Vec<u8>]) {
             None => ("404 Not Found", "text/plain", b"no".to_vec()),
         }
     } else if let Some(n) = path.strip_prefix("/crowd/") {
-        let html = page_html(&format!("Crowded tab {n}"), &format!("Tab {n}"), "One of forty.", 0);
+        let html = page_html(
+            &format!("Crowded tab {n}"),
+            &format!("Tab {n}"),
+            "One of forty.",
+            0,
+        );
         ("200 OK", "text/html; charset=utf-8", html.into_bytes())
     } else if let Some((i, p)) = PAGES.iter().enumerate().find(|(_, p)| p.path == path) {
-        ("200 OK", "text/html; charset=utf-8", page_html(p.title, p.heading, p.body, i).into_bytes())
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            page_html(p.title, p.heading, p.body, i).into_bytes(),
+        )
     } else {
         ("404 Not Found", "text/plain", b"not found".to_vec())
     };
@@ -638,16 +832,29 @@ fn icon_png(shell: &Shell, hue: f64, letter: &str) -> Vec<u8> {
     let snap = gtk::Snapshot::new();
     let rect = gtk::graphene::Rect::new(0.0, 0.0, 32.0, 32.0);
     snap.push_rounded_clip(&gtk::gsk::RoundedRect::from_rect(rect, 7.0));
-    snap.append_color(&gtk::gdk::RGBA::new(c.r as f32, c.g as f32, c.b as f32, 1.0), &rect);
+    snap.append_color(
+        &gtk::gdk::RGBA::new(c.r as f32, c.g as f32, c.b as f32, 1.0),
+        &rect,
+    );
     let layout = shell.window().create_pango_layout(Some(letter));
     let mut font = gtk::pango::FontDescription::from_string("Sans Bold");
     font.set_absolute_size(18.0 * gtk::pango::SCALE as f64);
     layout.set_font_description(Some(&font));
     let (w, h) = layout.pixel_size();
-    snap.translate(&gtk::graphene::Point::new((32 - w) as f32 / 2.0, (32 - h) as f32 / 2.0));
+    snap.translate(&gtk::graphene::Point::new(
+        (32 - w) as f32 / 2.0,
+        (32 - h) as f32 / 2.0,
+    ));
     snap.append_layout(&layout, &gtk::gdk::RGBA::new(1.0, 1.0, 1.0, 0.95));
     snap.pop();
-    let Some(node) = snap.to_node() else { return Vec::new() };
-    let Some(renderer) = shell.window().renderer() else { return Vec::new() };
-    renderer.render_texture(&node, Some(&rect)).save_to_png_bytes().to_vec()
+    let Some(node) = snap.to_node() else {
+        return Vec::new();
+    };
+    let Some(renderer) = shell.window().renderer() else {
+        return Vec::new();
+    };
+    renderer
+        .render_texture(&node, Some(&rect))
+        .save_to_png_bytes()
+        .to_vec()
 }

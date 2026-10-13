@@ -89,7 +89,8 @@ mod tests {
 
     #[test]
     fn parses_flags_and_addresses() {
-        let o = Options::parse(["--screenshot", "/tmp/a.png", "example.com", "--out=/tmp/x"]).unwrap();
+        let o =
+            Options::parse(["--screenshot", "/tmp/a.png", "example.com", "--out=/tmp/x"]).unwrap();
         assert_eq!(o.screenshot, Some(PathBuf::from("/tmp/a.png")));
         assert_eq!(o.selftest_out, Some(PathBuf::from("/tmp/x")));
         assert_eq!(o.open, ["example.com"]);

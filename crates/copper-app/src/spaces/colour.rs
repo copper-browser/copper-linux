@@ -218,18 +218,19 @@ impl SpaceColour {
         Self::ALL
             .into_iter()
             .filter(|c| *c != SpaceColour::Graphite)
-            .min_by(|a, b| distance(a.hue().unwrap_or(0.0)).total_cmp(&distance(b.hue().unwrap_or(0.0))))
+            .min_by(|a, b| {
+                distance(a.hue().unwrap_or(0.0)).total_cmp(&distance(b.hue().unwrap_or(0.0)))
+            })
             .unwrap_or(SpaceColour::Graphite)
     }
 
     /// The first real colour no space wears; when all are taken, the one
     /// worn least. Never grey — grey is a choice, not a default.
     pub fn unused<'a>(spaces: impl IntoIterator<Item = &'a Space>) -> SpaceColour {
-        let worn: Vec<SpaceColour> = spaces
+        let worn: Vec<SpaceColour> = spaces.into_iter().map(SpaceColour::of).collect();
+        let colours = Self::ALL
             .into_iter()
-            .map(SpaceColour::of)
-            .collect();
-        let colours = Self::ALL.into_iter().filter(|c| *c != SpaceColour::Graphite);
+            .filter(|c| *c != SpaceColour::Graphite);
         if let Some(free) = colours.clone().find(|c| !worn.contains(c)) {
             return free;
         }
@@ -391,7 +392,11 @@ impl Theme {
             let n = (stops.len() - 1) as f64;
             let (mut r, mut g, mut b) = (0.0, 0.0, 0.0);
             for (i, s) in stops.iter().enumerate() {
-                let w = if i == 0 || i == stops.len() - 1 { 0.5 } else { 1.0 } / n;
+                let w = if i == 0 || i == stops.len() - 1 {
+                    0.5
+                } else {
+                    1.0
+                } / n;
                 r += s.r * w;
                 g += s.g * w;
                 b += s.b * w;
@@ -401,7 +406,11 @@ impl Theme {
         if self.tone.abs() <= 0.005 {
             return sum;
         }
-        let toward = if self.tone < 0.0 { Rgb::BLACK } else { Rgb::WHITE };
+        let toward = if self.tone < 0.0 {
+            Rgb::BLACK
+        } else {
+            Rgb::WHITE
+        };
         sum.mixed(toward, self.tone.abs() * TONE_REACH)
     }
 
@@ -412,7 +421,11 @@ impl Theme {
             if self.tone.abs() <= 0.005 {
                 c
             } else {
-                let toward = if self.tone < 0.0 { Rgb::BLACK } else { Rgb::WHITE };
+                let toward = if self.tone < 0.0 {
+                    Rgb::BLACK
+                } else {
+                    Rgb::WHITE
+                };
                 c.mixed(toward, self.tone.abs() * TONE_REACH)
             }
         };
@@ -434,7 +447,11 @@ pub fn strength(hue: f64) -> (f64, f64) {
     for pair in STRENGTHS.windows(2) {
         let (a, b) = (pair[0], pair[1]);
         if h <= b.0 {
-            let t = if b.0 > a.0 { (h - a.0) / (b.0 - a.0) } else { 0.0 };
+            let t = if b.0 > a.0 {
+                (h - a.0) / (b.0 - a.0)
+            } else {
+                0.0
+            };
             return (a.1 + (b.1 - a.1) * t, a.2 + (b.2 - a.2) * t);
         }
     }
@@ -546,7 +563,11 @@ impl Tint {
             return Rgb::grey(if self.night { 0.55 } else { 0.64 });
         };
         let (s, v) = strength(h);
-        Rgb::hsv(h, (s + 0.14).min(1.0), v * if self.night { 0.92 } else { 0.9 })
+        Rgb::hsv(
+            h,
+            (s + 0.14).min(1.0),
+            v * if self.night { 0.92 } else { 0.9 },
+        )
     }
     /// A space's mark (letter or symbol) on a chip.
     pub fn mark(&self) -> Rgb {
@@ -608,10 +629,18 @@ mod tests {
 
     #[test]
     fn hsv_round_trip() {
-        for (h, s, v) in [(0.0, 1.0, 1.0), (0.6, 0.62, 0.98), (0.36, 0.5, 0.86), (0.9, 0.2, 0.3)] {
+        for (h, s, v) in [
+            (0.0, 1.0, 1.0),
+            (0.6, 0.62, 0.98),
+            (0.36, 0.5, 0.86),
+            (0.9, 0.2, 0.3),
+        ] {
             let c = Rgb::hsv(h, s, v);
             let (h2, s2, v2) = c.to_hsv();
-            assert!(close(h, h2) && close(s, s2) && close(v, v2), "{h} {s} {v} → {c:?}");
+            assert!(
+                close(h, h2) && close(s, s2) && close(v, v2),
+                "{h} {s} {v} → {c:?}"
+            );
         }
         assert_eq!(Rgb::hsv(0.0, 1.0, 1.0).hex(), "#ff0000");
         assert_eq!(Rgb::hsv(1.0 / 3.0, 1.0, 1.0).hex(), "#00ff00");

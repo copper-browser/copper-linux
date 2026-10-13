@@ -66,8 +66,10 @@ fn os_name() -> String {
     std::fs::read_to_string("/etc/os-release")
         .ok()
         .and_then(|s| {
-            s.lines()
-                .find_map(|l| l.strip_prefix("PRETTY_NAME=").map(|v| v.trim_matches('"').to_string()))
+            s.lines().find_map(|l| {
+                l.strip_prefix("PRETTY_NAME=")
+                    .map(|v| v.trim_matches('"').to_string())
+            })
         })
         .unwrap_or_else(|| "Linux".into())
 }
@@ -78,7 +80,11 @@ mod tests {
 
     #[test]
     fn entries_are_faults_without_the_full_address() {
-        let e = entry("https://mail.example.com/inbox?secret=1", CrashReason::Crashed, IsoDate(1_700_000_000));
+        let e = entry(
+            "https://mail.example.com/inbox?secret=1",
+            CrashReason::Crashed,
+            IsoDate(1_700_000_000),
+        );
         assert_eq!(e.kind, "fault");
         assert!(!e.fatal());
         assert_eq!(e.reason.as_deref(), Some("crashed"));
@@ -89,16 +95,31 @@ mod tests {
 
     #[test]
     fn index_is_capped_and_round_trips_with_the_mac_file() {
-        let mac = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/mac/crashes.json")).unwrap();
+        let mac = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/mac/crashes.json"
+        ))
+        .unwrap();
         let mut index: CrashIndex = serde_json::from_slice(&mac).unwrap();
         let before = index.entries.len();
-        append(&mut index, entry("https://a.b", CrashReason::ExceededMemoryLimit, IsoDate::now()));
+        append(
+            &mut index,
+            entry(
+                "https://a.b",
+                CrashReason::ExceededMemoryLimit,
+                IsoDate::now(),
+            ),
+        );
         assert_eq!(index.entries.len(), (before + 1).min(KEEP));
         for _ in 0..(KEEP + 5) {
-            append(&mut index, entry("https://a.b", CrashReason::Crashed, IsoDate::now()));
+            append(
+                &mut index,
+                entry("https://a.b", CrashReason::Crashed, IsoDate::now()),
+            );
         }
         assert_eq!(index.entries.len(), KEEP);
-        let again: CrashIndex = serde_json::from_str(&serde_json::to_string(&index).unwrap()).unwrap();
+        let again: CrashIndex =
+            serde_json::from_str(&serde_json::to_string(&index).unwrap()).unwrap();
         assert_eq!(again.entries.len(), KEEP);
     }
 }

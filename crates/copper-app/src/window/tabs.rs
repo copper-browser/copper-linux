@@ -30,8 +30,16 @@ pub fn mark(shell: &Shell, t: &TabView, size: i32) -> gtk::Widget {
         i.set_pixel_size(size.min(16));
         return i.upcast();
     }
-    let letter = if t.pin.is_some() { t.letter.clone() } else { t.host.clone() };
-    let source = if letter.is_empty() { t.label.clone() } else { letter };
+    let letter = if t.pin.is_some() {
+        t.letter.clone()
+    } else {
+        t.host.clone()
+    };
+    let source = if letter.is_empty() {
+        t.label.clone()
+    } else {
+        letter
+    };
     super::letter_chip(&source, size).upcast()
 }
 
@@ -55,7 +63,10 @@ pub fn menu(shell: &Shell, id: &TabId) -> gio::Menu {
     let page = gio::Menu::new();
     page.append(Some("Reload"), Some(&format!("win.tab-reload::{id}")));
     page.append(Some("Duplicate"), Some(&format!("win.tab-duplicate::{id}")));
-    page.append(Some("Copy Address"), Some(&format!("win.tab-copy-address::{id}")));
+    page.append(
+        Some("Copy Address"),
+        Some(&format!("win.tab-copy-address::{id}")),
+    );
     menu.append_section(None, &page);
 
     let place = gio::Menu::new();
@@ -74,7 +85,10 @@ pub fn menu(shell: &Shell, id: &TabId) -> gio::Menu {
         if !others.is_empty() {
             let to = gio::Menu::new();
             for s in others {
-                to.append(Some(&s.name), Some(&format!("win.tab-to-space::{id}|{}", s.id)));
+                to.append(
+                    Some(&s.name),
+                    Some(&format!("win.tab-to-space::{id}|{}", s.id)),
+                );
             }
             place.append_submenu(Some("Move to Space"), &to);
         }
@@ -82,7 +96,10 @@ pub fn menu(shell: &Shell, id: &TabId) -> gio::Menu {
     menu.append_section(None, &place);
 
     let close = gio::Menu::new();
-    close.append(Some("Close Other Tabs"), Some(&format!("win.tab-close-others::{id}")));
+    close.append(
+        Some("Close Other Tabs"),
+        Some(&format!("win.tab-close-others::{id}")),
+    );
     close.append(Some("Close Tab"), Some(&format!("win.tab-close::{id}")));
     menu.append_section(None, &close);
     menu

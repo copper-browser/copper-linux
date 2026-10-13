@@ -121,16 +121,18 @@ impl TopBar {
         // The row's width changes with the window: re-lay the tabs.
         let weak_me = Rc::downgrade(&me);
         let weak = shell.downgrade();
-        me.scroller.hadjustment().connect_page_size_notify(move |adj| {
-            let (Some(me), Some(s)) = (weak_me.upgrade(), weak.upgrade()) else {
-                return;
-            };
-            let w = adj.page_size() as i32;
-            if w != me.width.get() {
-                me.width.set(w);
-                glib::idle_add_local_once(move || me.rebuild_tabs(&s));
-            }
-        });
+        me.scroller
+            .hadjustment()
+            .connect_page_size_notify(move |adj| {
+                let (Some(me), Some(s)) = (weak_me.upgrade(), weak.upgrade()) else {
+                    return;
+                };
+                let w = adj.page_size() as i32;
+                if w != me.width.get() {
+                    me.width.set(w);
+                    glib::idle_add_local_once(move || me.rebuild_tabs(&s));
+                }
+            });
         me
     }
 
@@ -163,7 +165,10 @@ impl TopBar {
         let button = gtk::Button::new();
         button.add_css_class("top-space");
         button.set_child(Some(&row));
-        button.update_property(&[gtk::accessible::Property::Label(&format!("Space {}, menu", sp.name))]);
+        button.update_property(&[gtk::accessible::Property::Label(&format!(
+            "Space {}, menu",
+            sp.name
+        ))]);
         let weak = shell.downgrade();
         let id = sp.id.clone();
         button.connect_clicked(move |b| {
@@ -340,7 +345,8 @@ fn fill(shell: &Shell, p: &Pill, t: &TabView, compact: bool) {
     if t.sleeping {
         name.push_str(", asleep");
     }
-    p.root.update_property(&[gtk::accessible::Property::Label(&name)]);
+    p.root
+        .update_property(&[gtk::accessible::Property::Label(&name)]);
     if compact || p.pin {
         p.root.set_tooltip_text(Some(&t.label));
     }

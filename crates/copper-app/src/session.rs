@@ -153,8 +153,15 @@ mod tests {
         let tabs = b.all_tabs().count();
         assert!(tabs >= 1, "the fixture has tabs");
         let active = b.active_id();
-        let awake: Vec<_> = b.all_tabs().filter(|t| !t.sleeping).map(|t| t.id.clone()).collect();
-        assert!(awake.len() <= 1, "everything sleeps but the active tab: {awake:?}");
+        let awake: Vec<_> = b
+            .all_tabs()
+            .filter(|t| !t.sleeping)
+            .map(|t| t.id.clone())
+            .collect();
+        assert!(
+            awake.len() <= 1,
+            "everything sleeps but the active tab: {awake:?}"
+        );
         if let Some(a) = awake.first() {
             assert_eq!(Some(a), active.as_ref());
         }
@@ -168,7 +175,10 @@ mod tests {
     fn loads_a_world_and_survives_a_broken_session() {
         let dir = std::env::temp_dir().join(format!("copper-app-session-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let store = Store::new(copper_core::store::Paths::new(dir.join("data"), dir.join("config")));
+        let store = Store::new(copper_core::store::Paths::new(
+            dir.join("data"),
+            dir.join("config"),
+        ));
         let first = load(&store);
         assert_eq!(first.browser.all_tabs().count(), 0);
         assert!(first.notice.is_none());
@@ -181,7 +191,10 @@ mod tests {
 
     #[test]
     fn cache_follows_the_world_name() {
-        let store = Store::new(copper_core::store::Paths::new("/x/copper-test", "/y/copper-test"));
+        let store = Store::new(copper_core::store::Paths::new(
+            "/x/copper-test",
+            "/y/copper-test",
+        ));
         assert_eq!(cache_dir(&store).file_name().unwrap(), "copper-test");
     }
 }

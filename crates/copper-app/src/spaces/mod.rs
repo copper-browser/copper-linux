@@ -40,7 +40,10 @@ pub fn emoji(space: &Space) -> Option<String> {
 
 /// A Mac SF Symbol name stored bare (`briefcase.fill`).
 fn is_symbol_name(icon: &str) -> bool {
-    icon.len() > 2 && icon.chars().all(|c| c.is_ascii_lowercase() || c == '.' || c.is_ascii_digit())
+    icon.len() > 2
+        && icon
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c == '.' || c.is_ascii_digit())
 }
 
 /// A name for a new space nobody has used yet.

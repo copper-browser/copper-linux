@@ -342,7 +342,10 @@ impl FieldCore {
         // A selected address the user has not touched (Ctrl+L on a page)
         // offers nothing until they type.
         let untouched = purpose == Purpose::Edit
-            && self.text.selection_bounds().is_some_and(|(a, b)| a == 0 && b as usize == full.chars().count())
+            && self
+                .text
+                .selection_bounds()
+                .is_some_and(|(a, b)| a == 0 && b as usize == full.chars().count())
             && typed == full;
         let rows = if untouched {
             Vec::new()
@@ -659,7 +662,8 @@ impl Card {
         self.auto.set(false);
         self.mode.set(mode);
         self.open.set(true);
-        let private = mode == Mode::LaunchPrivate || (mode == Mode::Edit && shell.active_is_private());
+        let private =
+            mode == Mode::LaunchPrivate || (mode == Mode::Edit && shell.active_is_private());
         self.tag.set_visible(private);
         if private {
             self.card.add_css_class("private");
@@ -675,9 +679,15 @@ impl Card {
         }
         let h = shell.window().height().max(600);
         self.card.set_margin_top((h as f64 * 0.2) as i32);
-        self.field.text.set_placeholder_text(Some(mode.placeholder()));
+        self.field
+            .text
+            .set_placeholder_text(Some(mode.placeholder()));
         let text = match mode {
-            Mode::Edit => shell.browser().active().map(|t| t.url.clone()).unwrap_or_default(),
+            Mode::Edit => shell
+                .browser()
+                .active()
+                .map(|t| t.url.clone())
+                .unwrap_or_default(),
             _ => String::new(),
         };
         self.layer.set_visible(true);

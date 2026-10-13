@@ -35,7 +35,10 @@ pub fn menu(shell: &Shell, space: &str) -> gio::Menu {
         menu.append_section(None, &switch);
     }
     let edit = gio::Menu::new();
-    edit.append(Some("Edit Space…"), Some(&format!("win.space-edit::{space}")));
+    edit.append(
+        Some("Edit Space…"),
+        Some(&format!("win.space-edit::{space}")),
+    );
     edit.append(Some("New Space"), Some("win.new-space"));
     menu.append_section(None, &edit);
     if many {
@@ -45,9 +48,15 @@ pub fn menu(shell: &Shell, space: &str) -> gio::Menu {
             order.append(Some("Move Left"), Some(&format!("win.space-left::{space}")));
         }
         if at + 1 < b.spaces().count() {
-            order.append(Some("Move Right"), Some(&format!("win.space-right::{space}")));
+            order.append(
+                Some("Move Right"),
+                Some(&format!("win.space-right::{space}")),
+            );
         }
-        order.append(Some("Delete Space…"), Some(&format!("win.space-delete::{space}")));
+        order.append(
+            Some("Delete Space…"),
+            Some(&format!("win.space-delete::{space}")),
+        );
         menu.append_section(None, &order);
     }
     menu
@@ -168,7 +177,10 @@ pub fn chips(shell: &Shell) -> gtk::Box {
     strip.add_css_class("space-chips");
     let (spaces, current) = {
         let b = shell.browser();
-        (b.spaces().cloned().collect::<Vec<_>>(), b.current_space_id().to_string())
+        (
+            b.spaces().cloned().collect::<Vec<_>>(),
+            b.current_space_id().to_string(),
+        )
     };
     let dark = shell.is_dark();
     let ink = {
@@ -225,7 +237,9 @@ fn chip(shell: &Shell, sp: &Space, current: bool, dark: bool, column_ink: Rgb) -
     let weak = shell.downgrade();
     let id = sp.id.clone();
     right.connect_pressed(move |g, _, _, _| {
-        let (Some(s), Some(w)) = (weak.upgrade(), g.widget()) else { return };
+        let (Some(s), Some(w)) = (weak.upgrade(), g.widget()) else {
+            return;
+        };
         popover(&s, &id, &w).popup();
     });
     button.add_controller(right);
@@ -235,7 +249,9 @@ fn chip(shell: &Shell, sp: &Space, current: bool, dark: bool, column_ink: Rgb) -
     drag.set_actions(gdk_move());
     let id = sp.id.clone();
     drag.connect_prepare(move |_, _, _| {
-        Some(gtk::gdk::ContentProvider::for_value(&format!("space:{id}").to_value()))
+        Some(gtk::gdk::ContentProvider::for_value(
+            &format!("space:{id}").to_value(),
+        ))
     });
     button.add_controller(drag);
     let drop = gtk::DropTarget::new(glib::types::Type::STRING, gdk_move());
@@ -401,7 +417,12 @@ pub fn editor(shell: &Shell, id: &str) -> Option<adw::Dialog> {
         let Some(s) = weak.upgrade() else { return };
         s.rename_space(&sid, &name.text());
         let icon_text = icon.text().to_string();
-        s.set_space_icon(&sid, Some(&icon_text).filter(|t| !t.trim().is_empty()).map(|t| t.as_str()));
+        s.set_space_icon(
+            &sid,
+            Some(&icon_text)
+                .filter(|t| !t.trim().is_empty())
+                .map(|t| t.as_str()),
+        );
         let wanted = if own.is_active() {
             Some(original_profile.clone().unwrap_or_else(|| {
                 let n = name.text().trim().to_string();

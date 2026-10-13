@@ -18,7 +18,13 @@ pub fn dialog(shell: &Shell) -> adw::PreferencesDialog {
     let dialog = adw::PreferencesDialog::new();
     dialog.set_title("Settings");
     dialog.set_search_enabled(false);
-    if !shell.registry().borrow().settings_pages.iter().any(|p| p.id == "general") {
+    if !shell
+        .registry()
+        .borrow()
+        .settings_pages
+        .iter()
+        .any(|p| p.id == "general")
+    {
         dialog.add(&general(shell));
     }
     let pages = shell.registry().borrow().settings_pages.clone();
@@ -91,11 +97,19 @@ fn general(shell: &Shell) -> adw::PreferencesPage {
     });
     tabs.add(&position);
     let icons = crate::window::tabs::shows_icons(shell);
-    let glyph = combo("Beside titles", &["Site icons", "Letters"], if icons { 0 } else { 1 });
+    let glyph = combo(
+        "Beside titles",
+        &["Site icons", "Letters"],
+        if icons { 0 } else { 1 },
+    );
     let weak = shell.downgrade();
     glyph.connect_selected_notify(move |r| {
         if let Some(s) = weak.upgrade() {
-            let g = if r.selected() == 1 { Glyph::Letters } else { Glyph::Icons };
+            let g = if r.selected() == 1 {
+                Glyph::Letters
+            } else {
+                Glyph::Icons
+            };
             s.update_settings(|st| st.set_glyph(g));
             s.ui().refresh(&s, &crate::window::Refresh::all());
         }

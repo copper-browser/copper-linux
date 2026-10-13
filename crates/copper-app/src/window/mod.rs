@@ -206,8 +206,10 @@ impl Ui {
         }
         if r.all || r.chrome || r.selection || r.tabs {
             let private = shell.active_is_private();
-            let widgets: [&gtk::Widget; 2] =
-                [self.column.widget.upcast_ref(), self.topbar.widget.upcast_ref()];
+            let widgets: [&gtk::Widget; 2] = [
+                self.column.widget.upcast_ref(),
+                self.topbar.widget.upcast_ref(),
+            ];
             for w in widgets {
                 if private {
                     w.add_css_class("private");
@@ -231,7 +233,8 @@ impl Ui {
         let column = Tint::of(&space, dark);
         let private = crate::private::tint(dark);
         let bar = crate::style::bar_tint(dark);
-        let css = crate::style::tint_css(&column, &private, &bar, crate::style::accent(&column), dark);
+        let css =
+            crate::style::tint_css(&column, &private, &bar, crate::style::accent(&column), dark);
         if *self.tint_key.borrow() != css {
             self.tint.load_from_string(&css);
             self.tint_key.replace(css);

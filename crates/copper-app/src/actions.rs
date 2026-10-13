@@ -204,47 +204,83 @@ fn with_active(s: &Shell, f: impl FnOnce(&Shell, &TabId)) {
 /// The shell's own actions and commands.
 pub fn register_core(shell: &Shell) {
     // Tabs.
-    register_action(shell, "new-tab", &["<Control>t"], |s| s.ui().card.open(s, Mode::Launch));
-    register_action(shell, "new-private-tab", &["<Control><Shift>n"], |s| s.new_private_tab());
-    register_action(shell, "close-tab", &["<Control>w", "<Control>F4"], |s| s.close_active());
+    register_action(shell, "new-tab", &["<Control>t"], |s| {
+        s.ui().card.open(s, Mode::Launch)
+    });
+    register_action(shell, "new-private-tab", &["<Control><Shift>n"], |s| {
+        s.new_private_tab()
+    });
+    register_action(shell, "close-tab", &["<Control>w", "<Control>F4"], |s| {
+        s.close_active()
+    });
     register_action(shell, "reopen-tab", &["<Control><Shift>t"], |s| {
         s.reopen();
     });
-    register_action(shell, "next-tab", &["<Control>Tab", "<Control>Page_Down"], |s| {
-        s.cycle_tab(true)
-    });
+    register_action(
+        shell,
+        "next-tab",
+        &["<Control>Tab", "<Control>Page_Down"],
+        |s| s.cycle_tab(true),
+    );
     register_action(
         shell,
         "previous-tab",
-        &["<Control><Shift>Tab", "<Control><Shift>ISO_Left_Tab", "<Control>Page_Up"],
+        &[
+            "<Control><Shift>Tab",
+            "<Control><Shift>ISO_Left_Tab",
+            "<Control>Page_Up",
+        ],
         |s| s.cycle_tab(false),
     );
     for n in 1..=9u32 {
         let accel = format!("<Control>{n}");
         let alt = format!("<Alt>{n}");
-        register_action(shell, &format!("select-tab-{n}"), &[&accel, &alt], move |s| {
-            s.select_nth(if n == 9 { None } else { Some(n as usize - 1) })
-        });
+        register_action(
+            shell,
+            &format!("select-tab-{n}"),
+            &[&accel, &alt],
+            move |s| s.select_nth(if n == 9 { None } else { Some(n as usize - 1) }),
+        );
     }
     register_action(shell, "pin-tab", &["<Control><Shift>d"], |s| {
         with_active(s, |s, id| s.toggle_pin(id))
     });
 
     // The field and the palette.
-    register_action(shell, "focus-field", &["<Control>l", "<Alt>d", "F6"], |s| s.ui().edit_address(s));
-    register_action(shell, "palette", &["<Control>k"], |s| s.ui().card.toggle(s, Mode::Palette));
+    register_action(shell, "focus-field", &["<Control>l", "<Alt>d", "F6"], |s| {
+        s.ui().edit_address(s)
+    });
+    register_action(shell, "palette", &["<Control>k"], |s| {
+        s.ui().card.toggle(s, Mode::Palette)
+    });
     register_action(shell, "escape", &[], |s| s.ui().escape(s));
 
     // The page.
-    register_action(shell, "reload", &["<Control>r", "F5"], |s| s.reload_active());
-    register_action(shell, "hard-reload", &["<Control><Shift>r", "<Shift>F5"], |s| {
-        s.hard_reload_active()
+    register_action(shell, "reload", &["<Control>r", "F5"], |s| {
+        s.reload_active()
     });
+    register_action(
+        shell,
+        "hard-reload",
+        &["<Control><Shift>r", "<Shift>F5"],
+        |s| s.hard_reload_active(),
+    );
     register_action(shell, "stop", &[], |s| s.stop_active());
-    register_action(shell, "back", &["<Control>bracketleft", "<Alt>Left"], |s| s.back());
-    register_action(shell, "forward", &["<Control>bracketright", "<Alt>Right"], |s| s.forward());
-    register_action(shell, "find", &["<Control>f"], |s| s.ui().stage.find.open(s));
-    register_action(shell, "find-next", &["<Control>g"], |s| s.ui().stage.find.step(s, true));
+    register_action(shell, "back", &["<Control>bracketleft", "<Alt>Left"], |s| {
+        s.back()
+    });
+    register_action(
+        shell,
+        "forward",
+        &["<Control>bracketright", "<Alt>Right"],
+        |s| s.forward(),
+    );
+    register_action(shell, "find", &["<Control>f"], |s| {
+        s.ui().stage.find.open(s)
+    });
+    register_action(shell, "find-next", &["<Control>g"], |s| {
+        s.ui().stage.find.step(s, true)
+    });
     register_action(shell, "find-previous", &["<Control><Shift>g"], |s| {
         s.ui().stage.find.step(s, false)
     });
@@ -254,15 +290,26 @@ pub fn register_core(shell: &Shell) {
         &["<Control>plus", "<Control>equal", "<Control>KP_Add"],
         |s| s.zoom(Some(true)),
     );
-    register_action(shell, "zoom-out", &["<Control>minus", "<Control>KP_Subtract"], |s| {
-        s.zoom(Some(false))
+    register_action(
+        shell,
+        "zoom-out",
+        &["<Control>minus", "<Control>KP_Subtract"],
+        |s| s.zoom(Some(false)),
+    );
+    register_action(shell, "zoom-reset", &["<Control>0", "<Control>KP_0"], |s| {
+        s.zoom(None)
     });
-    register_action(shell, "zoom-reset", &["<Control>0", "<Control>KP_0"], |s| s.zoom(None));
-    register_action(shell, "inspector", &["<Control><Shift>i", "F12"], |s| s.show_inspector());
+    register_action(shell, "inspector", &["<Control><Shift>i", "F12"], |s| {
+        s.show_inspector()
+    });
 
     // Spaces.
-    register_action(shell, "next-space", &["<Control><Alt>Right"], |s| s.cycle_space(true));
-    register_action(shell, "previous-space", &["<Control><Alt>Left"], |s| s.cycle_space(false));
+    register_action(shell, "next-space", &["<Control><Alt>Right"], |s| {
+        s.cycle_space(true)
+    });
+    register_action(shell, "previous-space", &["<Control><Alt>Left"], |s| {
+        s.cycle_space(false)
+    });
     register_action(shell, "new-space", &[], crate::spaces::ui::new_space);
     register_action(shell, "edit-space", &[], |s| {
         let id = s.browser().current_space_id().to_string();
@@ -281,7 +328,12 @@ pub fn register_core(shell: &Shell) {
         };
         s.set_tabs_position(next);
     });
-    register_action(shell, "settings", &["<Control>comma"], crate::window::settings::present);
+    register_action(
+        shell,
+        "settings",
+        &["<Control>comma"],
+        crate::window::settings::present,
+    );
     register_action(shell, "quit", &["<Control>q"], |s| {
         s.shutdown();
         s.app().quit();
@@ -293,7 +345,9 @@ pub fn register_core(shell: &Shell) {
     );
     let weak = shell.downgrade();
     look.connect_activate(move |a, arg| {
-        let Some(v) = arg.and_then(|v| v.get::<String>()) else { return };
+        let Some(v) = arg.and_then(|v| v.get::<String>()) else {
+            return;
+        };
         let Some(s) = weak.upgrade() else { return };
         let look = match v.as_str() {
             "dark" => Look::Dark,
@@ -311,9 +365,15 @@ pub fn register_core(shell: &Shell) {
     );
     let weak = shell.downgrade();
     layout.connect_activate(move |a, arg| {
-        let Some(v) = arg.and_then(|v| v.get::<String>()) else { return };
+        let Some(v) = arg.and_then(|v| v.get::<String>()) else {
+            return;
+        };
         let Some(s) = weak.upgrade() else { return };
-        s.set_tabs_position(if v == "top" { TabsPosition::Top } else { TabsPosition::Left });
+        s.set_tabs_position(if v == "top" {
+            TabsPosition::Top
+        } else {
+            TabsPosition::Left
+        });
         a.set_state(&v.to_variant());
     });
     shell.window().add_action(&layout);
@@ -325,46 +385,66 @@ pub fn register_core(shell: &Shell) {
             f(s, &id)
         }
     };
-    register_action_with_id(shell, "tab-close", tab(|s, id| {
-        s.close_force(id);
-    }));
+    register_action_with_id(
+        shell,
+        "tab-close",
+        tab(|s, id| {
+            s.close_force(id);
+        }),
+    );
     register_action_with_id(shell, "tab-pin", tab(|s, id| s.toggle_pin(id)));
     register_action_with_id(shell, "tab-reload", tab(|s, id| s.reload(id)));
-    register_action_with_id(shell, "tab-keep", tab(|s, id| {
-        let saved = s.browser().tab(id).is_some_and(|t| t.saved);
-        s.set_saved(id, !saved);
-    }));
-    register_action_with_id(shell, "tab-duplicate", tab(|s, id| {
-        let (url, private) = match s.browser().tab(id) {
-            Some(t) => (t.url.clone(), t.private),
-            None => return,
-        };
-        s.open(
-            &url,
-            crate::shell::OpenTab {
-                foreground: true,
-                private,
-                after: Some(id.clone()),
-                ..Default::default()
-            },
-        );
-    }));
-    register_action_with_id(shell, "tab-close-others", tab(|s, id| {
-        let others: Vec<TabId> = s
-            .visible()
-            .all()
-            .filter(|t| t.id != *id && t.pin.is_none())
-            .map(|t| t.id.clone())
-            .collect();
-        for o in others {
-            s.close_force(&o);
-        }
-    }));
-    register_action_with_id(shell, "tab-copy-address", tab(|s, id| {
-        if let Some(t) = s.browser().tab(id) {
-            s.window().clipboard().set_text(&t.url);
-        }
-    }));
+    register_action_with_id(
+        shell,
+        "tab-keep",
+        tab(|s, id| {
+            let saved = s.browser().tab(id).is_some_and(|t| t.saved);
+            s.set_saved(id, !saved);
+        }),
+    );
+    register_action_with_id(
+        shell,
+        "tab-duplicate",
+        tab(|s, id| {
+            let (url, private) = match s.browser().tab(id) {
+                Some(t) => (t.url.clone(), t.private),
+                None => return,
+            };
+            s.open(
+                &url,
+                crate::shell::OpenTab {
+                    foreground: true,
+                    private,
+                    after: Some(id.clone()),
+                    ..Default::default()
+                },
+            );
+        }),
+    );
+    register_action_with_id(
+        shell,
+        "tab-close-others",
+        tab(|s, id| {
+            let others: Vec<TabId> = s
+                .visible()
+                .all()
+                .filter(|t| t.id != *id && t.pin.is_none())
+                .map(|t| t.id.clone())
+                .collect();
+            for o in others {
+                s.close_force(&o);
+            }
+        }),
+    );
+    register_action_with_id(
+        shell,
+        "tab-copy-address",
+        tab(|s, id| {
+            if let Some(t) = s.browser().tab(id) {
+                s.window().clipboard().set_text(&t.url);
+            }
+        }),
+    );
     // `win.tab-to-space::<tab id>|<space id>`.
     register_action_with_id(shell, "tab-to-space", |s, arg| {
         if let Some((tab, space)) = arg.split_once('|') {
@@ -381,31 +461,48 @@ pub fn register_core(shell: &Shell) {
 
     // The palette's own commands.
     let cmds = [
-        Command::new("new-tab", "New Tab", "tab-new-symbolic", |s| s.ui().card.open(s, Mode::Launch))
-            .shortcut("Ctrl+T"),
-        Command::new("new-private-tab", "New Private Tab", "view-conceal-symbolic", |s| {
-            s.new_private_tab()
+        Command::new("new-tab", "New Tab", "tab-new-symbolic", |s| {
+            s.ui().card.open(s, Mode::Launch)
         })
+        .shortcut("Ctrl+T"),
+        Command::new(
+            "new-private-tab",
+            "New Private Tab",
+            "view-conceal-symbolic",
+            |s| s.new_private_tab(),
+        )
         .shortcut("Ctrl+Shift+N"),
-        Command::new("reopen-tab", "Reopen Closed Tab", "edit-undo-symbolic", |s| {
-            s.reopen();
-        })
+        Command::new(
+            "reopen-tab",
+            "Reopen Closed Tab",
+            "edit-undo-symbolic",
+            |s| {
+                s.reopen();
+            },
+        )
         .shortcut("Ctrl+Shift+T")
         .when(|s| !s.browser().closed_tabs().is_empty()),
-        Command::new("close-tab", "Close Tab", "window-close-symbolic", |s| s.close_active())
-            .shortcut("Ctrl+W")
-            .when(|s| s.active_id().is_some()),
+        Command::new("close-tab", "Close Tab", "window-close-symbolic", |s| {
+            s.close_active()
+        })
+        .shortcut("Ctrl+W")
+        .when(|s| s.active_id().is_some()),
         Command::new("pin-tab", "Pin or Unpin Tab", "view-pin-symbolic", |s| {
             with_active(s, |s, id| s.toggle_pin(id))
         })
         .shortcut("Ctrl+Shift+D")
         .when(|s| s.active_id().is_some()),
-        Command::new("find", "Find in Page", "edit-find-symbolic", |s| s.ui().stage.find.open(s))
-            .shortcut("Ctrl+F")
-            .when(|s| s.active_page().is_some()),
-        Command::new("hard-reload", "Reload Without Cache", "view-refresh-symbolic", |s| {
-            s.hard_reload_active()
+        Command::new("find", "Find in Page", "edit-find-symbolic", |s| {
+            s.ui().stage.find.open(s)
         })
+        .shortcut("Ctrl+F")
+        .when(|s| s.active_page().is_some()),
+        Command::new(
+            "hard-reload",
+            "Reload Without Cache",
+            "view-refresh-symbolic",
+            |s| s.hard_reload_active(),
+        )
         .shortcut("Ctrl+Shift+R")
         .when(|s| s.active_page().is_some()),
         Command::new("copy-address", "Copy Address", "edit-copy-symbolic", |s| {
@@ -422,42 +519,69 @@ pub fn register_core(shell: &Shell) {
             let id = s.browser().current_space_id().to_string();
             crate::spaces::ui::edit_space(s, &id);
         }),
-        Command::new("next-space", "Next Space", "go-next-symbolic", |s| s.cycle_space(true))
-            .shortcut("Ctrl+Alt+→")
-            .when(|s| s.browser().spaces().count() > 1),
-        Command::new("previous-space", "Previous Space", "go-previous-symbolic", |s| {
-            s.cycle_space(false)
+        Command::new("next-space", "Next Space", "go-next-symbolic", |s| {
+            s.cycle_space(true)
         })
+        .shortcut("Ctrl+Alt+→")
+        .when(|s| s.browser().spaces().count() > 1),
+        Command::new(
+            "previous-space",
+            "Previous Space",
+            "go-previous-symbolic",
+            |s| s.cycle_space(false),
+        )
         .shortcut("Ctrl+Alt+←")
         .when(|s| s.browser().spaces().count() > 1),
-        Command::new("delete-space", "Delete Space…", "user-trash-symbolic", |s| {
-            let id = s.browser().current_space_id().to_string();
-            crate::spaces::ui::ask_delete(s, &id);
-        })
+        Command::new(
+            "delete-space",
+            "Delete Space…",
+            "user-trash-symbolic",
+            |s| {
+                let id = s.browser().current_space_id().to_string();
+                crate::spaces::ui::ask_delete(s, &id);
+            },
+        )
         .when(|s| s.browser().spaces().count() > 1),
-        Command::new("toggle-layout", "Move Tabs to the Top or Side", "view-dual-symbolic", |s| {
-            let next = match s.tabs_position() {
-                TabsPosition::Left => TabsPosition::Top,
-                TabsPosition::Top => TabsPosition::Left,
-            };
-            s.set_tabs_position(next);
-        })
+        Command::new(
+            "toggle-layout",
+            "Move Tabs to the Top or Side",
+            "view-dual-symbolic",
+            |s| {
+                let next = match s.tabs_position() {
+                    TabsPosition::Left => TabsPosition::Top,
+                    TabsPosition::Top => TabsPosition::Left,
+                };
+                s.set_tabs_position(next);
+            },
+        )
         .shortcut("Ctrl+Shift+S"),
-        Command::new("look-light", "Light Appearance", "weather-clear-symbolic", |s| {
-            s.set_look(Look::Light)
-        })
+        Command::new(
+            "look-light",
+            "Light Appearance",
+            "weather-clear-symbolic",
+            |s| s.set_look(Look::Light),
+        )
         .when(|s| s.look() != Look::Light),
-        Command::new("look-dark", "Dark Appearance", "weather-clear-night-symbolic", |s| {
-            s.set_look(Look::Dark)
-        })
+        Command::new(
+            "look-dark",
+            "Dark Appearance",
+            "weather-clear-night-symbolic",
+            |s| s.set_look(Look::Dark),
+        )
         .when(|s| s.look() != Look::Dark),
-        Command::new("look-system", "Match System Appearance", "emblem-system-symbolic", |s| {
-            s.set_look(Look::System)
-        })
+        Command::new(
+            "look-system",
+            "Match System Appearance",
+            "emblem-system-symbolic",
+            |s| s.set_look(Look::System),
+        )
         .when(|s| s.look() != Look::System),
-        Command::new("inspector", "Web Inspector", "applications-engineering-symbolic", |s| {
-            s.show_inspector()
-        })
+        Command::new(
+            "inspector",
+            "Web Inspector",
+            "applications-engineering-symbolic",
+            |s| s.show_inspector(),
+        )
         .shortcut("Ctrl+Shift+I")
         .when(|s| s.active_page().is_some()),
         Command::new("settings", "Settings", "emblem-system-symbolic", |s| {
