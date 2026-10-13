@@ -133,6 +133,23 @@ case " $OS_ID $OS_LIKE " in
 *" debian "* | *" ubuntu "*) debian_family=1 ;;
 esac
 
+# A fresh cloud or container image ships stale package lists (the .deb's
+# dependencies 404) or none at all (nothing has a candidate, not even
+# flatpak). Refresh them once before apt is asked for anything.
+APT_FRESH=0
+apt_refresh() {
+	[ "$APT_FRESH" = 0 ] || return 0
+	APT_FRESH=1
+	say "refreshing the apt package lists"
+	as_root apt-get update -q >&2 || say "apt-get update failed; going on with the lists as they are"
+}
+apt_lists_empty() {
+	for f in /var/lib/apt/lists/*_Packages*; do
+		[ -e "$f" ] && return 1
+	done
+	return 0
+}
+
 # The .deb needs WebKitGTK 6.0 from apt; without it, the Flatpak brings its own.
 has_webkit6_in_apt() {
 	command -v apt-cache >/dev/null 2>&1 || return 1
@@ -141,6 +158,9 @@ has_webkit6_in_apt() {
 }
 
 if [ -z "$METHOD" ]; then
+	if [ "$debian_family" = 1 ] && command -v apt-get >/dev/null 2>&1 && apt_lists_empty; then
+		apt_refresh
+	fi
 	if [ "$debian_family" = 1 ] && has_webkit6_in_apt; then
 		METHOD=deb
 	else
@@ -214,6 +234,7 @@ install_deb() {
 		return
 	fi
 	before=$(satisfied "$deb" Recommends | tr '\n' ' ')
+	apt_refresh
 	as_root apt-get install -y -o APT::Install-Recommends=true "$deb"
 
 	# An upgrade can leave a newly added Recommends out; ask for it once.
@@ -265,6 +286,7 @@ install_flatpak_tool() {
 	command -v flatpak >/dev/null 2>&1 && return 0
 	say "flatpak is not installed; installing it"
 	if command -v apt-get >/dev/null 2>&1; then
+		apt_refresh
 		as_root apt-get install -y flatpak
 	elif command -v dnf >/dev/null 2>&1; then
 		as_root dnf install -y flatpak
