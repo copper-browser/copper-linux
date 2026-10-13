@@ -22,6 +22,7 @@ name: release
 #   *.sha256                                    one per file above ("<hex>  <name>")
 #   copper-version.json                         manifest (packaging/version-manifest.py)
 #   install.sh (+ .sha256)                      the curl installer, verbatim from the repo root
+#   SHA256SUMS                                  one file, every asset above (sha256sum -c)
 #
 # Every artifact is built on a native runner for its architecture
 # (ubuntu-24.04 / ubuntu-24.04-arm), without containers, and installed and
@@ -192,11 +193,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # elfutils (eu-strip) and librsvg2-common (the SVG loader appstreamcli
+      # compose reads the app icon with) are only recommended by
+      # flatpak-builder; without them the build stops at strip / compose.
       - name: Install flatpak-builder
         run: |
           sudo apt-get update -q
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
-            flatpak flatpak-builder python3-aiohttp python3-tomlkit
+            flatpak flatpak-builder elfutils librsvg2-common python3-aiohttp python3-tomlkit
       - name: Build the Flatpak
         run: |
           set -euo pipefail
@@ -251,6 +255,21 @@ jobs:
             >dist/copper-version.json
           cat dist/copper-version.json
           (cd dist && sha256sum -c ./*.sha256)
+      - name: SHA256SUMS
+        run: |
+          set -euo pipefail
+          cd dist
+          # Every published file except the per-file .sha256 companions.
+          find . -maxdepth 1 -type f ! -name '*.sha256' ! -name SHA256SUMS -printf '%f\n' |
+            LC_ALL=C sort | xargs sha256sum >"$RUNNER_TEMP/SHA256SUMS"
+          mv "$RUNNER_TEMP/SHA256SUMS" SHA256SUMS
+          cat SHA256SUMS
+          sha256sum -c SHA256SUMS
+          for f in "copper_${VERSION}_amd64.deb" "copper_${VERSION}_arm64.deb" copper_amd64.deb copper_arm64.deb \
+            "copper-${VERSION}-x86_64.flatpak" "copper-${VERSION}-aarch64.flatpak" \
+            copper-x86_64.flatpak copper-aarch64.flatpak install.sh copper-version.json; do
+            grep -q "  $f\$" SHA256SUMS || { echo "::error::release asset $f is missing"; exit 1; }
+          done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: copper-${{ needs.meta.outputs.version }}-linux
@@ -296,7 +315,7 @@ jobs:
             echo
             echo "or download a file below: the \`.deb\` for Ubuntu 24.04+ / Debian 13+ (\`sudo apt install ./copper_amd64.deb\`),"
             echo "or the \`.flatpak\` for any other distribution (\`flatpak install --user copper-x86_64.flatpak\`; the GNOME 51 runtime comes from Flathub)."
-            echo "x86_64 and aarch64. Each file has a \`.sha256\` next to it."
+            echo "x86_64 and aarch64. Each file has a \`.sha256\` next to it, and \`SHA256SUMS\` lists them all."
           } >"$notes"
           flags=(--latest)
           [ "$PRERELEASE" = "true" ] && flags=(--prerelease --latest=false)
@@ -311,7 +330,7 @@ jobs:
         run: |
           set -euo pipefail
           base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
-          for f in copper_amd64.deb copper_arm64.deb copper-x86_64.flatpak copper-aarch64.flatpak copper-version.json install.sh; do
+          for f in copper_amd64.deb copper_arm64.deb copper-x86_64.flatpak copper-aarch64.flatpak copper-version.json install.sh SHA256SUMS; do
             curl -fsSL --retry 5 --retry-delay 3 -o "$RUNNER_TEMP/$f" "$base/$f"
             want=$(sha256sum "dist/$f" | cut -d' ' -f1)
             have=$(sha256sum "$RUNNER_TEMP/$f" | cut -d' ' -f1)

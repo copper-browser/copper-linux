@@ -6,7 +6,9 @@
 #   packaging/flatpak/build.sh --out dist/ --name copper-0.1.0-x86_64.flatpak
 #   packaging/flatpak/build.sh --install           # also install it for this user
 #
-# Needs flatpak and flatpak-builder (apt install flatpak flatpak-builder), plus
+# Needs flatpak, flatpak-builder, elfutils (eu-strip) and librsvg2-common (the
+# SVG loader appstreamcli compose reads the icon with) — apt install flatpak
+# flatpak-builder elfutils librsvg2-common — plus
 # python3-aiohttp and python3-tomlkit for vendor.sh. The GNOME 51 SDK and the
 # rust-stable extension are installed from Flathub for this user on first run
 # (~3 GB). All state lives under target/flatpak/.

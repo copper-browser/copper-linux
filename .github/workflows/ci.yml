@@ -28,8 +28,21 @@ env:
   APT_BUILD_DEPS: >-
     build-essential pkg-config
     libwebkitgtk-6.0-dev libgtk-4-dev libadwaita-1-dev libsecret-1-dev
+  # Test-time tools: weston + a session bus for GUI/WebKit tests; dbus-send,
+  # gnome-keyring-daemon and secret-tool for the private Secret Service
+  # (copper-creds sandbox, secret_service and chrome import tests); python3
+  # runs the bw/op vault-CLI mocks; native PostgreSQL for the copper-cloud
+  # live test (never a container).
   APT_TEST_DEPS: >-
-    weston dbus-daemon fonts-dejavu-core
+    weston dbus-daemon dbus-bin fonts-dejavu-core
+    gnome-keyring libsecret-tools python3
+    postgresql postgresql-client
+  # copper-cloud server for crates/copper-cloud/tests/live_server.rs: the
+  # pinned public release (copper-browser/copper-cloud v0.8.1), checked
+  # against its published SHA256SUMS.
+  COPPER_CLOUD_VERSION: "0.8.1"
+  COPPER_CLOUD_SHA256_X86_64: 344cc217a90758153963c877c65cae1db2aa39ada646fed813f61a45aada81f5
+  COPPER_CLOUD_SHA256_AARCH64: e6877aa2d49e014d9f8997b8ee45f007271e11d7a70fb41a3febd58876d1d56a
 
 jobs:
   fmt:
@@ -102,8 +115,42 @@ jobs:
             echo "NO_AT_BRIDGE=1"
           } >>"$GITHUB_ENV"
 
+      # crates/copper-cloud/tests/live_server.rs runs against a real server:
+      # the pinned copper-cloud release on native PostgreSQL from apt, with
+      # COPPER_CLOUD_REQUIRE_LIVE=1 so a missing server fails instead of
+      # skipping.
+      - name: copper-cloud server and native PostgreSQL (live test)
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64) arch=x86_64; sum=$COPPER_CLOUD_SHA256_X86_64 ;;
+            aarch64) arch=aarch64; sum=$COPPER_CLOUD_SHA256_AARCH64 ;;
+            *) echo "::error::no copper-cloud build for $(uname -m)"; exit 1 ;;
+          esac
+          tarball="copper-cloud-${COPPER_CLOUD_VERSION}-linux-${arch}.tar.gz"
+          dir="$RUNNER_TEMP/copper-cloud"
+          mkdir -p "$dir"
+          curl -fsSL --retry 5 --retry-delay 3 -o "$dir/$tarball" \
+            "https://github.com/copper-browser/copper-cloud/releases/download/v${COPPER_CLOUD_VERSION}/$tarball"
+          echo "$sum  $dir/$tarball" | sha256sum -c -
+          tar -xzf "$dir/$tarball" -C "$dir" copper-cloud
+          "$dir/copper-cloud" --version
+
+          read -r pg_version pg_cluster pg_port _ < <(pg_lsclusters -h | head -1)
+          sudo pg_ctlcluster "$pg_version" "$pg_cluster" start
+          pg_isready -h 127.0.0.1 -p "$pg_port" -t 30
+          sudo -u postgres psql -p "$pg_port" -v ON_ERROR_STOP=1 -q \
+            -c "CREATE ROLE copper_cloud_linux LOGIN PASSWORD 'copper_cloud_linux_test_pw'" \
+            -c "CREATE DATABASE copper_cloud_linux_test OWNER copper_cloud_linux"
+          {
+            echo "COPPER_CLOUD_BIN=$dir/copper-cloud"
+            echo "COPPER_CLOUD_TEST_DATABASE_URL=postgres://copper_cloud_linux:copper_cloud_linux_test_pw@127.0.0.1:${pg_port}/copper_cloud_linux_test"
+            echo "COPPER_CLOUD_REQUIRE_LIVE=1"
+          } >>"$GITHUB_ENV"
+
+      # --no-fail-fast: one failing test binary must not hide the others.
       - name: Test
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --locked --no-fail-fast
 
       - name: weston log
         if: failure()

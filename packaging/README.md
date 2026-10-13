@@ -116,7 +116,9 @@ packaging/flatpak/build.sh --install           # and install it for this user
 flatpak run com.copperbrowser.Copper
 ```
 
-Needs `flatpak flatpak-builder python3-aiohttp python3-tomlkit`. The first run
+Needs `flatpak flatpak-builder elfutils librsvg2-common python3-aiohttp python3-tomlkit`
+(`eu-strip` and the SVG loader `appstreamcli compose` needs for the icon; flatpak-builder
+only recommends them). The first run
 installs `org.gnome.Sdk//51` and `org.freedesktop.Sdk.Extension.rust-stable//26.08`
 for the user from Flathub (~3 GB on disk). Everything else lives in
 `target/flatpak/`.

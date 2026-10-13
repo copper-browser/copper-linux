@@ -273,6 +273,25 @@ fn kept_urls(b: &MemoryBrowser) -> BTreeSet<(String, String)> {
         .collect()
 }
 
+/// The engine's status once it is no longer `Syncing`. `turn_on` /
+/// `sync_now` return when their own pass is done, but work the event stream
+/// started meanwhile (a "ready" → pull of every doc, a "history" → history
+/// pull) can still be in flight; that work settles the state when it ends.
+/// Bounded: after 30 s the status is returned as it is (and the caller's
+/// `Idle` assertion fails with it).
+async fn settled(engine: &SyncEngine) -> copper_cloud::sync::SyncStatus {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let st = engine.status();
+        if !matches!(st.state, copper_cloud::sync::SyncState::Syncing)
+            || tokio::time::Instant::now() >= deadline
+        {
+            return st;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 const HOME_A: &str = "A0000000-0000-4000-8000-00000000000A";
 const WORK_A: &str = "A0000000-0000-4000-8000-0000000000AB";
 const HOME_B: &str = "B0000000-0000-4000-8000-00000000000B";
@@ -505,7 +524,7 @@ async fn scenario(server: &Server) {
     ];
 
     engine_a.turn_on(&all).await;
-    let st = engine_a.status();
+    let st = settled(&engine_a).await;
     assert!(st.on, "{st:?}");
     assert!(
         matches!(st.state, copper_cloud::sync::SyncState::Idle),
@@ -524,7 +543,7 @@ async fn scenario(server: &Server) {
 
     let mut events_a = a.subscribe();
     engine_b.turn_on(&all).await;
-    let st_b = engine_b.status();
+    let st_b = settled(&engine_b).await;
     assert!(
         matches!(st_b.state, copper_cloud::sync::SyncState::Idle),
         "{st_b:?}\n{:#?}",
