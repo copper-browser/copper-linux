@@ -92,6 +92,10 @@ impl Header {
             let Some(me) = weak_me.upgrade() else { return };
             me.finish(shell);
             perform(shell, row, Mode::Edit, new_tab);
+            // Where you went has the keyboard, as after the card.
+            if let Some(p) = shell.active_page() {
+                crate::palette::p_focus(&p);
+            }
         });
         let weak_me = Rc::downgrade(&me);
         let weak = shell.downgrade();

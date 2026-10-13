@@ -9,13 +9,21 @@
 
 use crate::shell::Shell;
 use copper_cloud::sync::{BrowserState, LiveKept, LocalVisit};
-use copper_core::TabId;
 use copper_core::bookmarks::Bookmark;
 use copper_core::browser::OpenOptions;
 use copper_core::cloud::OpenTab;
 use copper_core::session::Space;
+use copper_core::{Browser, Tab, TabId};
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::time::Duration;
+
+/// Where a kept tab's sync key lives: a key of its own in the tab's
+/// `session.json` entry (the entry's unknown keys travel with the tab, and
+/// back to the file). So a kept tab is the same entry of the spaces document
+/// across launches, whatever address it was restored at. The Mac never reads
+/// this file; its `Session.Entry` decoder would skip the key anyway.
+pub const SYNC_KEY: &str = "cloudKey";
 
 /// The app's browser, for the sync engine.
 pub struct AppBrowser;
@@ -57,9 +65,40 @@ fn is_web(url: &str) -> bool {
     lower.starts_with("http://") || lower.starts_with("https://")
 }
 
+/// The sync key a tab carries, if any.
+pub fn carried_key(t: &Tab) -> Option<String> {
+    t.extra
+        .get(SYNC_KEY)
+        .and_then(Value::as_str)
+        .filter(|k| !k.is_empty())
+        .map(str::to_string)
+}
+
+/// Keep each tab's sync key on it (`(tab id, key)`); tabs gone since are
+/// skipped. How many changed.
+pub fn keep_keys_in(b: &mut Browser, keys: &[(String, String)]) -> usize {
+    let mut n = 0;
+    for (tab, key) in keys {
+        let id = TabId(tab.clone());
+        let Some(t) = b.tab(&id) else { continue };
+        if carried_key(t).as_deref() == Some(key.as_str()) {
+            continue;
+        }
+        b.update_tab(&id, |t| {
+            t.extra.insert(SYNC_KEY.into(), Value::String(key.clone()));
+        });
+        n += 1;
+    }
+    n
+}
+
 /// The pinned and Saved web tabs, pins first, then each space's row.
 pub fn kept(shell: &Shell) -> Vec<LiveKept> {
-    let b = shell.browser();
+    kept_in(&shell.browser())
+}
+
+/// [`kept`], of a browser.
+pub fn kept_in(b: &Browser) -> Vec<LiveKept> {
     let mut out = Vec::new();
     for t in b.pins() {
         if t.private || !is_web(&t.url) {
@@ -67,6 +106,7 @@ pub fn kept(shell: &Shell) -> Vec<LiveKept> {
         }
         out.push(LiveKept {
             tab_id: t.id.0.clone(),
+            key: carried_key(t),
             space: t.space.clone(),
             pinned: true,
             url: t.url.clone(),
@@ -81,6 +121,7 @@ pub fn kept(shell: &Shell) -> Vec<LiveKept> {
             }
             out.push(LiveKept {
                 tab_id: t.id.0.clone(),
+                key: carried_key(t),
                 space: space.id.clone(),
                 pinned: false,
                 url: t.url.clone(),
@@ -190,6 +231,13 @@ impl BrowserState for AppBrowser {
         .flatten()
     }
 
+    fn keep_keys(&self, keys: &[(String, String)]) {
+        let keys = keys.to_vec();
+        apply(move |s| {
+            s.with_browser(|b| keep_keys_in(b, &keys));
+        });
+    }
+
     fn remove_space(&self, id: &str) {
         let id = id.to_string();
         apply(move |s| {
@@ -271,5 +319,120 @@ impl BrowserState for AppBrowser {
 
     fn settle_history(&self) {
         apply(|s| s.history_changed());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use copper_core::SessionShape;
+
+    fn keep_one() -> (Browser, TabId, TabId) {
+        let mut b = Browser::new();
+        let saved = b.open_tab(
+            "http://127.0.0.1:8080/r",
+            OpenOptions {
+                foreground: false,
+                at_end: true,
+                ..Default::default()
+            },
+        );
+        b.update_tab(&saved, |t| t.saved = true);
+        let pin = b.open_tab("https://mail.test/", OpenOptions::default());
+        b.pin(&pin, Some("M"));
+        b.take_events();
+        (b, saved, pin)
+    }
+
+    #[test]
+    fn a_kept_tabs_key_lives_on_the_tab() {
+        let (mut b, saved, pin) = keep_one();
+        assert!(kept_in(&b).iter().all(|k| k.key.is_none()));
+        let keys = vec![
+            (
+                saved.0.clone(),
+                "home|saved|127.0.0.1|http://127.0.0.1:8080/r".into(),
+            ),
+            (
+                pin.0.clone(),
+                "home|pin|mail.test|https://mail.test/".into(),
+            ),
+            ("gone".to_string(), "x".to_string()),
+        ];
+        assert_eq!(keep_keys_in(&mut b, &keys), 2);
+        assert!(!b.take_events().is_empty(), "a change the session saves");
+        // Again: nothing changes, nothing to save.
+        assert_eq!(keep_keys_in(&mut b, &keys), 0);
+        assert!(b.take_events().is_empty());
+        let live = kept_in(&b);
+        let of = |id: &TabId| live.iter().find(|k| k.tab_id == id.0).unwrap().key.clone();
+        assert_eq!(
+            of(&saved).as_deref(),
+            Some("home|saved|127.0.0.1|http://127.0.0.1:8080/r")
+        );
+        assert_eq!(
+            of(&pin).as_deref(),
+            Some("home|pin|mail.test|https://mail.test/")
+        );
+        // Navigating doesn't touch it.
+        b.set_url(&saved, "http://localhost:8080/landed");
+        assert_eq!(of(&saved), carried_key(b.tab(&saved).unwrap()));
+    }
+
+    #[test]
+    fn the_key_round_trips_through_session_json() {
+        let (mut b, saved, pin) = keep_one();
+        keep_keys_in(
+            &mut b,
+            &[
+                (saved.0.clone(), "k-saved".into()),
+                (pin.0.clone(), "k-pin".into()),
+            ],
+        );
+        // The redirect it took before the quit is what the session keeps.
+        b.set_url(&saved, "http://localhost:8080/landed");
+        let text = serde_json::to_string(&b.to_session()).unwrap();
+        assert!(text.contains(r#""cloudKey":"k-saved""#), "{text}");
+        assert!(text.contains(r#""cloudKey":"k-pin""#), "{text}");
+        // Next launch: new tab ids, the same keys.
+        let shape: SessionShape = serde_json::from_str(&text).unwrap();
+        let again = Browser::from_session(&shape);
+        let live = kept_in(&again);
+        assert_eq!(live.len(), 2);
+        assert!(
+            live.iter()
+                .all(|k| k.tab_id != saved.0 && k.tab_id != pin.0)
+        );
+        let by_url: BTreeMap<String, Option<String>> =
+            live.into_iter().map(|k| (k.url, k.key)).collect();
+        assert_eq!(
+            by_url["http://localhost:8080/landed"].as_deref(),
+            Some("k-saved")
+        );
+        assert_eq!(by_url["https://mail.test/"].as_deref(), Some("k-pin"));
+        // …and written back out unchanged.
+        let twice = serde_json::to_string(&again.to_session()).unwrap();
+        assert!(twice.contains(r#""cloudKey":"k-saved""#));
+        assert!(twice.contains(r#""cloudKey":"k-pin""#));
+    }
+
+    #[test]
+    fn the_mac_shape_reads_a_session_with_keys() {
+        // `Session.Entry` on the Mac is a plain Codable struct: unknown keys
+        // are skipped. Model it: an entry decoder that knows only its fields.
+        #[derive(serde::Deserialize)]
+        #[allow(dead_code)]
+        struct MacEntry {
+            url: String,
+            title: String,
+            pin: Option<String>,
+            saved: Option<bool>,
+        }
+        let (mut b, saved, _) = keep_one();
+        keep_keys_in(&mut b, &[(saved.0.clone(), "k".into())]);
+        let shape = serde_json::to_value(b.to_session()).unwrap();
+        for e in shape["tabs"].as_array().unwrap() {
+            serde_json::from_value::<MacEntry>(e.clone()).unwrap();
+        }
     }
 }

@@ -23,7 +23,7 @@ use copper_cloud::sync::{
 };
 use copper_cloud::{CloudIntelligence, Failure};
 use copper_core::bookmarks::Bookmark;
-use copper_core::cloud::OpenTab;
+use copper_core::cloud::{OpenTab, SpacesDoc, decode_base64};
 use copper_core::session::Space;
 use copper_core::{DataFile, Paths, Store};
 use serde_json::{Value, json};
@@ -218,6 +218,7 @@ fn space(id: &str, name: &str) -> Space {
 fn kept(tab: &str, space: &str, url: &str, title: &str, pin: Option<&str>) -> LiveKept {
     LiveKept {
         tab_id: tab.into(),
+        key: None,
         space: space.into(),
         pinned: pin.is_some(),
         url: url.into(),
@@ -290,6 +291,241 @@ async fn settled(engine: &SyncEngine) -> copper_cloud::sync::SyncStatus {
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+/// A site that answers `/r` with a 302 to another host name — `127.0.0.1` →
+/// `localhost`, `/landed?from=r` — the way a site behind a sign-in sends a
+/// tab that wakes without the session to its identity provider.
+struct Redirector {
+    port: u16,
+    _task: tokio::task::JoinHandle<()>,
+}
+
+impl Redirector {
+    async fn start() -> Redirector {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let task = tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 8192];
+                    let n = sock.read(&mut buf).await.unwrap_or(0);
+                    let head = String::from_utf8_lossy(&buf[..n]).to_string();
+                    let path = head.split_whitespace().nth(1).unwrap_or("/").to_string();
+                    let reply = if path == "/r" {
+                        format!(
+                            "HTTP/1.1 302 Found\r\nLocation: http://localhost:{port}/landed?from=r\r\n\
+                             Content-Length: 0\r\nConnection: close\r\n\r\n"
+                        )
+                    } else {
+                        let body = "<!doctype html><title>Landed</title>landed";
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\
+                             Connection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                    };
+                    let _ = sock.write_all(reply.as_bytes()).await;
+                    let _ = sock.shutdown().await;
+                });
+            }
+        });
+        Redirector { port, _task: task }
+    }
+
+    fn kept_at(&self) -> String {
+        format!("http://127.0.0.1:{}/r", self.port)
+    }
+
+    /// What a tab at `url` commits when it wakes: the address it ends on
+    /// after following the server's redirects.
+    async fn wake(&self, url: &str) -> String {
+        let answer = reqwest::Client::new()
+            .get(url)
+            .send()
+            .await
+            .expect("the redirecting site answers");
+        assert!(answer.status().is_success(), "{}", answer.status());
+        answer.url().to_string()
+    }
+}
+
+/// The server's spaces document now.
+async fn server_spaces(client: &CloudClient) -> (i64, SpacesDoc) {
+    let doc: Value = client
+        .request_json("GET", "/v1/sync/docs/spaces", None, &[])
+        .await
+        .expect("GET spaces");
+    let version = doc["version"].as_i64().unwrap();
+    let bytes = decode_base64(doc["payload"].as_str().unwrap()).unwrap();
+    (version, serde_json::from_slice(&bytes).unwrap())
+}
+
+fn entries(doc: &SpacesDoc) -> BTreeSet<(String, String, String)> {
+    doc.tabs
+        .iter()
+        .map(|t| (t.key.clone(), t.space.to_uppercase(), t.url.clone()))
+        .collect()
+}
+
+/// The same device, quit and launched again: the tabs come back from its
+/// session with new ids (and the keys they carry), at the address each had
+/// at the quit; a new engine over the same client and files, whose memory of
+/// this run is gone. As the app does, it keys the restored tabs before any
+/// page loads.
+fn relaunch(
+    client: &CloudClient,
+    engine: SyncEngine,
+    browser: &MemoryBrowser,
+    run: u32,
+) -> (SyncEngine, Arc<MemoryBrowser>) {
+    drop(engine);
+    let mut state = browser.snapshot();
+    for t in &mut state.kept {
+        t.tab_id = format!("{}@run{run}", t.tab_id);
+    }
+    let browser = Arc::new(MemoryBrowser::new(state));
+    let engine = SyncEngine::new(client.clone(), browser.clone());
+    engine.remember_kept_tabs();
+    engine.start();
+    (engine, browser)
+}
+
+/// A kept tab that redirects to another host when it wakes, quit and
+/// launched again (twice), never changes the spaces document: not here, not
+/// on the other device. Browsing inside a kept tab doesn't either — and what
+/// the person then does to that tab still syncs as that tab.
+async fn kept_tabs_across_relaunch(
+    a: &CloudClient,
+    b: &CloudClient,
+    (engine_a, browser_a): (&SyncEngine, &Arc<MemoryBrowser>),
+    (engine_b, browser_b): (SyncEngine, Arc<MemoryBrowser>),
+) -> (SyncEngine, Arc<MemoryBrowser>) {
+    let site = Redirector::start().await;
+    let kept_at = site.kept_at();
+    // A keeps it in Home; B gets it from the cloud, asleep, at /r.
+    browser_a.edit(|s| s.kept.push(kept("a-r", HOME_A, &kept_at, "Hyper-V", None)));
+    engine_a.sync_now().await;
+    engine_b.sync_now().await;
+    assert!(
+        kept_urls(&browser_b).contains(&(HOME_A.into(), kept_at.clone())),
+        "{:?}",
+        kept_urls(&browser_b)
+    );
+    let (version, doc) = server_spaces(a).await;
+    let entry = doc
+        .tabs
+        .iter()
+        .find(|t| t.url == kept_at)
+        .expect("the kept tab's entry")
+        .clone();
+    eprintln!("spaces v{version}: {} at {}", entry.key, entry.url);
+
+    // B selects it: it wakes, and the site sends it to another host.
+    let landed = site.wake(&kept_at).await;
+    assert!(landed.starts_with("http://localhost:"), "{landed}");
+    let woke = |b: &MemoryBrowser| {
+        b.edit(|s| {
+            for t in &mut s.kept {
+                if t.url == kept_at || t.url == landed {
+                    t.url = landed.clone();
+                    t.title = "Landed".into();
+                }
+            }
+        })
+    };
+    woke(&browser_b);
+    engine_b.sync_now().await;
+    assert_eq!(server_spaces(a).await, (version, doc.clone()));
+
+    // Quit, launch again: restored at the redirect's address, it wakes and
+    // lands there again. Twice. The document is the same version, byte for byte.
+    let (mut engine_b, mut browser_b) = (engine_b, browser_b);
+    for run in [2, 3] {
+        (engine_b, browser_b) = relaunch(b, engine_b, &browser_b, run);
+        woke(&browser_b);
+        engine_b.sync_now().await;
+        let st = settled(&engine_b).await;
+        assert!(
+            matches!(st.state, copper_cloud::sync::SyncState::Idle),
+            "{:?}\n{:#?}",
+            st.state,
+            engine_b.log()
+        );
+        assert_eq!(st.versions.get("spaces"), Some(&version));
+        assert_eq!(
+            server_spaces(a).await,
+            (version, doc.clone()),
+            "run {run}: the redirect rewrote the spaces document\n{:#?}",
+            engine_b.log()
+        );
+        assert!(
+            !engine_b
+                .log()
+                .iter()
+                .any(|(_, l)| l.starts_with("Pushed spaces")),
+            "{:#?}",
+            engine_b.log()
+        );
+        assert!(
+            browser_b
+                .snapshot()
+                .kept
+                .iter()
+                .any(|t| t.url == landed && t.key.as_deref() == Some(entry.key.as_str())),
+            "the restored tab carries its key"
+        );
+    }
+    // A still has the tab at /r, and nothing from the redirect.
+    engine_a.sync_now().await;
+    assert!(kept_urls(browser_a).contains(&(HOME_A.into(), kept_at.clone())));
+    assert!(
+        !kept_urls(browser_a)
+            .iter()
+            .any(|(_, u)| u.contains("landed"))
+    );
+
+    // Browsing: on B the person takes the Mail pin to another site, quits,
+    // and launches again. Still the same pin, at the address it was kept with.
+    let mail = doc
+        .tabs
+        .iter()
+        .find(|t| t.url == "https://mail.example.com/inbox")
+        .expect("the Mail pin")
+        .clone();
+    browser_b.edit(|s| {
+        for t in &mut s.kept {
+            if t.url == mail.url {
+                t.url = "https://news.example.org/today".into();
+                t.title = "News".into();
+            }
+        }
+    });
+    engine_b.sync_now().await;
+    (engine_b, browser_b) = relaunch(b, engine_b, &browser_b, 4);
+    engine_b.sync_now().await;
+    assert_eq!(server_spaces(a).await, (version, doc.clone()));
+
+    // What the person then does to that tab still syncs, as that tab: B closes
+    // the pin, the entry goes (and only it), and A's Mail pin closes.
+    browser_b.edit(|s| s.kept.retain(|t| t.url != "https://news.example.org/today"));
+    engine_b.sync_now().await;
+    let (after, now) = server_spaces(a).await;
+    assert_eq!(after, version + 1);
+    let mut want = entries(&doc);
+    want.retain(|(k, _, _)| *k != mail.key);
+    assert_eq!(entries(&now), want);
+    engine_a.sync_now().await;
+    assert!(
+        !kept_urls(browser_a)
+            .iter()
+            .any(|(_, u)| u == "https://mail.example.com/inbox"),
+        "{:?}",
+        kept_urls(browser_a)
+    );
+    assert!(kept_urls(browser_a).contains(&(HOME_A.into(), kept_at.clone())));
+    (engine_b, browser_b)
 }
 
 const HOME_A: &str = "A0000000-0000-4000-8000-00000000000A";
@@ -640,6 +876,10 @@ async fn scenario(server: &Server) {
             .iter()
             .any(|(_, u)| u == "https://docs.example.com/")
     );
+
+    // --- Kept tabs across a relaunch: a 302 to another host, and browsing.
+    let (engine_b, browser_b) =
+        kept_tabs_across_relaunch(&a, &b, (&engine_a, &browser_a), (engine_b, browser_b)).await;
 
     // --- History: the 16 KiB entry limit.
     let long_title = "t".repeat(20_000);

@@ -29,6 +29,8 @@ fn main() {
         case!(mcp_drag),
         case!(mcp_scroll_wait_height),
         case!(mcp_console_after_install),
+        case!(mcp_console_from_document_start),
+        case!(mcp_rect_on_smooth_scroll_page),
         case!(mcp_expression_path),
         case!(jev_observe_matches_mac),
         case!(jev_actions),
@@ -365,6 +367,92 @@ async fn mcp_console_after_install(h: &H) -> Res {
     .map(|(l, t)| (l.to_string(), t.to_string()))
     .collect();
     ensure_eq!(got, want);
+    Ok(())
+}
+
+/// Linux: `page/console_early.js` from document start keeps what the page
+/// logged while loading, in the helper's own entries; the helper adopts that
+/// log rather than hooking `console` twice.
+async fn mcp_console_from_document_start(h: &H) -> Res {
+    h.add_user_script(&page::console_early());
+    h.load("console.html").await?;
+    h.js("console.log('after', [1, 2]); true").await?;
+    let json = h.run(&page::console()).await?;
+    let entries = page::parse_console(&json).map_err(|e| e.to_string())?;
+    let got: Vec<(String, String)> = entries.into_iter().map(|e| (e.level, e.text)).collect();
+    let want: Vec<(String, String)> = [
+        ("log", "head {\"n\":1}"),
+        ("info", "3"),
+        ("warn", "body"),
+        ("error", "Error: load boom"),
+        ("error", "loaded"),
+        ("log", "after [1,2]"),
+    ]
+    .iter()
+    .map(|(l, t)| (l.to_string(), t.to_string()))
+    .collect();
+    ensure_eq!(got, want);
+    // Installed once: the helper did not wrap console a second time.
+    h.js("console.warn('once'); true").await?;
+    let json = h.run(&page::console()).await?;
+    let entries = page::parse_console(&json).map_err(|e| e.to_string())?;
+    let once = entries.iter().filter(|e| e.text == "once").count();
+    ensure_eq!(once, 1);
+    // The early log is hidden from enumeration and cannot be replaced.
+    ensure_eq!(
+        h.js("Object.keys(window).includes('__copperLogs')").await?,
+        json!(false)
+    );
+    ensure_eq!(
+        h.js(
+            "(function () { window.__copperLogs = []; return window.__copperLogs.length > 0; })()"
+        )
+        .await?,
+        json!(true)
+    );
+    // Without the user script: the Mac's lazy capture, unchanged.
+    h.clear_user_scripts();
+    h.load("console.html").await?;
+    ensure_eq!(h.run(&page::console()).await?, "[]");
+    Ok(())
+}
+
+/// Linux: on a page with `scroll-behavior: smooth`, `rect` scrolls the
+/// target into view at once, so the box it answers is where the element is
+/// and a click at its centre lands on it (QA W5 P1-3).
+async fn mcp_rect_on_smooth_scroll_page(h: &H) -> Res {
+    h.load("smooth.html").await?;
+    ensure_eq!(h.js("window.scrollY").await?, json!(0));
+    for day in ["d15", "d29", "d3"] {
+        let located = h.run(&page::rect(&css(&format!("#{day}")))).await?;
+        let rect = located
+            .into_result(&css(day))
+            .map_err(|e| format!("{day}: {e}"))?;
+        let (x, y) = rect.center();
+        let hit = h
+            .js(&format!(
+                "(function () {{ var e = document.elementFromPoint({x}, {y}); return e ? e.id : null; }})()"
+            ))
+            .await?;
+        ensure!(
+            hit == json!(day),
+            "{day}: centre ({x}, {y}) hits {hit} (scrollY {})",
+            h.js("window.scrollY").await?
+        );
+        // Nothing still animating: the box is the same a beat later.
+        sleep(250).await;
+        let again = h
+            .run(&page::rect(&css(&format!("#{day}"))))
+            .await?
+            .into_result(&css(day))?;
+        ensure_eq!(again, rect);
+    }
+    // The DOM click path (no real input) picks the same cell.
+    ensure_eq!(
+        h.run(&page::click(&css("#d22"), false, "left")).await?,
+        "ok"
+    );
+    ensure_eq!(h.js("window.picked").await?, json!(22));
     Ok(())
 }
 

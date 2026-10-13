@@ -32,6 +32,10 @@ pub fn run(opts: Options) -> ExitCode {
         flags |= gio::ApplicationFlags::NON_UNIQUE;
     }
     let app = adw::Application::new(Some(crate::APP_ID), flags);
+    // Logging out of a desktop that speaks the session protocol asks the app
+    // to quit, which runs `shutdown` (and the session is written).
+    app.set_register_session(true);
+    app.connect_startup(|_| quit_on_signals());
     app.connect_command_line(|app, cmd| {
         let args: Vec<String> = cmd
             .arguments()
@@ -94,6 +98,63 @@ fn activate(app: &adw::Application, opts: Options) {
     {
         crate::palette::p_focus(&p);
     }
+}
+
+// GLib's Unix signal source (glib-rs 0.22 moved its wrapper to the
+// `glib-unix` crate; the function is in libglib, already linked).
+#[link(name = "glib-2.0")]
+unsafe extern "C" {
+    fn g_unix_signal_add_full(
+        priority: i32,
+        signum: i32,
+        handler: glib::ffi::GSourceFunc,
+        user_data: glib::ffi::gpointer,
+        notify: glib::ffi::GDestroyNotify,
+    ) -> u32;
+}
+
+const SIGHUP: i32 = 1;
+const SIGINT: i32 = 2;
+const SIGTERM: i32 = 15;
+
+/// How many quit signals have arrived.
+static SIGNALS: AtomicI32 = AtomicI32::new(0);
+
+/// SIGTERM (logout, shutdown, `systemctl --user stop`, `kill`), SIGINT
+/// (Ctrl+C in a terminal) and SIGHUP (the terminal went away) quit the way
+/// Quit does: the main loop stops, `shutdown` writes the session, history
+/// and settings, then the process exits. Without this a tab closed in the
+/// last half second (the saver's debounce) came back after a logout. A
+/// second signal while that is under way exits at once.
+fn quit_on_signals() {
+    for signum in [SIGHUP, SIGINT, SIGTERM] {
+        // SAFETY: GLib owns the source on the default main context; the
+        // callback is a plain function and its data is the signal number
+        // carried in the pointer (never dereferenced).
+        unsafe {
+            g_unix_signal_add_full(
+                glib::ffi::G_PRIORITY_HIGH,
+                signum,
+                Some(on_signal),
+                signum as usize as glib::ffi::gpointer,
+                None,
+            );
+        }
+    }
+}
+
+unsafe extern "C" fn on_signal(data: glib::ffi::gpointer) -> glib::ffi::gboolean {
+    let signum = data as usize as i32;
+    if SIGNALS.fetch_add(1, Ordering::SeqCst) > 0 {
+        eprintln!("copper: signal {signum} again, exiting now");
+        std::process::exit(128 + signum);
+    }
+    tracing::info!(signal = signum, "quitting on signal");
+    match gio::Application::default() {
+        Some(app) => app.quit(),
+        None => std::process::exit(128 + signum),
+    }
+    glib::ffi::GTRUE
 }
 
 /// An argument that is already a whole address (`data:` with spaces

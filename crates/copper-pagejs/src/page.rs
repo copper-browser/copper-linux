@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::call::Call;
+use crate::call::{Call, UserScript};
 use crate::script::Script;
 
 /// What a page tool acts on: `ref:e12` (from a snapshot) or `css:…`.
@@ -195,6 +195,14 @@ pub fn text(target: Option<&Locator>) -> Call<String> {
 /// `browser_console_messages`: a JSON string (rendered as is); see [`parse_console`].
 pub fn console() -> Call<String> {
     Call::new(Script::Console, json!({}))
+}
+
+/// The console capture as a document-start user script (page world, main
+/// frame): install it on every page agents may read, and
+/// [`console`] includes what was logged before the first page-tool call.
+/// The entries and their text are the helper's own.
+pub fn console_early() -> UserScript {
+    UserScript::new(Script::ConsoleEarly, json!({}))
 }
 
 /// `browser_find`.

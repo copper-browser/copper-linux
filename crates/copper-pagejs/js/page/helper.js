@@ -3,7 +3,11 @@
 function () {
   if (window.__copper) return true;
   var refs = new Map(), byRef = new Map(), next = 1;
-  var logs = [];
+  // Linux: page/console_early.js may have been capturing since the document
+  // started; keep its log rather than hooking console a second time.
+  var logs = Array.isArray(window.__copperLogs) ? window.__copperLogs : null;
+  if (!logs) {
+  logs = [];
   ['log', 'warn', 'error', 'info'].forEach(function (level) {
     var original = console[level];
     console[level] = function () {
@@ -12,6 +16,7 @@ function () {
     };
   });
   window.addEventListener('error', function (e) { logs.push({ level: 'error', text: String(e.message) }); });
+  }
 
   function ref(el) {
     var r = refs.get(el);
@@ -152,7 +157,10 @@ function () {
   function rect(spec) {
     var el = find(spec);
     if (!el) return { error: 'no element for ' + spec };
-    if (el.scrollIntoView) el.scrollIntoView({ block: 'center', inline: 'center' });
+    // Linux: behavior 'instant'. The default ('auto') follows CSS
+    // scroll-behavior, so on a smooth-scrolling page the box below was read
+    // before the scroll ran and the click landed where the element used to be.
+    if (el.scrollIntoView) el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
     var r = el.getBoundingClientRect();
     // A tiny or offscreen box means a wrapper; the first sized child is the thing.
     if ((r.width < 2 || r.height < 2) && el.firstElementChild) r = el.firstElementChild.getBoundingClientRect();
@@ -220,7 +228,7 @@ function () {
   function click(spec, dbl, button) {
     var el = find(spec);
     if (!el) return 'no element for ' + spec;
-    el.scrollIntoView && el.scrollIntoView({ block: 'center' });
+    el.scrollIntoView && el.scrollIntoView({ block: 'center', behavior: 'instant' });
     el.focus && el.focus();
     var b = button === 'right' ? 2 : button === 'middle' ? 1 : 0;
     var r = el.getBoundingClientRect(), init = { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, button: b, buttons: 1 << b };

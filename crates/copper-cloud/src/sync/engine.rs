@@ -20,6 +20,11 @@
 //! What is kept: the switches and history cursors in `cloud.json` (`sync`),
 //! the bases, the `remote` history places and the canvas switch in
 //! `cloud-sync.json` (0600) — the same files, the same shapes, as the Mac.
+//! Each kept tab also carries its key in the spaces document on the tab
+//! itself (the app: its `session.json` entry), so it is the same entry across
+//! launches wherever it was restored — a kept tab's synced address is the one
+//! it had when it first synced; neither a redirect nor browsing inside it
+//! ever replaces it.
 
 use super::adapter::{BrowserState, LiveKept};
 use super::delete::{self, Here, Outcome, Selector};
@@ -1214,10 +1219,24 @@ impl SyncEngine {
             .collect()
     }
 
+    /// At launch, before any page has loaded: give every restored kept tab
+    /// its key in the last spaces document synced — matched by the address it
+    /// was restored with — and keep that key on the tab. From then on a
+    /// redirect when it wakes, or browsing inside it, never makes it a
+    /// different entry, in this run or the next. Local only: nothing is sent,
+    /// and it runs whether or not spaces sync is on (so turning it back on
+    /// later finds every tab still keyed).
+    pub fn remember_kept_tabs(&self) {
+        if let Some(base) = self.base::<SpacesDoc>(Domain::Spaces.as_str()) {
+            self.build_spaces(Some(&base));
+        }
+    }
+
     /// This device's spaces document. `base` is the last one synced: a tab it
     /// already had keeps that entry's key, address and title (so browsing
     /// inside a pinned tab doesn't send a new copy of every space on every
-    /// click).
+    /// click). Every tab's key is kept on the tab ([`BrowserState::keep_keys`]),
+    /// so that holds across launches too.
     fn build_spaces(&self, base: Option<&SpacesDoc>) -> SpacesDoc {
         let list = self.live_kept();
         let base_by: HashMap<&str, &KeptTab> = base
@@ -1226,18 +1245,38 @@ impl SyncEngine {
         let known = self.with(|s| s.tab_keys.clone());
         let mut used: HashSet<String> = HashSet::new();
         let mut key_for: HashMap<String, String> = HashMap::new();
-        // 1. Keys this run already knows, while they still describe the tab.
-        for item in &list {
-            if let Some(key) = known.get(&item.tab_id)
-                && !used.contains(key)
-                && key.starts_with(&format!(
-                    "{}|{}|",
-                    item.space.to_lowercase(),
-                    if item.pinned { "pin" } else { "saved" }
-                ))
-            {
-                key_for.insert(item.tab_id.clone(), key.clone());
-                used.insert(key.clone());
+        // 1. Keys this run already knows, then the key a tab carries from an
+        // earlier run while the base still has it — each while it still
+        // describes the tab: same space and section. A kept tab that wandered
+        // off to another site (a redirect when it woke, browsing) is still
+        // the same entry; one moved to another space or section is not.
+        let carried = |item: &LiveKept| {
+            item.key
+                .as_ref()
+                .filter(|k| base_by.contains_key(k.as_str()))
+                .cloned()
+        };
+        for from_this_run in [true, false] {
+            for item in &list {
+                if key_for.contains_key(&item.tab_id) {
+                    continue;
+                }
+                let key = if from_this_run {
+                    known.get(&item.tab_id).cloned()
+                } else {
+                    carried(item)
+                };
+                if let Some(key) = key
+                    && !used.contains(&key)
+                    && key.starts_with(&format!(
+                        "{}|{}|",
+                        item.space.to_lowercase(),
+                        if item.pinned { "pin" } else { "saved" }
+                    ))
+                {
+                    key_for.insert(item.tab_id.clone(), key.clone());
+                    used.insert(key);
+                }
             }
         }
         // 2. The base's entries: same address first, then same site.
@@ -1275,6 +1314,16 @@ impl SyncEngine {
             used.insert(key);
         }
         self.with(|s| s.tab_keys = key_for.clone());
+        let changed: Vec<(String, String)> = list
+            .iter()
+            .filter_map(|item| {
+                let key = key_for.get(&item.tab_id)?;
+                (item.key.as_ref() != Some(key)).then(|| (item.tab_id.clone(), key.clone()))
+            })
+            .collect();
+        if !changed.is_empty() {
+            self.inner.browser.keep_keys(&changed);
+        }
         let mut tabs: Vec<KeptTab> = list
             .iter()
             .filter_map(|item| {
@@ -1363,7 +1412,11 @@ impl SyncEngine {
                 browser.close_kept(tab);
             }
         }
-        // Kept tabs new in the document: open them, asleep.
+        // Kept tabs new in the document: open them, asleep, each with its
+        // entry's key — kept on the tab at once, so even one that redirects
+        // the first time it wakes (and is quit before anything else syncs)
+        // comes back as the same entry.
+        let mut opened: Vec<(String, String)> = vec![];
         for entry in &doc.tabs {
             if local_keys.contains(&entry.key) {
                 continue;
@@ -1383,8 +1436,12 @@ impl SyncEngine {
             if let Some(tab) =
                 browser.open_kept(&entry.url, &entry.title, pin.as_deref(), &entry.space)
             {
-                self.with(|s| s.tab_keys.insert(tab, entry.key.clone()));
+                self.with(|s| s.tab_keys.insert(tab.clone(), entry.key.clone()));
+                opened.push((tab, entry.key.clone()));
             }
+        }
+        if !opened.is_empty() {
+            browser.keep_keys(&opened);
         }
         // Spaces gone from the document, last.
         if !doc.spaces.is_empty() {
@@ -2109,5 +2166,339 @@ mod tests {
             assert_eq!(Domain::parse(d.as_str()), Some(d));
         }
         assert_eq!(Domain::parse("tabs:abc"), None);
+    }
+
+    // MARK: kept-tab keys across launches
+
+    use crate::sync::adapter::{MemoryBrowser, MemoryState};
+    use copper_core::session::Space;
+    use copper_core::{Paths, Store};
+
+    const HOME: &str = "A0000000-0000-4000-8000-00000000000A";
+    const WORK: &str = "A0000000-0000-4000-8000-0000000000AB";
+    const KEPT_AT: &str = "http://127.0.0.1:8080/r";
+    const LANDED: &str = "http://localhost:8080/landed?from=r";
+
+    fn store(dir: &std::path::Path) -> Store {
+        Store::new(Paths {
+            data: dir.join("data"),
+            config: dir.join("config"),
+        })
+    }
+
+    fn space(id: &str, name: &str) -> Space {
+        Space {
+            id: id.into(),
+            name: name.into(),
+            ..Default::default()
+        }
+    }
+
+    fn tab(id: &str, space: &str, url: &str, pin: Option<&str>, key: Option<&str>) -> LiveKept {
+        LiveKept {
+            tab_id: id.into(),
+            key: key.map(str::to_string),
+            space: space.into(),
+            pinned: pin.is_some(),
+            url: url.into(),
+            title: format!("Title of {url}"),
+            pin: pin.map(str::to_string),
+        }
+    }
+
+    fn browser(kept: Vec<LiveKept>) -> Arc<MemoryBrowser> {
+        Arc::new(MemoryBrowser::new(MemoryState {
+            spaces: vec![space(HOME, "Home"), space(WORK, "Work")],
+            kept,
+            ..Default::default()
+        }))
+    }
+
+    /// A launch: a fresh engine over the same files (the bases in
+    /// `cloud-sync.json`), nothing remembered in memory.
+    fn launch(dir: &std::path::Path, b: &Arc<MemoryBrowser>) -> SyncEngine {
+        let client = CloudClient::open(store(dir)).unwrap();
+        SyncEngine::new(client, b.clone())
+    }
+
+    /// What a PUT that was answered with `version` leaves behind.
+    fn synced(e: &SyncEngine, version: i64, doc: &SpacesDoc) {
+        e.set_base("spaces", Some(SyncBase::from_doc(version, doc).unwrap()));
+    }
+
+    fn base(e: &SyncEngine) -> SpacesDoc {
+        e.base::<SpacesDoc>("spaces").expect("a spaces base")
+    }
+
+    fn build(e: &SyncEngine) -> SpacesDoc {
+        let b = e.base::<SpacesDoc>("spaces");
+        e.build_spaces(b.as_ref()).normalized()
+    }
+
+    fn keys(b: &MemoryBrowser) -> Vec<(String, Option<String>)> {
+        b.snapshot()
+            .kept
+            .iter()
+            .map(|t| (t.tab_id.clone(), t.key.clone()))
+            .collect()
+    }
+
+    /// The tabs as the next launch restores them: new ids, the address each
+    /// had at the quit, and whatever key each carried.
+    fn relaunched(b: &MemoryBrowser, run: u32) -> Arc<MemoryBrowser> {
+        let mut kept = b.snapshot().kept;
+        for t in &mut kept {
+            t.tab_id = format!("{}@run{run}", t.tab_id);
+        }
+        browser(kept)
+    }
+
+    #[test]
+    fn a_kept_tab_redirected_after_a_relaunch_stays_the_same_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        // Run 1: a Saved tab is kept at /r and synced.
+        let b1 = browser(vec![tab("t1", HOME, KEPT_AT, None, None)]);
+        let e1 = launch(dir.path(), &b1);
+        let doc = e1.build_spaces(None).normalized();
+        assert_eq!(doc.tabs.len(), 1);
+        let key = doc.tabs[0].key.clone();
+        assert_eq!(doc.tabs[0].url, KEPT_AT);
+        synced(&e1, 1, &doc);
+        // The key is kept on the tab (its session entry).
+        assert_eq!(keys(&b1), vec![("t1".into(), Some(key.clone()))]);
+        // It wakes and redirects to another host: this run already knew.
+        b1.edit(|s| s.kept[0].url = LANDED.into());
+        assert_eq!(build(&e1), doc);
+        drop(e1);
+
+        // Run 2: restored at the address it was quit at (the redirect's), and
+        // it redirects again. The document doesn't change: nothing to push.
+        let b2 = relaunched(&b1, 2);
+        assert_eq!(b2.snapshot().kept[0].url, LANDED);
+        let e2 = launch(dir.path(), &b2);
+        assert_eq!(base(&e2), doc);
+        assert_eq!(build(&e2), doc, "the redirect replaced the kept tab");
+        // Run 3: the same again.
+        let b3 = relaunched(&b2, 3);
+        let e3 = launch(dir.path(), &b3);
+        assert_eq!(build(&e3), doc);
+
+        // Without the key the tab carries (a build from before this fix), the
+        // same relaunch made it a new entry and dropped the one at /r — what
+        // every other device then closed.
+        let bare = relaunched(&b1, 4);
+        bare.edit(|s| s.kept[0].key = None);
+        let e4 = launch(dir.path(), &bare);
+        let lost = build(&e4);
+        assert!(!lost.tabs.iter().any(|t| t.key == key), "{lost:?}");
+        assert!(lost.tabs.iter().any(|t| t.url == LANDED));
+    }
+
+    #[test]
+    fn remember_kept_tabs_keys_restored_tabs_before_they_load() {
+        let dir = tempfile::tempdir().unwrap();
+        // The last document synced has a Saved tab another device made (any
+        // key shape) and a pin; this device restores both, never keyed (a
+        // session written before keys were kept, or with spaces sync off).
+        let theirs = "a0000000-0000-4000-8000-00000000000a|saved|127.0.0.1|from-the-mac";
+        let doc = SpacesDoc {
+            v: 1,
+            spaces: vec![space(HOME, "Home"), space(WORK, "Work")],
+            tabs: vec![
+                KeptTab {
+                    key: theirs.into(),
+                    space: HOME.into(),
+                    url: KEPT_AT.into(),
+                    title: "Hyper-V".into(),
+                    pinned: false,
+                    pin: None,
+                    extra: Default::default(),
+                },
+                KeptTab {
+                    key: "a0000000-0000-4000-8000-00000000000a|pin|mail.test|https://mail.test/"
+                        .into(),
+                    space: HOME.into(),
+                    url: "https://mail.test/".into(),
+                    title: "Mail".into(),
+                    pinned: true,
+                    pin: Some("M".into()),
+                    extra: Default::default(),
+                },
+            ],
+            extra: Default::default(),
+        };
+        let mut doc = doc;
+        doc.tabs.sort_by(|a, b| a.key.cmp(&b.key));
+        {
+            let e = launch(dir.path(), &browser(vec![]));
+            synced(&e, 17, &doc);
+        }
+        let b1 = browser(vec![
+            tab("pin", HOME, "https://mail.test/", Some("M"), None),
+            tab("hv", HOME, KEPT_AT, None, None),
+        ]);
+        let e1 = launch(dir.path(), &b1);
+        // Spaces sync is off and nobody is signed in: still keyed, locally.
+        assert!(!e1.syncs(Domain::Spaces));
+        e1.remember_kept_tabs();
+        let carried: BTreeMap<String, Option<String>> = keys(&b1).into_iter().collect();
+        assert_eq!(carried["hv"].as_deref(), Some(theirs));
+        assert_eq!(
+            carried["pin"].as_deref(),
+            Some("a0000000-0000-4000-8000-00000000000a|pin|mail.test|https://mail.test/")
+        );
+        // Then it wakes and redirects, and the next launch restores it there.
+        b1.edit(|s| s.kept[1].url = LANDED.into());
+        assert_eq!(build(&e1), doc);
+        let b2 = relaunched(&b1, 2);
+        let e2 = launch(dir.path(), &b2);
+        e2.remember_kept_tabs();
+        assert_eq!(build(&e2), doc);
+
+        // No base: nothing to match, nothing written.
+        let empty = tempfile::tempdir().unwrap();
+        let b3 = browser(vec![tab("x", HOME, KEPT_AT, None, None)]);
+        launch(empty.path(), &b3).remember_kept_tabs();
+        assert_eq!(keys(&b3), vec![("x".into(), None)]);
+    }
+
+    #[test]
+    fn a_user_navigation_keeps_the_entry_and_later_edits_still_sync() {
+        let dir = tempfile::tempdir().unwrap();
+        let b1 = browser(vec![
+            tab(
+                "mail",
+                HOME,
+                "https://mail.example.com/inbox",
+                Some("M"),
+                None,
+            ),
+            tab("docs", WORK, "https://docs.example.com/", None, None),
+        ]);
+        let e1 = launch(dir.path(), &b1);
+        let doc = e1.build_spaces(None).normalized();
+        synced(&e1, 1, &doc);
+        let mail = doc.tabs.iter().find(|t| t.pinned).unwrap().clone();
+        // The person browses inside the pin, off to another site, and quits.
+        b1.edit(|s| s.kept[0].url = "https://news.example.org/today".into());
+        assert_eq!(build(&e1), doc, "browsing inside a pin resends nothing");
+        // Next launch: restored there; still the same pin, at the address it
+        // was kept with (the Mac's rule: the one it had when it first synced).
+        let b2 = relaunched(&b1, 2);
+        let e2 = launch(dir.path(), &b2);
+        let now = build(&e2);
+        assert_eq!(now, doc);
+        assert_eq!(
+            now.tabs.iter().find(|t| t.pinned).unwrap().url,
+            "https://mail.example.com/inbox"
+        );
+
+        // What the person does to that tab still syncs, as itself.
+        // Closing it removes its entry (and only it).
+        b2.edit(|s| s.kept.retain(|t| !t.tab_id.starts_with("mail")));
+        let closed = build(&e2);
+        assert!(!closed.tabs.iter().any(|t| t.key == mail.key));
+        assert_eq!(closed.tabs.len(), 1);
+        let after = merge::spaces(Some(&doc), &closed, &doc);
+        assert!(!after.tabs.iter().any(|t| t.key == mail.key));
+        synced(&e2, 2, &closed);
+
+        // Moving the Saved tab to another space moves its entry there.
+        let b3 = relaunched(&b2, 3);
+        b3.edit(|s| {
+            s.kept[0].space = HOME.into();
+            s.kept[0].url = "https://elsewhere.example.net/".into();
+        });
+        let e3 = launch(dir.path(), &b3);
+        let moved = build(&e3);
+        assert_eq!(moved.tabs.len(), 1);
+        assert_eq!(moved.tabs[0].space, HOME);
+        assert!(moved.tabs[0].key.starts_with(&HOME.to_lowercase()));
+        assert_ne!(moved.tabs[0].key, closed.tabs[0].key);
+        // …and the new key is the one the tab carries from now on.
+        assert_eq!(b3.snapshot().kept[0].key.as_ref(), Some(&moved.tabs[0].key));
+
+        // A tab kept anew is a new entry, at the address it has now.
+        b3.edit(|s| {
+            s.kept
+                .push(tab("new", WORK, "https://new.example.com/a", None, None))
+        });
+        let added = build(&e3);
+        assert!(
+            added
+                .tabs
+                .iter()
+                .any(|t| t.url == "https://new.example.com/a" && t.space == WORK)
+        );
+    }
+
+    #[test]
+    fn a_carried_key_is_only_used_while_the_base_has_it_and_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let b1 = browser(vec![tab("a", HOME, KEPT_AT, None, None)]);
+        let e1 = launch(dir.path(), &b1);
+        let doc = e1.build_spaces(None).normalized();
+        synced(&e1, 1, &doc);
+        let key = doc.tabs[0].key.clone();
+        // A key the base no longer has (stale) is not used: the address is.
+        let b2 = browser(vec![tab(
+            "a2",
+            HOME,
+            KEPT_AT,
+            None,
+            Some("a0000000-0000-4000-8000-00000000000a|saved|gone|x"),
+        )]);
+        let e2 = launch(dir.path(), &b2);
+        assert_eq!(build(&e2), doc);
+        assert_eq!(b2.snapshot().kept[0].key.as_ref(), Some(&key));
+        // Two tabs carrying one key (a copy of the tab): one keeps it, the
+        // other is a new entry with a key of its own.
+        let b3 = browser(vec![
+            tab("x", HOME, LANDED, None, Some(&key)),
+            tab("y", HOME, LANDED, None, Some(&key)),
+        ]);
+        let e3 = launch(dir.path(), &b3);
+        let two = build(&e3);
+        assert_eq!(two.tabs.len(), 2);
+        assert!(two.tabs.iter().any(|t| t.key == key && t.url == KEPT_AT));
+        let carried: BTreeSet<Option<String>> =
+            b3.snapshot().kept.into_iter().map(|t| t.key).collect();
+        assert_eq!(carried.len(), 2, "{carried:?}");
+    }
+
+    #[test]
+    fn tabs_opened_for_another_devices_entries_carry_its_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let b = browser(vec![]);
+        let e = launch(dir.path(), &b);
+        let before = SpacesDoc {
+            v: 1,
+            spaces: vec![space(HOME, "Home"), space(WORK, "Work")],
+            tabs: vec![],
+            extra: Default::default(),
+        };
+        synced(&e, 1, &before);
+        let key = "a0000000-0000-4000-8000-00000000000a|saved|127.0.0.1|made-elsewhere";
+        let mut doc = before.clone();
+        doc.tabs.push(KeptTab {
+            key: key.into(),
+            space: HOME.into(),
+            url: KEPT_AT.into(),
+            title: "Kept elsewhere".into(),
+            pinned: false,
+            pin: None,
+            extra: Default::default(),
+        });
+        e.apply_spaces(&doc, Some(&before));
+        let opened = b.snapshot().kept;
+        assert_eq!(opened.len(), 1);
+        assert_eq!(opened[0].url, KEPT_AT);
+        assert_eq!(opened[0].key.as_deref(), Some(key));
+        synced(&e, 2, &doc);
+        // Woken, redirected, quit before anything else synced: the same entry.
+        b.edit(|s| s.kept[0].url = LANDED.into());
+        let next = relaunched(&b, 2);
+        let e2 = launch(dir.path(), &next);
+        assert_eq!(build(&e2), doc);
     }
 }

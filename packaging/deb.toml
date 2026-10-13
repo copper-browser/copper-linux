@@ -45,8 +45,27 @@ Rust on GTK 4, libadwaita and WebKitGTK 6.0."""
 # $auto = dpkg-shlibdeps on the binary (exact sonames and minimum versions);
 # the named libraries are listed too so the intent is readable in `apt show`.
 depends = "$auto, libwebkitgtk-6.0-4, libgtk-4-1, libadwaita-1-0 (>= 1.5), libsecret-1-0"
-recommends = "xdg-desktop-portal-gtk | xdg-desktop-portal-gnome | xdg-desktop-portal-kde"
-suggests = "gnome-keyring | kwalletmanager"
+# Recommends: what web video and audio need. libwebkitgtk-6.0-4 pulls in
+# only gstreamer1.0-plugins-base/-good/-gl, so without libav (FFmpeg: H.264,
+# AAC, HEVC, AV1) and plugins-bad (opusparse, h264parse: MSE) YouTube and
+# most sites' video fail. Measured on Ubuntu 24.04 (qa/REPORT-W5.md, P0-2).
+# apt installs Recommends by default; install.sh asks for them explicitly.
+recommends = """\
+gstreamer1.0-libav, \
+gstreamer1.0-plugins-bad, \
+gstreamer1.0-plugins-good, \
+gstreamer1.0-gl, \
+gstreamer1.0-pipewire | gstreamer1.0-pulseaudio | gstreamer1.0-alsa, \
+libgl1-mesa-dri, \
+xdg-desktop-portal-gtk | xdg-desktop-portal-gnome | xdg-desktop-portal-kde, \
+fonts-noto-color-emoji"""
+# Suggests: x264 and a52 (not needed to play), ICE for WebKit builds that
+# have WebRTC, a speech backend for speechSynthesis, a Secret Service.
+suggests = """\
+gstreamer1.0-plugins-ugly, \
+gstreamer1.0-nice, \
+speech-dispatcher, \
+gnome-keyring | kwalletmanager | keepassxc"""
 provides = "www-browser, gnome-www-browser"
 maintainer-scripts = "@ROOT@/packaging/debian/maintainer-scripts"
 # Written by build-deb.sh next to the rendered manifest (one entry, this version).

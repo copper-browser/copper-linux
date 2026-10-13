@@ -229,6 +229,103 @@ async fn rates(tab: &Tab) -> Result<(f64, String), String> {
     ))
 }
 
+/// A held page keeps at least this share of the machine's visible rAF rate.
+const HELD_SHARE: f64 = 0.8;
+/// What a held page manages with a 60 Hz display; reported, not required
+/// (software-rendered CI runners tick slower).
+const HELD_NOMINAL: f64 = 50.0;
+
+/// One rAF counter reading.
+struct Tick {
+    n: f64,
+    t: f64,
+    vis: String,
+}
+
+async fn tick(tab: &Tab, counter: &str) -> Result<Tick, String> {
+    let v = tab
+        .js(&format!(
+            "({{n: {counter}, t: performance.now(), vis: document.visibilityState}})"
+        ))
+        .await?;
+    Ok(Tick {
+        n: v["n"].as_f64().unwrap_or(0.0),
+        t: v["t"].as_f64().unwrap_or(0.0),
+        vis: v["vis"].as_str().unwrap_or("?").to_owned(),
+    })
+}
+
+fn per_sec(a: &Tick, b: &Tick) -> f64 {
+    let secs = (b.t - a.t) / 1000.0;
+    let per = if secs > 0.0 { (b.n - a.n) / secs } else { 0.0 };
+    (per * 10.0).round() / 10.0
+}
+
+/// The held page's rAF rate against the machine's own visible rate.
+struct Held {
+    held: f64,
+    /// The user's tab: a trivial page in a visible window, same two seconds.
+    visible: f64,
+    vis: String,
+    tries: u32,
+}
+
+impl Held {
+    fn ok(&self) -> bool {
+        self.vis == "visible"
+            && self.held > 0.0
+            && self.visible > 0.0
+            && self.held >= HELD_SHARE * self.visible
+    }
+
+    fn describe(&self) -> String {
+        let share = if self.visible > 0.0 {
+            format!("{:.0}%", 100.0 * self.held / self.visible)
+        } else {
+            "n/a".into()
+        };
+        let nominal = if self.held < HELD_NOMINAL {
+            format!(", below the nominal {HELD_NOMINAL}/s (informational)")
+        } else {
+            String::new()
+        };
+        format!(
+            "rAF {}/s ({}) vs visible {}/s = {share}, try {}{nominal}",
+            self.held, self.vis, self.visible, self.tries
+        )
+    }
+}
+
+/// Whether the held page ticks like a visible one on this machine: its rAF
+/// rate and the user's tab's over the same two seconds, up to three tries
+/// (a page just held may still be warming up). A throttled page (hidden, or
+/// never painted) runs at 0–1/s and fails every try.
+async fn held_rate(b: &Bench) -> Result<Held, String> {
+    let mut last = None;
+    for tries in 1..=3 {
+        let (a0, u0) = (
+            tick(&b.agent, "probe.raf").await?,
+            tick(&b.user, "uprobe.raf").await?,
+        );
+        sleep(2000).await;
+        let (a1, u1) = (
+            tick(&b.agent, "probe.raf").await?,
+            tick(&b.user, "uprobe.raf").await?,
+        );
+        let held = Held {
+            held: per_sec(&a0, &a1),
+            visible: per_sec(&u0, &u1),
+            vis: a1.vis,
+            tries,
+        };
+        if held.ok() {
+            return Ok(held);
+        }
+        last = Some(held);
+    }
+    Ok(last.expect("three tries"))
+}
+
 struct Shot {
     w: i32,
     h: i32,
@@ -419,19 +516,11 @@ async fn check_hold(ctx: &mut Ctx) -> Res {
 
 async fn check_raf(ctx: &mut Ctx) -> Res {
     let b = bench(ctx)?;
-    let (raf, vis) = rates(&b.agent).await?;
-    let (user_raf, _) = {
-        let q = "uprobe.raf";
-        let a = b.user.js(q).await?.as_f64().unwrap_or(0.0);
-        sleep(500).await;
-        let n = b.user.js(q).await?.as_f64().unwrap_or(0.0);
-        ((n - a) * 2.0, ())
-    };
-    ensure(raf >= 50.0 && vis == "visible", || {
-        format!("held page rAF {raf}/s, visibility {vis}")
-    })?;
+    let held = held_rate(b).await?;
+    ensure(held.ok(), || format!("held page {}", held.describe()))?;
     Ok(format!(
-        "held page rAF {raf}/s ({vis}); user's tab ~{user_raf}/s; {:?}",
+        "held page {}; {:?}",
+        held.describe(),
         b.backstage.status()
     ))
 }
@@ -700,13 +789,14 @@ async fn check_handoff(ctx: &mut Ctx) -> Res {
             && st.shown == 0,
         || format!("not taken back: {st:?}"),
     )?;
-    let (back_raf, vis) = rates(&b.agent).await?;
-    ensure(back_raf >= 50.0 && vis == "visible", || {
-        format!("back in the host: rAF {back_raf}/s {vis}")
+    let back = held_rate(b).await?;
+    ensure(back.ok(), || {
+        format!("back in the host: {}", back.describe())
     })?;
     let same = user_unchanged(b).await?;
     Ok(format!(
-        "shown: rAF {shown_raf}/s, live snapshot; taken back after the user left: rAF {back_raf}/s; {same}"
+        "shown: rAF {shown_raf}/s, live snapshot; taken back after the user left: {}; {same}",
+        back.describe()
     ))
 }
 
@@ -735,7 +825,7 @@ async fn check_stalled(ctx: &mut Ctx) -> Res {
     sleep(500).await;
     let in_stalled =
         ghost_of(&stalled).is_some_and(|g| b.agent.page.widget().parent().as_ref() == Some(&g));
-    let (raf, vis) = rates(&b.agent).await?;
+    let held = held_rate(b).await?;
     let st = b.backstage.status();
     // The window closes under the page: the backstage re-homes it in the
     // user's window.
@@ -748,20 +838,20 @@ async fn check_stalled(ctx: &mut Ctx) -> Res {
         in_stalled && home && after.mode == BackstageMode::InWindow && after.hosts == 1,
         || format!("moved to the stalled window {in_stalled}, re-homed {home}: {after:?}"),
     )?;
-    ensure(
-        raf >= 50.0 && vis == "visible" && st.nudges > nudges + 100,
-        || {
-            format!(
-                "stalled host: rAF {raf}/s {vis}, nudges {nudges} -> {}",
-                st.nudges
-            )
-        },
-    )?;
-    let (back, _) = rates(&b.agent).await?;
-    ensure(back >= 50.0, || format!("back home rAF {back}/s"))?;
+    ensure(held.ok() && st.nudges > nudges + 100, || {
+        format!(
+            "stalled host: {}, nudges {nudges} -> {}",
+            held.describe(),
+            st.nudges
+        )
+    })?;
+    let back = held_rate(b).await?;
+    ensure(back.ok(), || format!("back home {}", back.describe()))?;
     Ok(format!(
-        "in a window with a stalled frame clock: rAF {raf}/s, {} nudges; re-homed when that window closed: {back}/s",
-        st.nudges - nudges
+        "in a window with a stalled frame clock: {}, {} nudges; re-homed when that window closed: {}",
+        held.describe(),
+        st.nudges - nudges,
+        back.describe()
     ))
 }
 

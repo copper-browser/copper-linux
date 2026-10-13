@@ -77,6 +77,31 @@ impl Stage {
         panel.set_transition_duration(160);
         panel.set_child(Some(&panels));
         panel.set_reveal_child(false);
+        // Escape anywhere in a panel (its search field included) puts it away.
+        let keys = gtk::EventControllerKey::new();
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak = shell.downgrade();
+        keys.connect_key_pressed(move |_, key, _, state| {
+            let plain = !state.intersects(
+                gtk::gdk::ModifierType::CONTROL_MASK
+                    | gtk::gdk::ModifierType::ALT_MASK
+                    | gtk::gdk::ModifierType::SHIFT_MASK,
+            );
+            if key != gtk::gdk::Key::Escape || !plain {
+                return glib::Propagation::Proceed;
+            }
+            match weak.upgrade() {
+                Some(s) if s.ui().stage.panel_open() => {
+                    s.ui().stage.hide_panel();
+                    if let Some(p) = s.active_page() {
+                        crate::palette::p_focus(&p);
+                    }
+                    glib::Propagation::Stop
+                }
+                _ => glib::Propagation::Proceed,
+            }
+        });
+        panel.add_controller(keys);
 
         let widget = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         widget.set_vexpand(true);
@@ -205,6 +230,11 @@ impl Stage {
 
     pub fn hide_panel(&self) {
         self.panel.set_reveal_child(false);
+    }
+
+    /// A side panel is showing.
+    pub fn panel_open(&self) -> bool {
+        self.panel.reveals_child()
     }
 }
 

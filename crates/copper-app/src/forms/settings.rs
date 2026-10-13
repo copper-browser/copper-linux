@@ -279,6 +279,9 @@ fn refresh(ui: &Rc<Ui>) {
     let Some(v) = super::vault() else { return };
     let weak = Rc::downgrade(ui);
     glib::spawn_future_local(async move {
+        if !v.keyring_open() {
+            v.note_probe(super::vault::probe(true).await);
+        }
         let vv = v.clone();
         let logins = rt::run(async move {
             vv.refresh().await;
@@ -314,7 +317,17 @@ fn build_keyring(ui: &Rc<Ui>) {
             "emblem-ok-symbolic",
         ),
         Keyring::Unknown => ("Looking for the keyring…".to_string(), String::new(), "content-loading-symbolic"),
-        Keyring::Locked => (
+        Keyring::Closed { has_default: Some(false), .. } => (
+            "No keyring yet".to_string(),
+            "Copper keeps passwords in the Secret Service, which has no default keyring in this session. Set one up now, or Copper asks the first time you save a password.".to_string(),
+            "dialog-password-symbolic",
+        ),
+        Keyring::Closed { locked: false, .. } => (
+            "Saved in your login keyring".to_string(),
+            "Through the Secret Service (GNOME Keyring, KWallet or KeePassXC), opened when Copper first needs it".to_string(),
+            "emblem-ok-symbolic",
+        ),
+        Keyring::Locked | Keyring::Closed { locked: true, .. } => (
             "The keyring is locked".to_string(),
             "Unlock it from your desktop (it usually opens with your login), then try again".to_string(),
             "system-lock-screen-symbolic",
@@ -331,7 +344,29 @@ fn build_keyring(ui: &Rc<Ui>) {
         r.set_tooltip_text(Some(&first_line(why)));
     }
     r.add_prefix(&gtk::Image::from_icon_name(icon));
-    if !matches!(k, Keyring::Ready) {
+    // Opening the keyring may ask for a password (to create or unlock it):
+    // only ever on this click, never by just showing the page.
+    let open = match &k {
+        Keyring::Closed {
+            has_default: Some(false),
+            ..
+        } => Some("Set Up…"),
+        Keyring::Locked | Keyring::Closed { locked: true, .. } => Some("Unlock…"),
+        _ => None,
+    };
+    if let Some(label) = open {
+        let b = pill(label, false);
+        let weak = Rc::downgrade(ui);
+        b.connect_clicked(move |_| {
+            if let Some(ui) = weak.upgrade() {
+                act(&ui, |v| async move {
+                    v.store().await.map_err(|e| e.to_string())?;
+                    v.logins().await.map(|_| ())
+                });
+            }
+        });
+        r.add_suffix(&b);
+    } else if !matches!(k, Keyring::Ready | Keyring::Closed { .. }) {
         let again = pill("Try Again", false);
         let weak = Rc::downgrade(ui);
         again.connect_clicked(move |_| {

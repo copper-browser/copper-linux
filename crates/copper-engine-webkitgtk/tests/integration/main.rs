@@ -7,6 +7,7 @@
 //! a display (headless weston via `bin/dbx`).
 
 mod backstage;
+mod extras;
 mod server;
 
 use std::future::Future;
@@ -53,6 +54,9 @@ const CHECKS: &[&str] = &[
     "download-cancel",
     "hard-reload",
     "permission",
+    "capabilities",
+    "page-scripts",
+    "file-chooser",
     "crash",
     // T-002 / D-006: trusted input and the backstage.
     "self-check",
@@ -161,6 +165,18 @@ struct Ctx {
 }
 
 fn main() {
+    // The file-chooser check drives GTK's in-process dialog. With a desktop
+    // portal on the session bus (Ubuntu desktops, the devbox) GTK would show
+    // the portal's dialog in another process instead, so run without portals.
+    if std::env::var_os("GDK_DEBUG").is_none() {
+        let exe = std::env::current_exe().expect("own path");
+        let status = std::process::Command::new(exe)
+            .args(std::env::args_os().skip(1))
+            .env("GDK_DEBUG", "no-portals")
+            .status()
+            .expect("run without portals");
+        std::process::exit(status.code().unwrap_or(1));
+    }
     backstage::count_gtk_warnings();
     gtk4::init().expect("gtk init (is WAYLAND_DISPLAY/DISPLAY set?)");
     std::thread::spawn(|| {
@@ -269,6 +285,9 @@ fn run_check<'a>(ctx: &'a mut Ctx, name: &str) -> Pin<Box<dyn Future<Output = Re
         "download-cancel" => Box::pin(check_download_cancel(ctx)),
         "hard-reload" => Box::pin(check_hard_reload(ctx)),
         "permission" => Box::pin(check_permission(ctx)),
+        "capabilities" => Box::pin(extras::check_capabilities(ctx)),
+        "page-scripts" => Box::pin(extras::check_page_scripts(ctx)),
+        "file-chooser" => Box::pin(extras::check_file_chooser(ctx)),
         "crash" => Box::pin(check_crash(ctx)),
         other => backstage::run(ctx, other),
     }

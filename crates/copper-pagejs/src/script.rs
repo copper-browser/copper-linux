@@ -143,6 +143,9 @@ scripts! {
     FindText = "page/find_text.js", Call, Page, HELPER;
     /// The element behind a ref, for `browser_evaluate` with `ref`.
     Element = "page/element.js", Call, Page, HELPER;
+    /// The helper's console capture from document start (`window.__copperLogs`),
+    /// so `browser_console_messages` also has what the page logged while loading.
+    ConsoleEarly = "page/console_early.js", UserScript(DocumentStart, MainFrame), Page, None;
 
     // ---- Jev (Fork/MCP/Ultrafast.swift) ----
     /// `window.__jevFast`: observe, marker, check, resolve, selectAll, domClick, setValue, settle.

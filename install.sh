@@ -7,12 +7,19 @@
 # Debian and Ubuntu (with WebKitGTK 6.0 in apt: Ubuntu 24.04+, Debian 13+):
 # downloads the .deb for this machine from the latest GitHub release, checks
 # its SHA-256, and installs it with apt (sudo), which pulls in WebKitGTK, GTK 4
-# and libadwaita and loads Copper's AppArmor profile.
+# and libadwaita, the package's Recommends (the GStreamer codecs web video
+# needs, an audio sink, Mesa, a portal, an emoji font), and loads Copper's
+# AppArmor profile. It then says which of those it added.
 #
 # Everything else (Fedora, Arch, openSUSE, older Debian/Ubuntu): downloads the
 # .flatpak bundle, checks it, adds Flathub for this user if it is missing (the
-# GNOME runtime comes from there), and installs it for this user (no sudo,
-# unless flatpak itself has to be installed first).
+# GNOME runtime and its codecs-extra extension come from there), and installs
+# it for this user (no sudo, unless flatpak itself has to be installed first).
+#
+# Why the .deb where apt has WebKitGTK 6.0: the Flatpak's engine has no more
+# than the distribution's (no WebRTC, no EME in either), costs a ~1 GB runtime,
+# and reaches the keyring only through a portal. docs/engine.md has the
+# measurements.
 #
 # Re-running upgrades in place. x86_64 and aarch64 only.
 #
@@ -46,7 +53,7 @@ for arg in "$@"; do
 	--flatpak) METHOD=flatpak ;;
 	--dry-run) DRY=1 ;;
 	-h | --help)
-		sed -n '2,33p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'
+		sed -n '2,40p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'
 		exit 0
 		;;
 	*)
@@ -167,11 +174,91 @@ download() { # asset-name → path
 	echo "$TMP/$asset"
 }
 
+# — the .deb's Recommends: what web video and audio need (FFmpeg and
+# plugins-bad GStreamer codecs, an audio sink, Mesa, a portal, emoji). apt
+# installs Recommends by default; the install asks for them explicitly in
+# case apt.conf turned that off, then says what it added.
+
+pkg_installed() {
+	dpkg-query -W -f='${db:Status-Abbrev}' "$1" 2>/dev/null | grep -q '^ii'
+}
+has_candidate() {
+	cand=$(apt-cache policy "$1" 2>/dev/null | sed -n 's/^ *Candidate: *//p')
+	[ -n "$cand" ] && [ "$cand" != "(none)" ]
+}
+# One line per dependency group, alternatives separated by spaces.
+field_groups() { # deb field
+	dpkg-deb -f "$1" "$2" 2>/dev/null | tr '\n' ' ' | tr ',' '\n' |
+		sed -e 's/([^)]*)//g' -e 's/|/ /g' -e 's/^ *//' -e 's/ *$//' -e 's/  */ /g' | grep -v '^$' || true
+}
+# The installed alternative of a group, if any.
+group_have() {
+	for p in $1; do
+		if pkg_installed "$p"; then
+			echo "$p"
+			return 0
+		fi
+	done
+	return 1
+}
+satisfied() { # deb field → installed package per satisfied group
+	field_groups "$1" "$2" | while IFS= read -r g; do group_have "$g" || true; done
+}
+
 install_deb() {
 	[ "$debian_family" = 1 ] || command -v apt-get >/dev/null 2>&1 || die "--deb needs apt (Debian/Ubuntu)"
 	deb=$(download "copper_$DEB_ARCH.deb")
-	as_root apt-get install -y "$deb"
-	say "installed. Open Copper from your apps, or run: copper"
+	if [ "$DRY" = 1 ]; then
+		run $SUDO apt-get install -y -o APT::Install-Recommends=true "$deb"
+		say "would also install the package's Recommends (video and audio codecs, Mesa, a portal, emoji)"
+		return
+	fi
+	before=$(satisfied "$deb" Recommends | tr '\n' ' ')
+	as_root apt-get install -y -o APT::Install-Recommends=true "$deb"
+
+	# An upgrade can leave a newly added Recommends out; ask for it once.
+	missing=
+	field_groups "$deb" Recommends >"$TMP/groups"
+	while IFS= read -r g; do
+		group_have "$g" >/dev/null && continue
+		for p in $g; do
+			if has_candidate "$p"; then
+				missing="$missing $p"
+				break
+			fi
+		done
+	done <"$TMP/groups"
+	if [ -n "$missing" ]; then
+		# shellcheck disable=SC2086 # a list of package names
+		as_root apt-get install -y $missing || say "could not install:$missing"
+	fi
+
+	added=
+	present=
+	absent=
+	field_groups "$deb" Recommends >"$TMP/groups"
+	while IFS= read -r g; do
+		if have=$(group_have "$g"); then
+			case " $before " in
+			*" $have "*) present="$present $have" ;;
+			*) added="$added $have" ;;
+			esac
+		else
+			absent="$absent ${g%% *}"
+		fi
+	done <"$TMP/groups"
+	ver=$(dpkg-query -W -f='${Version}' copper 2>/dev/null || echo '?')
+	say "installed copper $ver"
+	[ -z "$added" ] || say "added for video, audio and graphics:$added"
+	[ -z "$present" ] || say "already here:$present"
+	[ -z "$absent" ] || say "not available from apt here:$absent (some video or sound may not play)"
+	extra=
+	field_groups "$deb" Suggests >"$TMP/groups"
+	while IFS= read -r g; do
+		group_have "$g" >/dev/null || extra="$extra ${g%% *}"
+	done <"$TMP/groups"
+	[ -z "$extra" ] || say "optional: sudo apt install$extra"
+	say "Open Copper from your apps, or run: copper"
 }
 
 install_flatpak_tool() {

@@ -141,8 +141,8 @@ pub trait Host: 'static {
     // -- tabs --------------------------------------------------------------
 
     /// Every tab in every window and space, once each. Those in the agent
-    /// window's row carry their `index`; that row is what `browser_tabs
-    /// list` prints, in index order.
+    /// window's row carry their `index`; `browser_tabs list` prints that row
+    /// in index order, then the rest (other spaces and windows) in this order.
     fn tabs(&self) -> Vec<TabInfo>;
 
     /// The tab on the user's screen in the agent window (`browser.active`).

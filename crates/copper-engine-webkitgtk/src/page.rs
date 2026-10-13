@@ -14,16 +14,16 @@ use copper_engine::{
 use glib::prelude::*;
 use webkit6::prelude::*;
 use webkit6::{
-    LoadEvent, NavigationPolicyDecision, NavigationType, NetworkError, PolicyDecisionType,
-    PolicyError, ResponsePolicyDecision, SnapshotOptions, UserContentInjectedFrames,
-    UserContentManager, UserScriptInjectionTime, UserStyleLevel, WebProcessTerminationReason,
-    WebView,
+    FileChooserRequest, LoadEvent, NavigationPolicyDecision, NavigationType, NetworkError,
+    PolicyDecisionType, PolicyError, ResponsePolicyDecision, SnapshotOptions,
+    UserContentInjectedFrames, UserContentManager, UserScriptInjectionTime, UserStyleLevel,
+    WebProcessTerminationReason, WebView,
 };
 
 use crate::ghost::GhostHost;
 use crate::hands::{Hands, OpenMenu, TrustedInput};
 use crate::profile::WebKitProfile;
-use crate::{WebKitContentFilter, backstage, convert};
+use crate::{WebKitContentFilter, backstage, caps, convert};
 
 /// Script that posts `console.*` calls to [`CONSOLE_HANDLER`].
 const CONSOLE_JS: &str = include_str!("console.js");
@@ -55,6 +55,77 @@ struct PageInner {
     handler_signals: RefCell<HashMap<String, glib::SignalHandlerId>>,
     /// Isolated worlds pinned for the page's lifetime (see `pin_world`).
     worlds: RefCell<std::collections::HashSet<String>>,
+    /// The engine's scripts for every page (kept for popups made from this one).
+    page_scripts: Rc<PageScripts>,
+}
+
+impl Drop for PageInner {
+    /// The tab is gone: so is any file chooser it had open.
+    fn drop(&mut self) {
+        self.shared.cancel_file_chooser();
+    }
+}
+
+/// Scripts every page of an engine gets (`Engine::add_page_script`): added
+/// to pages made later and to the pages already open.
+#[derive(Default)]
+pub(crate) struct PageScripts {
+    scripts: RefCell<Vec<(ScriptId, UserScript)>>,
+    pages: RefCell<Vec<Weak<PageInner>>>,
+}
+
+impl PageScripts {
+    pub(crate) fn add(&self, script: &UserScript) -> ScriptId {
+        let id = ScriptId(crate::next_id());
+        self.scripts.borrow_mut().push((id, script.clone()));
+        for page in self.live() {
+            page.add_script(id, script);
+        }
+        id
+    }
+
+    pub(crate) fn remove(&self, id: ScriptId) -> bool {
+        let found = {
+            let mut scripts = self.scripts.borrow_mut();
+            let before = scripts.len();
+            scripts.retain(|(i, _)| *i != id);
+            scripts.len() != before
+        };
+        if found {
+            for page in self.live() {
+                page.remove_script(id);
+            }
+        }
+        found
+    }
+
+    /// A new page: every script so far, and the ones added later.
+    fn attach(&self, page: &Rc<PageInner>) {
+        self.pages.borrow_mut().push(Rc::downgrade(page));
+        let scripts = self.scripts.borrow().clone();
+        for (id, script) in &scripts {
+            page.add_script(*id, script);
+        }
+    }
+
+    fn live(&self) -> Vec<Rc<PageInner>> {
+        let mut pages = self.pages.borrow_mut();
+        pages.retain(|w| w.strong_count() > 0);
+        pages.iter().filter_map(Weak::upgrade).collect()
+    }
+}
+
+/// A native file chooser open for a page.
+struct Chooser {
+    request: FileChooserRequest,
+    /// Closes the dialog.
+    cancel: gio::Cancellable,
+}
+
+thread_local! {
+    /// The page whose file chooser is open: one at a time in the whole app,
+    /// so a second request never stacks a dialog on the first.
+    static CHOOSING: RefCell<Weak<Shared>> = const { RefCell::new(Weak::new()) };
 }
 
 /// State shared with signal handlers. It never owns the view, so the view's
@@ -74,6 +145,8 @@ pub(crate) struct Shared {
     pub(crate) held: Cell<bool>,
     /// A `<select>` popup kept off screen while the page is backstage.
     menu: RefCell<Option<Rc<OpenMenu>>>,
+    /// The file chooser this page has open, if any.
+    chooser: RefCell<Option<Chooser>>,
 }
 
 impl Shared {
@@ -99,6 +172,105 @@ impl Shared {
         backstage::note_blocked();
         true
     }
+
+    /// Whether a file chooser is open for this page.
+    pub(crate) fn has_file_chooser(&self) -> bool {
+        self.chooser.borrow().is_some()
+    }
+
+    /// Close this page's file chooser, if it has one open, answering the page
+    /// "nothing chosen" (its input fires `cancel`). True if one was open.
+    pub(crate) fn cancel_file_chooser(&self) -> bool {
+        let Some(chooser) = self.chooser.borrow_mut().take() else {
+            return false;
+        };
+        CHOOSING.with(|c| {
+            let mut c = c.borrow_mut();
+            if std::ptr::eq(c.as_ptr(), self) {
+                *c = Weak::new();
+            }
+        });
+        chooser.cancel.cancel();
+        chooser.request.cancel();
+        true
+    }
+
+    /// `run-file-chooser` for a page someone can see: the system's file
+    /// dialog over the page's window, tied to the page — it closes (and the
+    /// page hears "cancelled") when the page navigates, crashes, leaves its
+    /// window or goes away, or gets Escape from an agent. One at a time:
+    /// while any page has one open, other requests are cancelled.
+    fn choose_files(self: &Rc<Self>, view: &WebView, request: &FileChooserRequest) {
+        let busy = CHOOSING.with(|c| c.borrow().upgrade().is_some_and(|s| s.has_file_chooser()));
+        // A page nobody can see (not mapped) gets no dialog either.
+        let window = view.root().and_downcast::<gtk4::Window>();
+        let Some(window) = window.filter(|_| !busy && view.is_mapped()) else {
+            tracing::debug!(busy, mapped = view.is_mapped(), "file chooser refused");
+            request.cancel();
+            return;
+        };
+        let multiple = request.selects_multiple();
+        let dialog = gtk4::FileDialog::new();
+        dialog.set_modal(true);
+        dialog.set_title(if multiple {
+            "Choose Files"
+        } else {
+            "Choose a File"
+        });
+        if let Some(accepted) = request.mime_types_filter() {
+            if accepted.name().is_none() {
+                accepted.set_name(Some("Accepted Files"));
+            }
+            let all = gtk4::FileFilter::new();
+            all.set_name(Some("All Files"));
+            all.add_pattern("*");
+            let filters = gio::ListStore::new::<gtk4::FileFilter>();
+            filters.append(&accepted);
+            filters.append(&all);
+            dialog.set_filters(Some(&filters));
+            dialog.set_default_filter(Some(&accepted));
+        }
+        let cancel = gio::Cancellable::new();
+        *self.chooser.borrow_mut() = Some(Chooser {
+            request: request.clone(),
+            cancel: cancel.clone(),
+        });
+        CHOOSING.with(|c| *c.borrow_mut() = Rc::downgrade(self));
+        let weak = Rc::downgrade(self);
+        let finish = move |paths: Vec<String>| {
+            let Some(sh) = weak.upgrade() else { return };
+            // Already closed from our side (navigation, tab gone, Escape).
+            let Some(chooser) = sh.chooser.borrow_mut().take() else {
+                return;
+            };
+            CHOOSING.with(|c| *c.borrow_mut() = Weak::new());
+            if paths.is_empty() {
+                chooser.request.cancel();
+            } else {
+                let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
+                chooser.request.select_files(&paths);
+            }
+        };
+        let path = |f: &gio::File| f.path().and_then(|p| p.to_str().map(str::to_owned));
+        if multiple {
+            dialog.open_multiple(Some(&window), Some(&cancel), move |r| {
+                let files = r
+                    .ok()
+                    .map(|list| {
+                        (0..list.n_items())
+                            .filter_map(|i| list.item(i).and_downcast::<gio::File>())
+                            .filter_map(|f| path(&f))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                finish(files);
+            });
+        } else {
+            dialog.open(Some(&window), Some(&cancel), move |r| {
+                finish(r.ok().and_then(|f| path(&f)).into_iter().collect());
+            });
+        }
+    }
 }
 
 impl WebKitPage {
@@ -106,6 +278,7 @@ impl WebKitPage {
         profile: &WebKitProfile,
         opts: &PageOptions,
         related: Option<&WebView>,
+        page_scripts: &Rc<PageScripts>,
     ) -> WebKitPage {
         let ucm = UserContentManager::new();
         let settings = webkit6::Settings::new();
@@ -114,6 +287,7 @@ impl WebKitPage {
         }
         settings.set_enable_developer_extras(opts.developer_extras);
         settings.set_javascript_can_open_windows_automatically(opts.allow_script_popups);
+        caps::enable(&settings);
 
         let builder = WebView::builder()
             .user_content_manager(&ucm)
@@ -140,6 +314,7 @@ impl WebKitPage {
             trusted: Cell::new(available),
             held: Cell::new(false),
             menu: RefCell::default(),
+            chooser: RefCell::default(),
         });
         profile.register_page(&view, Rc::downgrade(&shared.sink));
         let page = WebKitPage {
@@ -153,9 +328,11 @@ impl WebKitPage {
                 handlers: RefCell::default(),
                 handler_signals: RefCell::default(),
                 worlds: RefCell::default(),
+                page_scripts: page_scripts.clone(),
             }),
         };
         page.connect_signals();
+        page_scripts.attach(&page.inner);
         if opts.capture_console {
             page.register_handler(CONSOLE_HANDLER, None);
             page.add_user_script(
@@ -203,6 +380,18 @@ impl WebKitPage {
         &self.inner.shared
     }
 
+    /// Whether a file chooser this page opened is showing. At most one page
+    /// has one at a time; it closes when the page navigates, crashes, leaves
+    /// its window or is dropped, or on an agent's Escape (`input`).
+    pub fn has_file_chooser(&self) -> bool {
+        self.inner.shared.has_file_chooser()
+    }
+
+    /// Close the page's file chooser as if cancelled; true if one was open.
+    pub fn cancel_file_chooser(&self) -> bool {
+        self.inner.shared.cancel_file_chooser()
+    }
+
     fn sink(&self) -> &EventSink<PageEvent> {
         &self.inner.shared.sink
     }
@@ -243,9 +432,10 @@ impl WebKitPage {
                 LoadEvent::Started => LoadState::Started { url },
                 LoadEvent::Redirected => LoadState::Redirected { url },
                 LoadEvent::Committed => {
-                    // A new document: pending permission prompts are moot
-                    // (dropping a request denies it).
+                    // A new document: pending permission prompts and a file
+                    // chooser are moot (dropping a request denies it).
                     sh.permissions.borrow_mut().clear();
+                    sh.cancel_file_chooser();
                     LoadState::Committed { url }
                 }
                 LoadEvent::Finished => LoadState::Finished { url },
@@ -266,8 +456,18 @@ impl WebKitPage {
             false
         });
 
-        let s = sh.sink.clone();
+        // Taken out of its window (tab closed, moved): its file chooser goes.
+        let sh2 = Rc::downgrade(sh);
+        view.connect_unrealize(move |_| {
+            if let Some(sh) = sh2.upgrade() {
+                sh.cancel_file_chooser();
+            }
+        });
+
+        let sh2 = sh.clone();
         view.connect_web_process_terminated(move |_, reason| {
+            sh2.cancel_file_chooser();
+            let s = &sh2.sink;
             let reason = match reason {
                 WebProcessTerminationReason::ExceededMemoryLimit => {
                     CrashReason::ExceededMemoryLimit
@@ -420,13 +620,18 @@ impl WebKitPage {
             });
             sh.blocked("<select> popup")
         });
+        // A file input: refused for a held page nobody sees (no agent tool
+        // answers a chooser, as on the Mac), otherwise a dialog tied to the
+        // page (`Shared::choose_files`) instead of WebKit's own, which
+        // outlived its tab and stacked.
         let sh2 = sh.clone();
         view.connect_run_file_chooser(move |v, req| {
-            if !sh2.backstaged(v) {
-                return false;
+            if sh2.backstaged(v) {
+                req.cancel();
+                return sh2.blocked("file chooser");
             }
-            req.cancel();
-            sh2.blocked("file chooser")
+            sh2.choose_files(v, req);
+            true
         });
         let sh2 = sh.clone();
         view.connect_run_color_chooser(move |v, req| {
@@ -446,18 +651,8 @@ impl WebKitPage {
         });
     }
 
-    /// WebKit drops a named world once nothing references it, so state set
-    /// by one `eval` in `Isolated(name)` would be gone by the next. A message
-    /// handler registered in the world keeps it alive while the page lives.
     fn pin_world(&self, world: &World) {
-        let Some(name) = world.name() else { return };
-        if self.inner.worlds.borrow().contains(name) {
-            return;
-        }
-        self.inner
-            .ucm
-            .register_script_message_handler(WORLD_PIN, Some(name));
-        self.inner.worlds.borrow_mut().insert(name.to_owned());
+        self.inner.pin_world(world);
     }
 
     /// Register a message handler and make sure its name is routed to events.
@@ -496,6 +691,50 @@ impl WebKitPage {
             signals.insert(name.to_owned(), id);
         }
         true
+    }
+}
+
+impl PageInner {
+    /// WebKit drops a named world once nothing references it, so state set
+    /// by one `eval` in `Isolated(name)` would be gone by the next. A message
+    /// handler registered in the world keeps it alive while the page lives.
+    fn pin_world(&self, world: &World) {
+        let Some(name) = world.name() else { return };
+        if self.worlds.borrow().contains(name) {
+            return;
+        }
+        self.ucm
+            .register_script_message_handler(WORLD_PIN, Some(name));
+        self.worlds.borrow_mut().insert(name.to_owned());
+    }
+
+    fn add_script(&self, id: ScriptId, script: &UserScript) {
+        let frames = injected_frames(script.frames);
+        let time = match script.injection_time {
+            InjectionTime::DocumentStart => UserScriptInjectionTime::Start,
+            InjectionTime::DocumentEnd => UserScriptInjectionTime::End,
+        };
+        let allow: Vec<&str> = script.allow_list.iter().map(String::as_str).collect();
+        let block: Vec<&str> = script.block_list.iter().map(String::as_str).collect();
+        self.pin_world(&script.world);
+        let ws = match script.world.name() {
+            Some(w) => {
+                webkit6::UserScript::for_world(&script.source, frames, time, w, &allow, &block)
+            }
+            None => webkit6::UserScript::new(&script.source, frames, time, &allow, &block),
+        };
+        self.ucm.add_script(&ws);
+        self.scripts.borrow_mut().insert(id, ws);
+    }
+
+    fn remove_script(&self, id: ScriptId) -> bool {
+        match self.scripts.borrow_mut().remove(&id) {
+            Some(ws) => {
+                self.ucm.remove_script(&ws);
+                true
+            }
+            None => false,
+        }
     }
 }
 
@@ -667,34 +906,13 @@ impl PageView for WebKitPage {
     }
 
     fn add_user_script(&self, script: &UserScript) -> ScriptId {
-        let frames = injected_frames(script.frames);
-        let time = match script.injection_time {
-            InjectionTime::DocumentStart => UserScriptInjectionTime::Start,
-            InjectionTime::DocumentEnd => UserScriptInjectionTime::End,
-        };
-        let allow: Vec<&str> = script.allow_list.iter().map(String::as_str).collect();
-        let block: Vec<&str> = script.block_list.iter().map(String::as_str).collect();
-        self.pin_world(&script.world);
-        let ws = match script.world.name() {
-            Some(w) => {
-                webkit6::UserScript::for_world(&script.source, frames, time, w, &allow, &block)
-            }
-            None => webkit6::UserScript::new(&script.source, frames, time, &allow, &block),
-        };
-        self.inner.ucm.add_script(&ws);
         let id = ScriptId(crate::next_id());
-        self.inner.scripts.borrow_mut().insert(id, ws);
+        self.inner.add_script(id, script);
         id
     }
 
     fn remove_user_script(&self, id: ScriptId) -> bool {
-        match self.inner.scripts.borrow_mut().remove(&id) {
-            Some(ws) => {
-                self.inner.ucm.remove_script(&ws);
-                true
-            }
-            None => false,
-        }
+        self.inner.remove_script(id)
     }
 
     fn add_user_style_sheet(&self, sheet: &UserStyleSheet) -> StyleSheetId {
@@ -846,7 +1064,12 @@ impl PageView for WebKitPage {
     }
 
     fn new_related(&self, opts: PageOptions) -> WebKitPage {
-        WebKitPage::create(&self.inner.profile, &opts, Some(&self.inner.view))
+        WebKitPage::create(
+            &self.inner.profile,
+            &opts,
+            Some(&self.inner.view),
+            &self.inner.page_scripts,
+        )
     }
 
     fn set_new_window_handler(&self, handler: Option<NewWindowHandler<WebKitPage>>) {

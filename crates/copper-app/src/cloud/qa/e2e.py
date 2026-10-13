@@ -13,6 +13,10 @@ COPPER_CLOUD_BENCH set, and is driven through that socket: the real
 Settings › Cloud page is typed into and pressed, local edits go through the
 shell, and the other side is waited on until it shows them. Screenshots of
 both windows land in $OUT.
+
+`kept_across_relaunch` is the regression for a kept tab that redirects to
+another host when it wakes: B quits and launches again, and neither that nor
+browsing inside a kept tab may change the spaces document.
 """
 
 import http.server
@@ -34,6 +38,11 @@ WWW = f"http://127.0.0.1:{WWW_PORT}"
 
 failures = []
 
+# The redirect at /r: off until the kept tab has reached both devices, then a
+# 302 to another host name (127.0.0.1 -> localhost), as a site behind a
+# sign-in answers a tab that wakes without the session.
+ARMED = threading.Event()
+
 
 def check(ok, what):
     print(("PASS " if ok else "FAIL ") + what, flush=True)
@@ -49,6 +58,8 @@ def serve_pages():
         ("a1", "Pinned on A", "#c8743c"), ("a2", "Kept on A", "#a95a28"), ("a3", "Open on A", "#e2a06a"),
         ("b1", "Kept on B", "#3e63dd"), ("b3", "Open on B", "#12a594"), ("ahist", "Visited on A", "#888"),
         ("bhist", "Visited on B", "#888"), ("abm", "Bookmarked on A", "#888"), ("bbm", "Bookmarked on B", "#888"),
+        ("r", "Kept, redirects later", "#6e56cf"), ("landed", "Landed after a redirect", "#6e56cf"),
+        ("elsewhere", "Browsed to on B", "#6e56cf"),
     ]:
         with open(os.path.join(root, f"{name}.html"), "w") as f:
             f.write(f"<!doctype html><title>{title}</title><body style='font:20px system-ui;margin:3em;"
@@ -61,6 +72,17 @@ def serve_pages():
         def log_message(self, *a):
             pass
 
+        def do_GET(self):
+            if self.path.split("?")[0] == "/r":
+                if ARMED.is_set():
+                    self.send_response(302)
+                    self.send_header("Location", f"http://localhost:{WWW_PORT}/landed.html?from=r")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                self.path = "/r.html"
+            super().do_GET()
+
     socketserver.TCPServer.allow_reuse_address = True
     httpd = socketserver.ThreadingTCPServer(("127.0.0.1", WWW_PORT), Quiet)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -71,14 +93,19 @@ class Copper:
     def __init__(self, world):
         self.world = world
         home = os.path.expanduser("~")
+        self.data = os.path.join(home, ".local/share", f"copper-{world}")
         for base in (".local/share", ".config", ".cache"):
             shutil.rmtree(os.path.join(home, base, f"copper-{world}"), ignore_errors=True)
         self.sock_path = f"/tmp/cloudui-{world}.sock"
+        self.launch("w")
+
+    def launch(self, mode):
+        """Start the app in this world (never the default one: COPPER_WORLD is always set)."""
         if os.path.exists(self.sock_path):
             os.remove(self.sock_path)
-        env = dict(os.environ, COPPER_WORLD=world, COPPER_CLOUD_BENCH=self.sock_path,
+        env = dict(os.environ, COPPER_WORLD=self.world, COPPER_CLOUD_BENCH=self.sock_path,
                    COPPER_LOG=os.environ.get("COPPER_LOG", "warn,copper_app=info,copper_cloud=info"))
-        self.log = open(os.path.join(OUT, f"{world}.log"), "w")
+        self.log = open(os.path.join(OUT, f"{self.world}.log"), mode)
         self.proc = subprocess.Popen([BIN], env=env, stdout=self.log, stderr=subprocess.STDOUT)
         for _ in range(300):
             if os.path.exists(self.sock_path):
@@ -118,6 +145,23 @@ class Copper:
             self.proc.wait(timeout=15)
         except subprocess.TimeoutExpired:
             self.proc.kill()
+
+    def relaunch(self):
+        """Quit (the session is written on the way out) and start again, same world, same files."""
+        self.quit()
+        try:
+            self.s.close()
+        except Exception:
+            pass
+        self.log.close()
+        self.launch("a")
+
+    def session(self):
+        with open(os.path.join(self.data, "session.json")) as f:
+            return json.load(f)
+
+    def spaces_version(self):
+        return ((self("status").get("sync") or {}).get("versions") or {}).get("spaces")
 
 
 def text_of(answer):
@@ -177,6 +221,7 @@ def run(a, b):
     link_and_pair(a, b)
     if not ONLY_CANVAS:
         browser_sync(a, b)
+        kept_across_relaunch(a, b)
     canvas(a, b)
 
 
@@ -294,6 +339,66 @@ def browser_sync(a, b):
     t = r.get("text") or ""
     check('"deleted"' in t and '"what"' in t, "cloud_history_delete answers {deleted, …, what}")
 
+
+
+def kept_across_relaunch(a, b):
+    # ---- A kept tab that redirects to another host when it wakes, and browsing
+    # inside a kept tab, across a quit and launch of B: the spaces document
+    # stays as it was. What B then does to the tab still syncs.
+    r = f"{WWW}/r"
+    landed = f"http://localhost:{WWW_PORT}/landed.html"
+    elsewhere = f"http://localhost:{WWW_PORT}/elsewhere.html"
+    a("open", url=r, space="Work A", saved=True, foreground=False)
+    time.sleep(4)
+    a("sync-now")
+    b.wait("tab", r, 90)
+    b("sync-now")
+    a("sync-now")
+    v0 = a.spaces_version()
+    check(v0 is not None and b.spaces_version() == v0, f"A and B agree on spaces v{v0}")
+    keys = {k["url"]: k["key"] for k in b("kept")}
+    check(bool(keys.get(r)), "B keeps the key of the tab it got from A on the tab")
+
+    # Browsing: in B's copy of A's Saved a2 tab, the person goes to another site.
+    b("go", tab=f"{WWW}/a2.html", url=elsewhere)
+    b.wait("tab", elsewhere, 30)
+    # The redirect: B selects the kept tab; it wakes and lands on another host.
+    ARMED.set()
+    b("select", url=r)
+    b.wait("tab", landed, 30)
+    b.shot("09-kept-redirected")
+    time.sleep(4)
+    b("sync-now")
+    check(b.spaces_version() == v0, "a redirect and browsing in this run push no spaces")
+
+    # Quit and launch again: the selected tab is the redirected kept one.
+    b.relaunch()
+    b.wait("synced", "", 60)
+    b.wait("tab", landed, 30)
+    b("sync-now")
+    time.sleep(3)
+    b("sync-now")
+    entries = [e for e in (b.session().get("tabs") or []) + (b.session().get("pins") or [])]
+    carried = {e["url"].split("?")[0]: e.get("cloudKey") for e in entries}
+    check(carried.get(landed) == keys.get(r), "session.json: the redirected tab carries its key (cloudKey)")
+    check(carried.get(elsewhere) == keys.get(f"{WWW}/a2.html"), "session.json: the browsed tab carries its key")
+    check(b.spaces_version() == v0, f"after the relaunch B pushed no spaces (still v{v0})")
+    a("sync-now")
+    check(a.spaces_version() == v0, f"the cloud's spaces document is still v{v0}")
+    a_tabs = [t["url"] for t in a("state")["tabs"]]
+    check(r in a_tabs and f"{WWW}/a2.html" in a_tabs, "A keeps /r and a2 at their kept addresses")
+    check(not any(u.startswith("http://localhost:") for u in a_tabs), "nothing of the redirect or the browsing reached A")
+    b.shot("10-after-relaunch")
+
+    # What B does to the browsed tab still syncs as that tab: B closes it, A loses a2.
+    b("close", url=elsewhere)
+    time.sleep(4)
+    b("sync-now")
+    check(b.spaces_version() == v0 + 1, f"closing the tab pushed spaces v{v0 + 1}")
+    a.wait("no-tab", f"{WWW}/a2.html", 60)
+    a_tabs = [t["url"] for t in a("state")["tabs"]]
+    check(r in a_tabs, "A still has /r")
+    a.shot("17-kept-after-relaunch")
 
 
 def canvas(a, b):

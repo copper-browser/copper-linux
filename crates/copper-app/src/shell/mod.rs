@@ -12,6 +12,7 @@
 //! Main thread only (`Rc`); other threads reach it through
 //! [`crate::control::Control`].
 
+pub mod languages;
 pub mod pages;
 
 use crate::actions::Registry;
@@ -65,7 +66,10 @@ pub struct Inner {
     settings: RefCell<Settings>,
     pages: RefCell<HashMap<TabId, Rc<PageSlot>>>,
     favicons: RefCell<HashMap<TabId, gdk::Texture>>,
+    /// Kept icons read from disk, by their file under `favicons/`.
     host_icons: RefCell<HashMap<String, Option<gdk::Texture>>>,
+    /// Tab → the tab whose page opened it (popups, links to a new window).
+    openers: RefCell<HashMap<TabId, TabId>>,
     ui: OnceCell<Ui>,
     pub registry: RefCell<Registry>,
     pub hub: Hub,
@@ -138,6 +142,10 @@ impl Shell {
         let loaded = session::load(&store);
         let cache_dir = session::cache_dir(&store);
         let engine = WebKitEngine::new(session::engine_paths(&store, &loaded.settings));
+        // Before the first page: every web process takes the list it starts with.
+        let languages = languages::from_env();
+        tracing::debug!(?languages, "page languages");
+        copper_engine_webkitgtk::set_preferred_languages(&languages);
 
         let window = adw::ApplicationWindow::builder()
             .application(app)
@@ -161,6 +169,7 @@ impl Shell {
             pages: RefCell::default(),
             favicons: RefCell::default(),
             host_icons: RefCell::default(),
+            openers: RefCell::default(),
             ui: OnceCell::new(),
             registry: RefCell::new(Registry::default()),
             hub: Hub::default(),
@@ -548,7 +557,7 @@ impl Shell {
 
     /// Close a tab (a pin is put down instead).
     pub fn close(&self, id: &TabId) -> CloseOutcome {
-        let out = self.with_browser(|b| b.close_tab(id, false));
+        let out = self.close_tab(id, false);
         if let CloseOutcome::PutDown { .. } = out {
             self.drop_page(id);
         }
@@ -557,7 +566,44 @@ impl Shell {
 
     /// Close a tab for good, pin or not.
     pub fn close_force(&self, id: &TabId) -> CloseOutcome {
-        self.with_browser(|b| b.close_tab(id, true))
+        self.close_tab(id, true)
+    }
+
+    /// Remember that `opener`'s page opened tab `id`.
+    pub(crate) fn set_opener(&self, id: &TabId, opener: &TabId) {
+        if id != opener {
+            self.0
+                .openers
+                .borrow_mut()
+                .insert(id.clone(), opener.clone());
+        }
+    }
+
+    /// The still-open tab whose page opened `id`.
+    pub fn opener_of(&self, id: &TabId) -> Option<TabId> {
+        let opener = self.0.openers.borrow().get(id).cloned()?;
+        self.browser().tab(&opener).is_some().then_some(opener)
+    }
+
+    /// Close `id`. When it is the tab on screen and another tab opened it
+    /// (a sign-in popup closing itself once you are in, a link that opened
+    /// a new window), you land back on that tab rather than on whichever
+    /// neighbour the row would pick (Mac `webViewDidClose`).
+    fn close_tab(&self, id: &TabId, force: bool) -> CloseOutcome {
+        let back = self
+            .opener_of(id)
+            .filter(|_| self.active_id().as_ref() == Some(id));
+        self.with_browser(|b| {
+            let out = b.close_tab(id, force);
+            match (out, back) {
+                (CloseOutcome::Closed { .. }, Some(opener)) if b.select(&opener) => {
+                    CloseOutcome::Closed {
+                        selected: Some(opener),
+                    }
+                }
+                (out, _) => out,
+            }
+        })
     }
 
     pub fn close_active(&self) {
@@ -945,6 +991,10 @@ impl Shell {
                     refresh.tabs = true;
                     self.drop_page(id);
                     self.0.favicons.borrow_mut().remove(id);
+                    self.0
+                        .openers
+                        .borrow_mut()
+                        .retain(|tab, opener| tab != id && opener != id);
                     self.0.hub.send(ShellEvent::TabClosed(id.clone()));
                 }
                 BrowserEvent::TabChanged(id) => {

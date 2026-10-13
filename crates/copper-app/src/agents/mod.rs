@@ -30,10 +30,11 @@ use crate::actions::{self, Command, SettingsPage};
 use crate::shell::{Shell, WeakShell};
 use copper_core::TabId;
 use copper_core::agent::AgentFile;
+use copper_engine::Engine as _;
 use copper_mcp::Mcp;
 use copper_mcp::transport::{self, TransportConfig};
 use gio::prelude::ApplicationExt as _;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::{Arc, RwLock};
 
@@ -123,6 +124,9 @@ pub struct Agents {
     pub(crate) stage: Rc<backstage::Stage>,
     /// Settings pages showing this state; each says whether it is still alive.
     watchers: RefCell<Vec<Watcher>>,
+    /// The console capture every page gets from document start while the
+    /// server is on (`copper_pagejs::page::console_early`).
+    console: Cell<Option<copper_engine::ScriptId>>,
 }
 
 impl Agents {
@@ -150,6 +154,7 @@ impl Agents {
             marks,
             stage,
             watchers: RefCell::default(),
+            console: Cell::new(None),
         });
         if minted {
             agents.save();
@@ -264,6 +269,7 @@ impl Agents {
 
     /// Listen (again) on the configured port.
     pub fn start(&self) {
+        self.capture_console(true);
         self.server.borrow_mut().take();
         let port = self.port();
         let (tx, rx) = copper_mcp::server::channel();
@@ -297,6 +303,7 @@ impl Agents {
 
     /// Stop listening and let go of every tab agents held.
     pub fn stop(&self) {
+        self.capture_console(false);
         self.server.borrow_mut().take();
         *self.trouble.borrow_mut() = None;
         if let Some(shell) = self.shell.upgrade() {
@@ -304,6 +311,28 @@ impl Agents {
         }
         self.marks.clear();
         self.changed();
+    }
+
+    /// While agents may drive the window, every page keeps its console from
+    /// the moment its document starts, so `browser_console_messages` also
+    /// has what was logged while the page loaded (the Mac starts at the
+    /// first page-tool call). Pages already open get it from their next load.
+    fn capture_console(&self, on: bool) {
+        let Some(shell) = self.shell.upgrade() else {
+            return;
+        };
+        match (on, self.console.get()) {
+            (true, None) => {
+                let script = engine_script(&copper_pagejs::page::console_early());
+                self.console
+                    .set(Some(shell.engine().add_page_script(&script)));
+            }
+            (false, Some(id)) => {
+                shell.engine().remove_page_script(id);
+                self.console.set(None);
+            }
+            _ => {}
+        }
     }
 
     /// The tab an agent session keeps as its own.
@@ -383,6 +412,25 @@ pub fn stdio_config(command: &str) -> String {
     serde_json::to_string_pretty(&value).unwrap_or_default()
 }
 
+/// A page script as the engine takes it.
+fn engine_script(s: &copper_pagejs::UserScript) -> copper_engine::UserScript {
+    use copper_engine::{Frames, InjectionTime, World};
+    let mut u = copper_engine::UserScript::new(s.source.clone());
+    u.injection_time = match s.injection {
+        copper_pagejs::Injection::DocumentStart => InjectionTime::DocumentStart,
+        copper_pagejs::Injection::DocumentEnd => InjectionTime::DocumentEnd,
+    };
+    u.frames = match s.frames {
+        copper_pagejs::Frames::MainFrame => Frames::TopOnly,
+        copper_pagejs::Frames::AllFrames => Frames::All,
+    };
+    u.world = match s.world {
+        copper_pagejs::World::Page => World::Page,
+        copper_pagejs::World::Isolated(n) => World::Isolated(n.to_string()),
+    };
+    u
+}
+
 fn mcp_settings(file: &AgentFile) -> copper_mcp::Settings {
     copper_mcp::Settings {
         jev: file.jev(),
@@ -409,6 +457,18 @@ fn headless() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn console_capture_runs_first_in_the_main_frame() {
+        let script = engine_script(&copper_pagejs::page::console_early());
+        assert_eq!(
+            script.injection_time,
+            copper_engine::InjectionTime::DocumentStart
+        );
+        assert_eq!(script.frames, copper_engine::Frames::TopOnly);
+        assert_eq!(script.world, copper_engine::World::Page);
+        assert!(script.source.contains("__copperLogs"));
+    }
 
     #[test]
     fn client_configs_have_the_mac_shape() {

@@ -20,6 +20,10 @@ use crate::{CallCtx, Failure, Mcp};
 /// How long a page stays staged after the agent's last call on it.
 pub const LINGER: Duration = Duration::from_secs(5 * 60);
 
+/// A digit string at least this long that starts some tab's id names that
+/// tab, not an index (no row holds a thousand tabs).
+const ID_DIGITS: usize = 4;
+
 /// `browser_tabs new` and `jev_run newTab`, unless asked to show the tab.
 pub fn opens_behind(name: &str, args: &Map<String, Value>) -> bool {
     if args.get("focus").and_then(Value::as_bool) == Some(true) {
@@ -40,6 +44,13 @@ pub fn short(id: &TabId) -> String {
 impl<H: Host> Mcp<H> {
     /// A `tab` argument: an id (short or whole) or an index in the agent
     /// window's row. `Ok(None)` when nothing usable was named.
+    ///
+    /// A JSON number is always an index. A string of digits is ambiguous —
+    /// about one short id in fifty is all digits (`72135451`) — so it is an
+    /// id when it is long enough to be one ([`ID_DIGITS`]) and some id starts
+    /// with it, or when no tab has that index; otherwise an index. The Mac
+    /// (`AgentTabs.resolve`) reads every digit string as an index, which
+    /// leaves those tabs unreachable.
     pub(crate) fn resolve(
         &self,
         reference: Option<&Value>,
@@ -61,15 +72,19 @@ impl<H: Host> Mcp<H> {
         if raw.is_empty() {
             return Ok(None);
         }
-        if let Ok(i) = raw.parse::<i64>() {
-            return self.tab_at(i, ctx).map(Some);
-        }
-        let hits: Vec<TabInfo> = self
-            .host
-            .tabs()
-            .into_iter()
+        let tabs = self.host.tabs();
+        let hits: Vec<TabInfo> = tabs
+            .iter()
             .filter(|t| t.id.0.to_lowercase().starts_with(&raw))
+            .cloned()
             .collect();
+        if let Ok(i) = raw.parse::<i64>() {
+            let indexed = i >= 0 && tabs.iter().any(|t| t.index == Some(i as usize));
+            let id_like = raw.len() >= ID_DIGITS && !hits.is_empty();
+            if !id_like && (indexed || hits.is_empty()) {
+                return self.tab_at(i, ctx).map(Some);
+            }
+        }
         match hits.len() {
             1 => Ok(hits.into_iter().next()),
             0 => Err(Failure(format!("no tab {raw} — {}", self.tab_list(ctx)))),
@@ -216,16 +231,25 @@ impl<H: Host> Mcp<H> {
         self.state.borrow().held.keys().cloned().collect()
     }
 
-    /// The tab list every tab tool prints (`Tools.tabList`).
+    /// The tab list every tab tool prints (`Tools.tabList`): the agent
+    /// window's row by index, then every other tab — other spaces, other
+    /// windows, parked — as `- -:`, the line the Mac prints for a caller's
+    /// own tab outside the row. (The Mac lists only the row and that one
+    /// tab, so an agent in an empty space saw no tabs at all; each listed
+    /// tab can be named by its `{tab …}` id.)
     pub fn tab_list(&self, ctx: &CallCtx) -> String {
         let mine = self.target(ctx).map(|t| t.id);
-        let mut listed: Vec<TabInfo> = self
+        let (mut listed, elsewhere): (Vec<TabInfo>, Vec<TabInfo>) = self
             .host
             .tabs()
             .into_iter()
-            .filter(|t| t.index.is_some())
-            .collect();
+            .partition(|t| t.index.is_some());
         listed.sort_by_key(|t| t.index);
+        for tab in elsewhere {
+            if !listed.iter().any(|t| t.id == tab.id) {
+                listed.push(tab);
+            }
+        }
         if let Some(own) = self.own(&ctx.who.key)
             && !listed.iter().any(|t| t.id == own.id)
         {

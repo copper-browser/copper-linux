@@ -12,7 +12,10 @@
 //!   the cloud settings values with what was last seen (remote applies mark
 //!   themselves seen, so they are never pushed back as local edits).
 //! * At launch the client, the engine and the intelligence fetch start when
-//!   `cloud.json` holds a link; otherwise when a link is first made.
+//!   `cloud.json` holds a link; otherwise when a link is first made. Before
+//!   that, before any restored page loads, the engine keys the kept tabs
+//!   ([`SyncEngine::remember_kept_tabs`]; the key is kept on the tab, see
+//!   [`adapter::SYNC_KEY`]).
 //!
 //! Other lanes: [`history_cleared`] and [`history_forgot`] tell the cloud
 //! that history was cleared / a page forgotten here.
@@ -160,6 +163,11 @@ pub fn register(shell: &Shell) {
                 started: AtomicBool::new(false),
             }
         };
+        // Before any restored page loads (the active tab wakes after the
+        // lanes register): every kept tab gets its key in the last spaces
+        // document synced, by the address it was restored with, kept on the
+        // tab — so a redirect when it wakes never makes it a new entry.
+        cloud.sync.remember_kept_tabs();
         let _ = CLOUD.set(cloud);
     }
     let Some(cloud) = get() else { return };

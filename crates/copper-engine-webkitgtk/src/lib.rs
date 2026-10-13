@@ -17,6 +17,7 @@
 //! returned futures on that loop.
 
 mod backstage;
+mod caps;
 mod convert;
 mod ghost;
 mod hands;
@@ -28,7 +29,8 @@ use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
 use copper_engine::{
-    ContentFilter, Engine, EngineError, EnginePaths, LocalFuture, PageOptions, ProfileId, Result,
+    Capabilities, ContentFilter, Engine, EngineError, EnginePaths, LocalFuture, PageOptions,
+    ProfileId, Result, ScriptId, UserScript,
 };
 use webkit6::{UserContentFilter, UserContentFilterError, UserContentFilterStore};
 
@@ -51,18 +53,25 @@ struct EngineInner {
     profiles: RefCell<HashMap<(ProfileId, bool), Weak<profile::ProfileInner>>>,
     filters: RefCell<Option<UserContentFilterStore>>,
     backstage: WebKitBackstage,
+    page_scripts: Rc<page::PageScripts>,
 }
 
 impl WebKitEngine {
     /// An engine storing its state under `paths`. Call after `gtk4::init()`.
     pub fn new(paths: EnginePaths) -> Self {
         hands::self_check();
+        let missing = caps::capabilities().unavailable();
+        if !missing.is_empty() {
+            let names: Vec<&str> = missing.iter().map(|c| c.name()).collect();
+            tracing::info!("this WebKitGTK build lacks: {}", names.join(", "));
+        }
         WebKitEngine {
             inner: Rc::new(EngineInner {
                 paths,
                 profiles: RefCell::default(),
                 filters: RefCell::default(),
                 backstage: WebKitBackstage::new(),
+                page_scripts: Rc::default(),
             }),
         }
     }
@@ -109,7 +118,7 @@ impl Engine for WebKitEngine {
     }
 
     fn new_page(&self, profile: &WebKitProfile, opts: PageOptions) -> WebKitPage {
-        WebKitPage::create(profile, &opts, None)
+        WebKitPage::create(profile, &opts, None, &self.inner.page_scripts)
     }
 
     fn compile_content_filter(
@@ -166,6 +175,18 @@ impl Engine for WebKitEngine {
     fn backstage(&self) -> &WebKitBackstage {
         &self.inner.backstage
     }
+
+    fn capabilities(&self) -> Capabilities {
+        caps::capabilities()
+    }
+
+    fn add_page_script(&self, script: &UserScript) -> ScriptId {
+        self.inner.page_scripts.add(script)
+    }
+
+    fn remove_page_script(&self, id: ScriptId) -> bool {
+        self.inner.page_scripts.remove(id)
+    }
 }
 
 /// A compiled WebKit content-blocker list.
@@ -205,4 +226,19 @@ pub(crate) fn next_id() -> u64 {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(1);
     NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+/// The languages pages are told the user reads (`Accept-Language`,
+/// `navigator.languages`, the default `Intl` locale), best first, as BCP 47
+/// tags (`en-US`). Call before the first page: WebKit hands the list to each
+/// web process as it starts. An empty list keeps WebKit's own choice.
+pub fn set_preferred_languages(languages: &[String]) {
+    if languages.is_empty() {
+        return;
+    }
+    let Some(context) = webkit6::WebContext::default() else {
+        return;
+    };
+    let tags: Vec<&str> = languages.iter().map(String::as_str).collect();
+    context.set_preferred_languages(&tags);
 }

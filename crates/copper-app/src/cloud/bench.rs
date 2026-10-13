@@ -14,6 +14,7 @@
 //! {"op":"space-add","name":"Work"}             {"op":"open","url":…,"saved":true,"pin":"W","space":"Work"}
 //! {"op":"bookmark-add","url":…,"title":…}      {"op":"visit","url":…,"title":…}
 //! {"op":"wait","what":"space","value":"Work","timeout":60}
+//! {"op":"select","url":…}  {"op":"go","tab":…,"url":…}  {"op":"close","url":…}  {"op":"kept"}  {"op":"quit"}
 //! {"op":"screenshot","path":"/tmp/a.png"}      {"op":"canvas","tool":"canvas_list","args":{}}
 //! ```
 
@@ -411,6 +412,31 @@ async fn run(req: Value) -> Result<Value, String> {
             shell.select(&id);
             Ok(json!({"id": id.0}))
         }
+        "go" => {
+            // The address field: what is typed, loaded in the selected tab
+            // (first selecting the tab at `tab`, a URL prefix, if given).
+            let tab = s(&req, "tab");
+            if !tab.is_empty() {
+                let id = tab_at(&shell, tab).ok_or("no such tab")?;
+                shell.select(&id);
+            }
+            if !shell.go(s(&req, "url"), false, false) {
+                return Err("nowhere to go".into());
+            }
+            Ok(json!({"id": shell.active_id().map(|i| i.0)}))
+        }
+        "close" => {
+            // The row's cross.
+            let id = tab_at(&shell, s(&req, "url")).ok_or("no such tab")?;
+            shell.close(&id);
+            Ok(json!({"id": id.0}))
+        }
+        "kept" => Ok(json!(
+            super::adapter::kept(&shell)
+                .into_iter()
+                .map(|k| json!({"url": k.url, "key": k.key, "space": k.space, "pinned": k.pinned}))
+                .collect::<Vec<_>>()
+        )),
         "quit" => {
             shell.shutdown();
             shell.app().quit();
@@ -418,6 +444,14 @@ async fn run(req: Value) -> Result<Value, String> {
         }
         other => Err(format!("unknown op {other}")),
     }
+}
+
+fn tab_at(shell: &Shell, url: &str) -> Option<copper_core::TabId> {
+    shell
+        .browser()
+        .all_tabs()
+        .find(|t| t.url.starts_with(url))
+        .map(|t| t.id.clone())
 }
 
 /// What the browser holds now, for the E2E script.
@@ -456,6 +490,7 @@ fn holds(what: &str, value: &str) -> bool {
         "space" => shell.browser().spaces().any(|s| s.name == value),
         "no-space" => !shell.browser().spaces().any(|s| s.name == value),
         "tab" => shell.browser().all_tabs().any(|t| t.url.starts_with(value)),
+        "no-tab" => !shell.browser().all_tabs().any(|t| t.url.starts_with(value)),
         "pin" => shell
             .browser()
             .pins()

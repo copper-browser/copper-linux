@@ -140,7 +140,7 @@ impl Ui {
         esc.set_propagation_phase(gtk::PropagationPhase::Bubble);
         esc.add_shortcut(gtk::Shortcut::new(
             gtk::ShortcutTrigger::parse_string("Escape"),
-            Some(gtk::NamedAction::new("win.escape")),
+            Some(window_action("win.escape")),
         ));
         shell.window().add_controller(esc);
 
@@ -166,7 +166,7 @@ impl Ui {
         };
         self.shortcuts.add_shortcut(gtk::Shortcut::new(
             Some(trigger),
-            Some(gtk::NamedAction::new(action)),
+            Some(window_action(action)),
         ));
     }
 
@@ -261,6 +261,11 @@ impl Ui {
             self.stage.find.close(shell);
         } else if self.header.is_editing() {
             self.header.cancel(shell);
+        } else if self.stage.panel_open() {
+            self.stage.hide_panel();
+            if let Some(p) = shell.active_page() {
+                crate::palette::p_focus(&p);
+            }
         } else {
             shell.stop_active();
         }
@@ -287,6 +292,55 @@ impl Ui {
         t.set_timeout(2);
         self.toasts.add_toast(t);
     }
+}
+
+/// What a window shortcut does while a dialog is up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnderDialog {
+    /// Run the action anyway.
+    Run,
+    /// Close the dialog instead (`Ctrl+W`).
+    CloseDialog,
+    /// Leave the key to the dialog.
+    Pass,
+}
+
+/// A dialog (Edit Space, Settings, a permission question…) has the keyboard:
+/// the window's shortcuts must not reach the tabs, the card or the page
+/// behind it. `Ctrl+W` closes the dialog; `Ctrl+Q` still quits; every other
+/// key is the dialog's (typed into its fields, Escape closes it).
+pub fn under_dialog(action: &str) -> UnderDialog {
+    match action {
+        "win.quit" => UnderDialog::Run,
+        "win.close-tab" => UnderDialog::CloseDialog,
+        _ => UnderDialog::Pass,
+    }
+}
+
+/// A shortcut's action: activate `win.<name>` on the window, unless a
+/// dialog is up ([`under_dialog`]).
+fn window_action(action: &str) -> gtk::CallbackAction {
+    let action = action.to_string();
+    gtk::CallbackAction::new(move |widget, _| {
+        let dialog = widget
+            .downcast_ref::<adw::ApplicationWindow>()
+            .and_then(|w| w.visible_dialog());
+        if let Some(dialog) = dialog {
+            match under_dialog(&action) {
+                UnderDialog::Run => {}
+                UnderDialog::CloseDialog => {
+                    dialog.close();
+                    return glib::Propagation::Stop;
+                }
+                UnderDialog::Pass => return glib::Propagation::Proceed,
+            }
+        }
+        if widget.activate_action(&action, None).is_ok() {
+            glib::Propagation::Stop
+        } else {
+            glib::Propagation::Proceed
+        }
+    })
 }
 
 fn install_base_css() {
@@ -417,5 +471,27 @@ impl Nav {
 impl Default for Nav {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{UnderDialog, under_dialog};
+
+    #[test]
+    fn a_dialog_keeps_the_window_shortcuts_to_itself() {
+        for action in [
+            "win.new-tab",
+            "win.palette",
+            "win.reopen-tab",
+            "win.focus-field",
+            "win.settings",
+            "win.escape",
+            "win.show-downloads",
+        ] {
+            assert_eq!(under_dialog(action), UnderDialog::Pass, "{action}");
+        }
+        assert_eq!(under_dialog("win.close-tab"), UnderDialog::CloseDialog);
+        assert_eq!(under_dialog("win.quit"), UnderDialog::Run);
     }
 }

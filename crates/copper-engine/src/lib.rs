@@ -19,6 +19,7 @@
 //! created. Drop a stream to unsubscribe.
 
 mod backstage;
+mod capabilities;
 mod error;
 mod events;
 mod input;
@@ -30,6 +31,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
 pub use backstage::{Backstage, BackstageMode, BackstageStatus};
+pub use capabilities::{Capabilities, Capability};
 pub use error::{EngineError, Result};
 pub use events::{
     ConsoleLevel, ConsoleMessage, CrashReason, DownloadEvent, DownloadState, EventSink,
@@ -99,6 +101,21 @@ pub trait Engine {
 
     /// The engine's backstage (one per engine).
     fn backstage(&self) -> &Self::Backstage;
+
+    /// Which web platform features ([`Capability`]) the running engine build
+    /// has. Pages get each one that exists turned on; the rest are missing
+    /// from the build itself, and the app can say so.
+    fn capabilities(&self) -> Capabilities;
+
+    /// A script every page of this engine gets: pages made from now on, and
+    /// pages already open from their next document on (popups made with
+    /// [`PageView::new_related`] too). For page-wide plumbing such as the
+    /// agents' console capture, which must run before any page script.
+    fn add_page_script(&self, script: &UserScript) -> ScriptId;
+
+    /// Take a script added with [`Engine::add_page_script`] off every page
+    /// (from their next document); `false` if it is unknown.
+    fn remove_page_script(&self, id: ScriptId) -> bool;
 }
 
 /// A compiled content-blocker list, ready to attach to pages.
@@ -249,7 +266,8 @@ pub trait PageView {
     /// events to the focused element, and script typing uses the native value
     /// setter + `beforeinput`/`input`. A `<select>` popup a held page opened
     /// takes `Key`/`Type` input itself (arrows, type-ahead, Enter, Escape).
-    /// A point with no element under it is `NotFound`. Resolves once the
+    /// `Key` Escape while the page has a file chooser open closes the chooser
+    /// (the file input fires `cancel`). A point with no element under it is `NotFound`. Resolves once the
     /// action's last event was handled (or after about a second).
     fn input(&self, event: InputEvent) -> LocalFuture<Result<Trust>>;
 

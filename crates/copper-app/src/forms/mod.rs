@@ -130,8 +130,11 @@ pub fn register(shell: &Shell) {
         );
     }
 
-    // What last launch left: the keyring, an open Bitwarden, 1Password.
+    // What last launch left: an open Bitwarden, 1Password. The keyring is
+    // only looked at (no prompt); the first fill, save or Settings visit
+    // opens it.
     glib::spawn_future_local(async move {
+        vault.note_probe(vault::probe(false).await);
         let v = vault.clone();
         rt::run(async move { v.start(remembered).await }).await;
     });

@@ -3,6 +3,11 @@
 //! last half minute), and a capsule over the page while it drives the tab
 //! you are looking at — its name, what it is doing, and Stop.
 //!
+//! The capsule sits top centre, where many pages keep their search box. When
+//! the pointer comes near it, it tucks in to its square and Stop (the text
+//! goes, it fades) so the page under it can be clicked; it comes back once
+//! the pointer has left the space it took.
+//!
 //! The model is `copper_mcp::drive::DriveEvent`s; the one thing that goes
 //! back is Stop ([`super::Agents::stop_hand`]): a Jev run stops before its
 //! next action, any other agent has its next calls refused for 30 s.
@@ -13,7 +18,7 @@ use copper_mcp::Who;
 use copper_mcp::drive::{DriveEvent, Status};
 use gtk4 as gtk;
 use gtk4::prelude::*;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -22,6 +27,10 @@ use std::time::{Duration, Instant};
 const BADGE_FOR: Duration = Duration::from_secs(30);
 /// The capsule stays this long after the last call ends.
 const PILL_FOR: Duration = Duration::from_secs(4);
+/// The pointer this close to the capsule (px) tucks it in.
+const NEAR: f64 = 16.0;
+/// Out of the capsule's space this long before it comes back.
+const UNTUCK_AFTER: Duration = Duration::from_millis(300);
 
 /// The Mac's agent colours (`Drive.swatches`), as RGB.
 const SWATCHES: [(u8, u8, u8); 9] = [
@@ -84,6 +93,44 @@ struct Pill {
     /// Whose Stop the button is.
     key: Rc<RefCell<String>>,
     frame: glib::WeakRef<gtk::Overlay>,
+    tuck: Rc<Tuck>,
+}
+
+/// Whether the capsule is tucked in because the pointer came near.
+#[derive(Default)]
+struct Tuck {
+    on: Cell<bool>,
+    /// The space the full capsule took (frame coordinates, grown by
+    /// [`NEAR`]) when it tucked in: it comes back once the pointer leaves it.
+    zone: Cell<Option<(f64, f64, f64, f64)>>,
+    /// Bumped on every move, so a pending untuck can tell it is stale.
+    generation: Cell<u64>,
+    pending: Cell<bool>,
+}
+
+impl Tuck {
+    fn bump(&self) -> u64 {
+        let g = self.generation.get().wrapping_add(1);
+        self.generation.set(g);
+        self.pending.set(false);
+        g
+    }
+}
+
+/// Labels and fade for the tucked or full capsule.
+fn show_tucked(root: &gtk::Box, name: &gtk::Label, action: &gtk::Label, tucked: bool) {
+    name.set_visible(!tucked);
+    action.set_visible(!tucked && !action.text().is_empty());
+    if tucked {
+        root.add_css_class("tucked");
+    } else {
+        root.remove_css_class("tucked");
+    }
+}
+
+fn inside(zone: (f64, f64, f64, f64), x: f64, y: f64) -> bool {
+    let (zx, zy, zw, zh) = zone;
+    x >= zx && x <= zx + zw && y >= zy && y <= zy + zh
 }
 
 pub struct Marks {
@@ -103,15 +150,17 @@ thread_local! {
 
 const STYLE: &str = r#"
 .copper-agent-pill {
-  min-height: 26px; padding: 0 3px 0 6px; border-radius: 13px;
+  min-height: 22px; padding: 0 2px 0 5px; border-radius: 11px;
   background-color: alpha(@window_bg_color, .96);
   color: @window_fg_color;
-  box-shadow: 0 0 0 1px alpha(@window_fg_color, .10), 0 2px 8px alpha(black, .14);
+  box-shadow: 0 0 0 1px alpha(@window_fg_color, .10), 0 1px 6px alpha(black, .12);
+  transition: opacity 120ms ease-out;
 }
-.copper-agent-pill .agent-name { font-size: 12px; font-weight: 600; }
-.copper-agent-pill .agent-action { font-size: 12px; opacity: .62; }
+.copper-agent-pill.tucked { opacity: .55; }
+.copper-agent-pill .agent-name { font-size: 11px; font-weight: 600; }
+.copper-agent-pill .agent-action { font-size: 11px; opacity: .62; }
 .copper-agent-pill button.agent-stop {
-  min-width: 20px; min-height: 20px; padding: 0; border-radius: 10px;
+  min-width: 18px; min-height: 18px; padding: 0; border-radius: 9px;
   background: transparent; box-shadow: none; opacity: .7;
 }
 .copper-agent-pill button.agent-stop:hover { opacity: 1; background-color: alpha(@window_fg_color, .08); }
@@ -484,7 +533,7 @@ impl Marks {
             String::new()
         };
         p.action.set_text(&action);
-        p.action.set_visible(!action.is_empty());
+        show_tucked(&p.root, &p.name, &p.action, p.tuck.on.get());
         p.root.set_tooltip_text(Some(&if action.is_empty() {
             hand.who.line()
         } else {
@@ -513,26 +562,26 @@ impl Marks {
     fn build_pill(&self, frame: &gtk::Overlay) -> Pill {
         let root: gtk::Box = glib::Object::builder()
             .property("orientation", gtk::Orientation::Horizontal)
-            .property("spacing", 7)
+            .property("spacing", 5)
             .property("accessible-role", gtk::AccessibleRole::Status)
             .build();
         root.add_css_class("copper-agent-pill");
         root.set_halign(gtk::Align::Center);
         root.set_valign(gtk::Align::Start);
-        root.set_margin_top(10);
+        root.set_margin_top(6);
         let square = gtk::Image::new();
-        square.set_pixel_size(14);
+        square.set_pixel_size(12);
         square.set_valign(gtk::Align::Center);
         root.append(&square);
         let name = gtk::Label::new(None);
         name.add_css_class("agent-name");
         name.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        name.set_max_width_chars(28);
+        name.set_max_width_chars(18);
         root.append(&name);
         let action = gtk::Label::new(None);
         action.add_css_class("agent-action");
         action.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        action.set_max_width_chars(40);
+        action.set_max_width_chars(24);
         root.append(&action);
         let stop = gtk::Button::from_icon_name("media-playback-stop-symbolic");
         stop.add_css_class("agent-stop");
@@ -550,6 +599,8 @@ impl Marks {
         root.append(&stop);
         root.set_visible(false);
         frame.add_overlay(&root);
+        let tuck = Rc::new(Tuck::default());
+        watch_pointer(frame, &root, &name, &action, &tuck);
         Pill {
             root,
             square,
@@ -558,6 +609,7 @@ impl Marks {
             stop,
             key,
             frame: frame.downgrade(),
+            tuck,
         }
     }
 
@@ -570,6 +622,86 @@ impl Marks {
         self.squares.borrow_mut().insert(rgb, tex.clone());
         tex
     }
+}
+
+/// Tuck the capsule in while the pointer is near it, anywhere over the page
+/// (a capture-phase controller on the page's frame sees moves over the web
+/// view and over the capsule alike).
+fn watch_pointer(
+    frame: &gtk::Overlay,
+    root: &gtk::Box,
+    name: &gtk::Label,
+    action: &gtk::Label,
+    tuck: &Rc<Tuck>,
+) {
+    let motion = gtk::EventControllerMotion::new();
+    motion.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let (r, n, a, f) = (
+        root.downgrade(),
+        name.downgrade(),
+        action.downgrade(),
+        frame.downgrade(),
+    );
+    let t = tuck.clone();
+    motion.connect_motion(move |_, x, y| {
+        let (Some(root), Some(name), Some(action), Some(frame)) =
+            (r.upgrade(), n.upgrade(), a.upgrade(), f.upgrade())
+        else {
+            return;
+        };
+        if !t.on.get() {
+            if !root.is_visible() {
+                return;
+            }
+            let Some(b) = root.compute_bounds(&frame) else {
+                return;
+            };
+            let zone = (
+                b.x() as f64 - NEAR,
+                b.y() as f64 - NEAR,
+                b.width() as f64 + 2.0 * NEAR,
+                b.height() as f64 + 2.0 * NEAR,
+            );
+            if inside(zone, x, y) {
+                t.bump();
+                t.zone.set(Some(zone));
+                t.on.set(true);
+                show_tucked(&root, &name, &action, true);
+            }
+            return;
+        }
+        let near = t.zone.get().is_some_and(|z| inside(z, x, y));
+        if near {
+            t.bump();
+        } else if !t.pending.get() {
+            let generation = t.bump();
+            t.pending.set(true);
+            let t = t.clone();
+            let (r, n, a) = (root.downgrade(), name.downgrade(), action.downgrade());
+            glib::timeout_add_local_once(UNTUCK_AFTER, move || {
+                if t.generation.get() != generation {
+                    return;
+                }
+                t.pending.set(false);
+                t.on.set(false);
+                if let (Some(root), Some(name), Some(action)) =
+                    (r.upgrade(), n.upgrade(), a.upgrade())
+                {
+                    show_tucked(&root, &name, &action, false);
+                }
+            });
+        }
+    });
+    let (r, n, a) = (root.downgrade(), name.downgrade(), action.downgrade());
+    let t = tuck.clone();
+    motion.connect_leave(move |_| {
+        t.bump();
+        t.on.set(false);
+        if let (Some(root), Some(name), Some(action)) = (r.upgrade(), n.upgrade(), a.upgrade()) {
+            show_tucked(&root, &name, &action, false);
+        }
+    });
+    frame.add_controller(motion);
 }
 
 /// Premultiplied RGBA of a rounded square (`size` px, corner `radius`)
@@ -630,6 +762,20 @@ mod tests {
         assert_eq!(swatch(&a), swatch(&a.clone()));
         assert!(SWATCHES.contains(&swatch(&a)));
         assert_eq!(swatch(&Who::pane()), PANE);
+    }
+
+    #[test]
+    fn near_means_inside_the_grown_box() {
+        let zone = (
+            100.0 - NEAR,
+            6.0 - NEAR,
+            200.0 + 2.0 * NEAR,
+            22.0 + 2.0 * NEAR,
+        );
+        assert!(inside(zone, 150.0, 10.0));
+        assert!(inside(zone, 95.0, 0.0), "within NEAR of the left edge");
+        assert!(!inside(zone, 150.0, 45.0), "below the capsule's space");
+        assert!(!inside(zone, 50.0, 10.0));
     }
 
     #[test]

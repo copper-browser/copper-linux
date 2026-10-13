@@ -15,11 +15,16 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 /// A pinned or Saved tab as it is now.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LiveKept {
     /// Stable for this run (the tab's own id), so a tab that navigates keeps
     /// its sync key.
     pub tab_id: String,
+    /// The sync key the tab carries from an earlier run — kept on the tab
+    /// itself, in the session ([`BrowserState::keep_keys`]) — so a kept tab
+    /// that was restored somewhere else than where it was kept (a redirect
+    /// at launch, browsing before the quit) is still the same entry.
+    pub key: Option<String>,
     /// The space's id (uppercase UUID).
     pub space: String,
     pub pinned: bool,
@@ -65,6 +70,10 @@ pub trait BrowserState: Send + Sync {
     /// Remove a space the document no longer has, moving its Today tabs to a
     /// neighbour. Never called for the last space.
     fn remove_space(&self, id: &str);
+    /// Keep each tab's sync key on the tab (`(tab id, key)`), where it lasts
+    /// across launches (the app: the tab's `session.json` entry), and hand it
+    /// back as [`LiveKept::key`]. Not a change to push.
+    fn keep_keys(&self, keys: &[(String, String)]);
 
     // settings
 
@@ -182,6 +191,7 @@ impl BrowserState for MemoryBrowser {
         let id = format!("cloud-{}", s.next_id);
         s.kept.push(LiveKept {
             tab_id: id.clone(),
+            key: None,
             space: space.to_string(),
             pinned: pin.is_some(),
             url: url.to_string(),
@@ -195,6 +205,15 @@ impl BrowserState for MemoryBrowser {
         let mut s = self.lock();
         s.spaces.retain(|x| !x.id.eq_ignore_ascii_case(id));
         s.kept.retain(|t| !t.space.eq_ignore_ascii_case(id));
+    }
+
+    fn keep_keys(&self, keys: &[(String, String)]) {
+        let mut s = self.lock();
+        for (tab, key) in keys {
+            if let Some(t) = s.kept.iter_mut().find(|t| &t.tab_id == tab) {
+                t.key = Some(key.clone());
+            }
+        }
     }
 
     fn settings(&self) -> BTreeMap<String, String> {

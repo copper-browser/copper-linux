@@ -1,0 +1,14 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Console while loading</title>
+<script>console.log('head', { n: 1 }); console.info(3);</script>
+</head>
+<body>
+<p>Console fixture: logs while the document loads.</p>
+<script>console.warn('body');</script>
+<script>throw new Error('load boom');</script>
+<script>window.addEventListener('load', function () { console.error('loaded'); });</script>
+</body>
+</html>

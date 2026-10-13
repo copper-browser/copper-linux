@@ -169,6 +169,42 @@ fn row_widget(shell: &Shell, r: &Row) -> gtk::ListBoxRow {
 type Submit = Rc<dyn Fn(&Shell, &Row, bool)>;
 type RowsChanged = Rc<dyn Fn(usize)>;
 
+/// A selection the field made itself, in `text`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Chosen {
+    text: String,
+    start: i32,
+    end: i32,
+}
+
+impl Chosen {
+    /// `bounds` (GTK's, ordered) are this selection.
+    fn holds(&self, bounds: Option<(i32, i32)>) -> bool {
+        bounds == Some((self.start.min(self.end), self.start.max(self.end)))
+            || (self.start == self.end && bounds.is_none())
+    }
+}
+
+/// Shift, Control, Alt, Super… on their own.
+fn is_modifier(key: gtk::gdk::Key) -> bool {
+    use gtk::gdk::Key;
+    matches!(
+        key,
+        Key::Shift_L
+            | Key::Shift_R
+            | Key::Control_L
+            | Key::Control_R
+            | Key::Alt_L
+            | Key::Alt_R
+            | Key::Meta_L
+            | Key::Meta_R
+            | Key::Super_L
+            | Key::Super_R
+            | Key::ISO_Level3_Shift
+            | Key::Caps_Lock
+    )
+}
+
 /// A field with inline completion and suggestions.
 pub struct FieldCore {
     pub text: gtk::Text,
@@ -177,6 +213,17 @@ pub struct FieldCore {
     /// What was really typed (without the offered completion).
     typed: RefCell<String>,
     quiet: Cell<bool>,
+    /// Bumped on every typed change: a completion queued for one change
+    /// never lands on a later one.
+    generation: Cell<u64>,
+    /// A completion (and the rows) wait for GTK to finish the keystroke.
+    deferred: Cell<bool>,
+    /// The selection the field made itself (the offered rest, or the whole
+    /// address on Ctrl+L) and the text it was made in, until the user
+    /// types, clicks or moves the caret.
+    chosen: RefCell<Option<Chosen>>,
+    /// A pointer press is being handled: what it selects is the user's.
+    pressing: Cell<bool>,
     /// The rows changed (show / hide the list).
     on_rows: RefCell<Option<RowsChanged>>,
     submit: RefCell<Option<Submit>>,
@@ -195,6 +242,10 @@ impl FieldCore {
             purpose: Cell::new(Purpose::Edit),
             typed: RefCell::default(),
             quiet: Cell::new(false),
+            generation: Cell::new(0),
+            deferred: Cell::new(false),
+            chosen: RefCell::default(),
+            pressing: Cell::new(false),
             on_rows: RefCell::default(),
             submit: RefCell::default(),
             cancel: RefCell::default(),
@@ -206,9 +257,55 @@ impl FieldCore {
             let (Some(core), Some(shell)) = (weak_core.upgrade(), weak.upgrade()) else {
                 return;
             };
-            core.changed(&shell);
+            FieldCore::changed(&core, &shell);
         });
 
+        // On X11 the selection is also the PRIMARY selection. Typing over
+        // it gives PRIMARY up and selecting the next completion claims it
+        // again; the X server's word that it was given up can arrive after
+        // the new claim, and GTK then drops the new selection, leaving the
+        // caret before the offered rest — the next key lands inside it
+        // ("news.ycombinator.comnator.com"). The field puts back a
+        // selection it made itself whenever that happens.
+        let weak_core = Rc::downgrade(&core);
+        core.text
+            .connect_notify_local(Some("cursor-position"), move |_, _| {
+                let Some(core) = weak_core.upgrade() else {
+                    return;
+                };
+                if !core.lost_choice() {
+                    return;
+                }
+                let weak_core = Rc::downgrade(&core);
+                glib::idle_add_local_full(glib::Priority::HIGH, move || {
+                    if let Some(core) = weak_core.upgrade() {
+                        core.restore_choice();
+                    }
+                    glib::ControlFlow::Break
+                });
+            });
+        let click = gtk::GestureClick::new();
+        click.set_button(0);
+        click.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak_core = Rc::downgrade(&core);
+        click.connect_pressed(move |_, _, _, _| {
+            let Some(core) = weak_core.upgrade() else {
+                return;
+            };
+            // A click that focuses the field selects through `begin`, then
+            // puts the caret where it landed: that is not a selection to
+            // keep. Over once the press has been handled.
+            core.chosen.take();
+            core.pressing.set(true);
+            let weak_core = Rc::downgrade(&core);
+            glib::idle_add_local_full(glib::Priority::HIGH, move || {
+                if let Some(core) = weak_core.upgrade() {
+                    core.pressing.set(false);
+                }
+                glib::ControlFlow::Break
+            });
+        });
+        core.text.add_controller(click);
         let weak_core = Rc::downgrade(&core);
         let weak = shell.downgrade();
         core.text.connect_activate(move |_| {
@@ -228,6 +325,20 @@ impl FieldCore {
             };
             use gtk::gdk::Key;
             let ctrl = state.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+            // A key acts on the selection the field made, even if X11 took
+            // it away a moment ago; after a key that is not walking the
+            // rows, what is selected is the user's business.
+            core.restore_choice();
+            let walks_rows = matches!(key, Key::Down | Key::Up)
+                || (ctrl && matches!(key, Key::n | Key::j | Key::p));
+            if !walks_rows && !is_modifier(key) {
+                core.chosen.take();
+            }
+            // Moving through the rows or taking the completion acts on what
+            // the last keystroke would show, even if it is still waiting.
+            if walks_rows || key == Key::Tab {
+                core.settle(&shell);
+            }
             match key {
                 Key::Down => {
                     core.list.step(1);
@@ -246,7 +357,7 @@ impl FieldCore {
                     glib::Propagation::Stop
                 }
                 Key::Tab if !ctrl => {
-                    core.accept_completion();
+                    core.accept_completion(&shell);
                     glib::Propagation::Stop
                 }
                 Key::Escape => {
@@ -291,6 +402,9 @@ impl FieldCore {
 
     /// Set the text without offering anything (showing an address).
     pub fn set_quiet(&self, text: &str) {
+        self.deferred.set(false);
+        self.chosen.take();
+        self.generation.set(self.generation.get() + 1);
         self.quiet.set(true);
         self.text.set_text(text);
         self.typed.replace(text.to_string());
@@ -302,34 +416,117 @@ impl FieldCore {
         self.purpose.set(purpose);
         self.set_quiet(text);
         self.text.grab_focus();
-        self.text.select_region(0, -1);
+        self.choose(0, -1);
         self.refresh(shell);
     }
 
-    fn changed(&self, shell: &Shell) {
-        if self.quiet.get() {
+    fn changed(core: &Rc<FieldCore>, shell: &Shell) {
+        if core.quiet.get() {
             return;
         }
-        let now = self.text.text().to_string();
-        let before = self.typed.replace(now.clone());
-        let at_end = self.text.position() as usize == now.chars().count();
-        if complete::grew(&before, &now) && at_end && self.purpose.get() != Purpose::Palette {
-            let (tabs, visited) = shell.suggestions(&now, 6);
-            if let Some(rest) = complete::inline(&now, &tabs, &visited) {
-                let start = now.chars().count() as i32;
-                self.quiet.set(true);
-                self.text.set_text(&format!("{now}{rest}"));
-                self.text.select_region(start, -1);
-                self.quiet.set(false);
-            }
+        let now = core.text.text().to_string();
+        let before = core.typed.replace(now.clone());
+        core.chosen.take();
+        let generation = core.generation.get() + 1;
+        core.generation.set(generation);
+        if !(complete::grew(&before, &now) && core.purpose.get() != Purpose::Palette) {
+            core.deferred.set(false);
+            core.refresh(shell);
+            return;
         }
+        // `changed` runs while GTK is still inside the keystroke: typing over
+        // the offered rest is delete, insert, then GTK puts the caret after
+        // the new character. Touching the text now loses the selection and
+        // leaves the caret mid-word, so the next key lands inside the
+        // completion. Offer it once the keystroke is done — before the next
+        // frame is drawn, after any keys already queued.
+        core.deferred.set(true);
+        let weak_core = Rc::downgrade(core);
+        let weak = shell.downgrade();
+        glib::idle_add_local_full(glib::Priority::HIGH_IDLE, move || {
+            if let (Some(core), Some(shell)) = (weak_core.upgrade(), weak.upgrade())
+                && core.generation.get() == generation
+            {
+                core.settle(&shell);
+            }
+            glib::ControlFlow::Break
+        });
+    }
+
+    /// Do what the last keystroke left waiting: the completion, the rows.
+    fn settle(&self, shell: &Shell) {
+        if !self.deferred.replace(false) {
+            return;
+        }
+        self.offer_completion(shell);
         self.refresh(shell);
+    }
+
+    /// Add the rest of a known address after what was typed, selected, if
+    /// the field still holds exactly that with the caret at its end.
+    fn offer_completion(&self, shell: &Shell) {
+        let now = self.text.text().to_string();
+        let caret = self.text.position();
+        let selection = self.text.selection_bounds();
+        if !complete::may_offer(&now, &self.typed.borrow(), caret, selection) {
+            return;
+        }
+        let (tabs, visited) = shell.suggestions(&now, 6);
+        let Some(rest) = complete::inline(&now, &tabs, &visited) else {
+            return;
+        };
+        let start = now.chars().count() as i32;
+        let mut at = start;
+        self.quiet.set(true);
+        self.text.insert_text(&rest, &mut at);
+        self.quiet.set(false);
+        self.choose(start, -1);
+    }
+
+    /// Select `start..end` (characters, `-1` = the end) and remember it as
+    /// the field's own selection.
+    fn choose(&self, start: i32, end: i32) {
+        self.text.select_region(start, end);
+        if self.pressing.get() {
+            return;
+        }
+        let len = self.text.text().chars().count() as i32;
+        let end = if end < 0 { len } else { end.min(len) };
+        self.chosen.replace(Some(Chosen {
+            text: self.text.text().to_string(),
+            start: start.clamp(0, len),
+            end,
+        }));
+    }
+
+    /// The field's own selection is gone though nothing was typed.
+    fn lost_choice(&self) -> bool {
+        let chosen = self.chosen.borrow();
+        let Some(c) = chosen.as_ref() else {
+            return false;
+        };
+        c.text == self.text.text().as_str() && !c.holds(self.text.selection_bounds())
+    }
+
+    /// Put the field's own selection back if it was taken away.
+    fn restore_choice(&self) {
+        if !self.lost_choice() {
+            return;
+        }
+        let Some((start, end)) = self.chosen.borrow().as_ref().map(|c| (c.start, c.end)) else {
+            return;
+        };
+        tracing::debug!(start, end, "field selection put back");
+        self.text.select_region(start, end);
     }
 
     /// Take the offered completion: the caret after it, nothing opened.
-    fn accept_completion(&self) {
+    fn accept_completion(&self, shell: &Shell) {
+        // Tab pressed before the main loop got to the completion.
+        self.settle(shell);
         let full = self.text.text().to_string();
         self.typed.replace(full.clone());
+        self.chosen.take();
         self.text.set_position(-1);
         self.text.select_region(-1, -1);
     }
@@ -360,6 +557,10 @@ impl FieldCore {
     }
 
     fn activate(&self, shell: &Shell, new_tab: bool) {
+        // Return pressed before the main loop got to the last keystroke's
+        // completion and rows: settle them, so Return acts on what the
+        // field would show.
+        self.settle(shell);
         let full = self.text.text().to_string();
         let row = if self.list.len() > 0 {
             self.list.selected()
@@ -717,4 +918,30 @@ impl Card {
 /// Give the page the keyboard.
 pub fn p_focus(page: &copper_engine_webkitgtk::WebKitPage) {
     page.widget().grab_focus();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Chosen;
+
+    fn chosen(start: i32, end: i32) -> Chosen {
+        Chosen {
+            text: "news.ycombinator.com".into(),
+            start,
+            end,
+        }
+    }
+
+    #[test]
+    fn the_fields_own_selection_is_recognised_until_it_is_lost() {
+        // The offered rest, as GTK reports it (ordered).
+        assert!(chosen(4, 20).holds(Some((4, 20))));
+        assert!(chosen(20, 4).holds(Some((4, 20))));
+        // X11 dropped it: the caret sits before the rest, nothing selected.
+        assert!(!chosen(4, 20).holds(None));
+        assert!(!chosen(4, 20).holds(Some((4, 4))));
+        assert!(!chosen(0, 20).holds(Some((0, 4))));
+        // A caret the field placed itself is held by "no selection".
+        assert!(chosen(20, 20).holds(None));
+    }
 }

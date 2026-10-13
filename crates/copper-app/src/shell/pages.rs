@@ -337,6 +337,7 @@ impl Shell {
                 },
             )
         };
+        self.set_opener(&id, opener);
         self.adopt_page(&id, page, None, private);
         // Not from inside WebKit's `create` signal: the redraw can wait a turn.
         let weak = self.downgrade();
@@ -412,7 +413,7 @@ impl Shell {
                     return;
                 };
                 let private = slot.private;
-                self.open(
+                let opened = self.open(
                     &url,
                     OpenTab {
                         foreground: req.disposition == WindowDisposition::Popup,
@@ -421,6 +422,7 @@ impl Shell {
                         ..Default::default()
                     },
                 );
+                self.set_opener(&opened, id);
             }
             PageEvent::Crashed(reason) => {
                 let url = self
@@ -439,6 +441,7 @@ impl Shell {
                 self.0.hub.send(ShellEvent::Crashed(id.clone()));
             }
             PageEvent::CloseRequested => {
+                // `window.close()`: back to the opener if this was on screen.
                 self.close_force(id);
             }
             PageEvent::PermissionRequest { id: pid, kind, url } => {
@@ -547,38 +550,25 @@ impl Shell {
         dialog.present(Some(self.window()));
     }
 
-    fn icon_path(&self, url: &str) -> Option<PathBuf> {
-        let host = url::Url::parse(url).ok()?.host_str()?.to_lowercase();
-        let host = host.strip_prefix("www.").unwrap_or(&host).to_string();
-        let clean: String = host
-            .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
-                    c
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-        (!clean.is_empty()).then(|| {
-            self.cache_dir()
-                .join("favicons")
-                .join(format!("{clean}.png"))
-        })
+    fn icon_path(&self, rel: &std::path::Path) -> PathBuf {
+        self.cache_dir().join("favicons").join(rel)
     }
 
-    /// Keep a site's icon for next time (sleeping tabs show it at launch).
+    /// Keep a page's icon for next time (sleeping tabs show it at launch).
     fn remember_icon(&self, url: &str, png: &[u8]) {
-        let Some(path) = self.icon_path(url) else {
+        let Some(rel) = icon_rel(url) else {
             return;
         };
+        let path = self.icon_path(&rel);
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
         if let Err(e) = std::fs::write(&path, png) {
             tracing::debug!(error = %e, "could not keep the favicon");
         }
-        self.host_icons().borrow_mut().remove(&host_of(url));
+        self.host_icons()
+            .borrow_mut()
+            .remove(&rel.to_string_lossy().to_string());
     }
 
     /// The live icon of an open tab showing exactly `url`.
@@ -591,18 +581,81 @@ impl Shell {
         self.favicons().borrow().get(&id).cloned()
     }
 
-    /// The icon kept for a site, if any.
+    /// The icon kept for a page: its own part of the site, else the site's
+    /// front page; never another part's (the Maps pin on a Search tab).
     pub(crate) fn cached_icon(&self, url: &str) -> Option<gdk::Texture> {
-        let host = host_of(url);
-        if let Some(hit) = self.host_icons().borrow().get(&host) {
+        let rel = icon_rel(url)?;
+        let front = rel.with_file_name(format!("{FRONT}.png"));
+        self.kept_icon(&rel).or_else(|| {
+            if front == rel {
+                None
+            } else {
+                self.kept_icon(&front)
+            }
+        })
+    }
+
+    fn kept_icon(&self, rel: &std::path::Path) -> Option<gdk::Texture> {
+        let key = rel.to_string_lossy().to_string();
+        if let Some(hit) = self.host_icons().borrow().get(&key) {
             return hit.clone();
         }
-        let tex = self
-            .icon_path(url)
-            .filter(|p| p.exists())
-            .and_then(|p| gdk::Texture::from_filename(&p).ok());
-        self.host_icons().borrow_mut().insert(host, tex.clone());
+        let path = self.icon_path(rel);
+        let tex = path
+            .exists()
+            .then(|| gdk::Texture::from_filename(&path).ok())
+            .flatten();
+        self.host_icons().borrow_mut().insert(key, tex.clone());
         tex
+    }
+}
+
+/// The file name of a site's front page in the icon cache.
+const FRONT: &str = "_";
+
+/// Where a page's icon is kept, under the cache's `favicons/`: the site
+/// (without `www.`, with its port) and the first part of the path, so
+/// `google.com/maps` and `google.com/search` — one host, different
+/// products, different icons — each keep their own. `None` for pages
+/// without a host.
+pub(crate) fn icon_rel(url: &str) -> Option<PathBuf> {
+    let u = url::Url::parse(url).ok()?;
+    let host = u.host_str()?.to_lowercase();
+    let host = host.strip_prefix("www.").unwrap_or(&host);
+    let site = match u.port() {
+        Some(p) => format!("{host}_{p}"),
+        None => host.to_string(),
+    };
+    let site = file_safe(&site, 253);
+    if site.is_empty() {
+        return None;
+    }
+    let first = u
+        .path_segments()
+        .and_then(|mut s| s.next())
+        .unwrap_or_default()
+        .to_lowercase();
+    let first = file_safe(&first, 64);
+    let first = if first.is_empty() { FRONT } else { &first };
+    Some(PathBuf::from(site).join(format!("{first}.png")))
+}
+
+/// `[a-z0-9.-]` kept, anything else `_`, never a leading dot, at most `max`.
+fn file_safe(text: &str, max: usize) -> String {
+    let clean: String = text
+        .chars()
+        .take(max)
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    match clean.strip_prefix('.') {
+        Some(rest) => format!("_{rest}"),
+        None => clean,
     }
 }
 
@@ -633,6 +686,46 @@ mod tests {
         assert_eq!(profile_id(Some("Client A/B")).as_str(), "Client_A_B");
         assert_eq!(profile_id(Some("..hidden")).as_str(), "hidden");
         assert_eq!(profile_id(Some("  ")).as_str(), "default");
+    }
+
+    #[test]
+    fn icons_are_kept_per_part_of_a_site() {
+        let rel = |u: &str| icon_rel(u).map(|p| p.to_string_lossy().to_string());
+        assert_eq!(
+            rel("https://www.google.com/maps/@1,2,3z").as_deref(),
+            Some("google.com/maps.png")
+        );
+        assert_eq!(
+            rel("https://www.google.com/search?q=webkitgtk").as_deref(),
+            Some("google.com/search.png")
+        );
+        assert_eq!(
+            rel("https://google.com/").as_deref(),
+            Some("google.com/_.png")
+        );
+        assert_eq!(
+            rel("https://docs.google.com/Document/d/1").as_deref(),
+            Some("docs.google.com/document.png")
+        );
+        assert_eq!(
+            rel("http://127.0.0.1:8765/forms.html").as_deref(),
+            Some("127.0.0.1_8765/forms.html.png")
+        );
+        assert_eq!(
+            rel("https://example.com/../x").as_deref(),
+            Some("example.com/x.png")
+        );
+        assert_eq!(
+            rel("https://example.com/.hidden/x").as_deref(),
+            Some("example.com/_hidden.png")
+        );
+        assert_eq!(
+            rel("https://example.com/a%2F..%2Fb").as_deref(),
+            Some("example.com/a_2f.._2fb.png")
+        );
+        assert_eq!(rel("about:blank"), None);
+        assert_eq!(rel("file:///home/x.html"), None);
+        assert_eq!(rel("copper://canvas/1").as_deref(), Some("canvas/1.png"));
     }
 
     #[test]

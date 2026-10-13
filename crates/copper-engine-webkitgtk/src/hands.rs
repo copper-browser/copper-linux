@@ -220,6 +220,14 @@ fn warn_once(msg: &str) {
 // Delivery
 
 pub(crate) async fn deliver(page: WebKitPage, ev: InputEvent) -> Result<Trust> {
+    // Escape closes a file chooser the page has open, as it would for a
+    // person looking at the dialog; the page hears `cancel`.
+    if let InputEvent::Key { key, .. } = &ev
+        && key == "Escape"
+        && page.shared().cancel_file_chooser()
+    {
+        return Ok(Trust::Trusted);
+    }
     // A `<select>` popup the backstage kept off screen takes keys the way a
     // real popup would; anything else dismisses it first.
     if let Some(menu) = page.shared().open_menu() {

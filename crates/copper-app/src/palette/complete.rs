@@ -359,6 +359,17 @@ pub fn grew(before: &str, after: &str) -> bool {
     after.len() > before.len() && after.starts_with(before)
 }
 
+/// Whether a completion may be added to the field now: it holds exactly
+/// what was typed (nothing offered yet), the caret (in characters) is at its
+/// end and nothing is selected. Anything else means the user moved on — a
+/// later key, a click inside the text — and the offer is dropped.
+pub fn may_offer(text: &str, typed: &str, caret: i32, selection: Option<(i32, i32)>) -> bool {
+    !text.is_empty()
+        && text == typed
+        && usize::try_from(caret).is_ok_and(|c| c == text.chars().count())
+        && selection.is_none_or(|(a, b)| a == b)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -389,6 +400,29 @@ mod tests {
         assert!(grew("gi", "git"));
         assert!(!grew("git", "gi"));
         assert!(!grew("git", "gxt"));
+    }
+
+    #[test]
+    fn a_completion_lands_only_on_the_text_it_was_made_for() {
+        assert!(may_offer("news.", "news.", 5, None));
+        assert!(
+            may_offer("café", "café", 4, None),
+            "the caret counts characters"
+        );
+        assert!(may_offer("news.", "news.", 5, Some((5, 5))));
+        // GTK has not put the caret after the new character yet.
+        assert!(!may_offer("news.", "news.", 4, None));
+        // A completion is already showing.
+        assert!(!may_offer(
+            "news.ycombinator.com",
+            "news.",
+            20,
+            Some((5, 20))
+        ));
+        // Another key arrived first.
+        assert!(!may_offer("news.y", "news.", 6, None));
+        assert!(!may_offer("news.", "news.", 5, Some((0, 5))));
+        assert!(!may_offer("", "", 0, None));
     }
 
     #[test]

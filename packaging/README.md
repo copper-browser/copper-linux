@@ -6,7 +6,7 @@ each architecture (x86_64/amd64 and aarch64/arm64), with no containers:
 | Package | For | Built by | WebKit comes from |
 |---|---|---|---|
 | `.deb` | Ubuntu 24.04+, Debian 13+ | `packaging/build-deb.sh` (cargo-deb) | apt (`libwebkitgtk-6.0-4`) |
-| `.flatpak` bundle | Fedora 41+ and everything else | `packaging/flatpak/build.sh` (flatpak-builder) | the GNOME 51 runtime (Flathub) |
+| `.flatpak` bundle | Fedora 41+ and everything else | `packaging/flatpak/build.sh` (flatpak-builder) | the GNOME 51 runtime (Flathub), codecs from its `codecs-extra` extension |
 
 People install with the one-liner, which picks one of the two
 (`install.sh` at the repo root, attached to every release):
@@ -14,6 +14,11 @@ People install with the one-liner, which picks one of the two
 ```sh
 curl -fsSL https://github.com/copper-browser/copper-linux/releases/latest/download/install.sh | sh
 ```
+
+It picks the `.deb` wherever apt has `libwebkitgtk-6.0-4`, and the Flatpak
+elsewhere. Neither engine has WebRTC or EME, so the Flatpak buys nothing there.
+The `.deb` is the smaller download and reaches the keyring directly. The
+measurements are in `docs/engine.md`.
 
 ## Layout
 
@@ -54,9 +59,22 @@ What it installs:
 - `/usr/share/metainfo/com.copperbrowser.Copper.metainfo.xml`
 - `/etc/apparmor.d/copper` (a conffile)
 
-Control fields: `Depends: $auto, libwebkitgtk-6.0-4, libgtk-4-1, libadwaita-1-0 (>= 1.5), libsecret-1-0`,
-`Recommends:` an xdg-desktop-portal backend, `Suggests: gnome-keyring | kwalletmanager`
-(a Secret Service for passwords), `Provides: www-browser, gnome-www-browser`.
+Control fields:
+
+- `Depends: $auto, libwebkitgtk-6.0-4, libgtk-4-1, libadwaita-1-0 (>= 1.5), libsecret-1-0`
+- `Recommends: gstreamer1.0-libav, gstreamer1.0-plugins-bad, gstreamer1.0-plugins-good,
+  gstreamer1.0-gl, gstreamer1.0-pipewire | gstreamer1.0-pulseaudio | gstreamer1.0-alsa,
+  libgl1-mesa-dri, xdg-desktop-portal-gtk | xdg-desktop-portal-gnome | xdg-desktop-portal-kde,
+  fonts-noto-color-emoji`. WebKitGTK alone pulls in only plugins-base/-good/-gl, and
+  without libav and plugins-bad H.264, AAC, HEVC, AV1 and MSE Opus all fail, which
+  breaks YouTube and most sites' video (measured in `docs/engine.md`). `install.sh`
+  installs Recommends explicitly (`-o APT::Install-Recommends=true`) and prints which
+  it added, which were already there, and any apt could not find.
+- `Suggests: gstreamer1.0-plugins-ugly, gstreamer1.0-nice, speech-dispatcher,
+  gnome-keyring | kwalletmanager | keepassxc`: x264 and a52, ICE for WebKit builds
+  that have WebRTC, a speech backend for `speechSynthesis`, and a Secret Service
+  for passwords.
+- `Provides: www-browser, gnome-www-browser`.
 
 Maintainer scripts:
 

@@ -70,8 +70,21 @@ calls in that test with `copper --json call <tool> '<args>'`.
 Known engine difference (not a script one): Safari's `innerText` includes a
 `<select>`'s option texts and WebKitGTK 2.52's does not, so `browser_get_text`
 over a form with a `<select>` lacks those lines on Linux. The test pins this
-exact gap and nothing else. The console capture starts when the helper is
-installed (first page-tool call), as on the Mac — earlier logs are not seen.
+exact gap and nothing else.
+
+Two deliberate Linux changes to the helper, both marked `// Linux:` in
+`page/helper.js`:
+
+- **Console from document start.** On the Mac the console capture starts when
+  the helper is installed (first page-tool call), so what a page logged while
+  loading is lost. `page/console_early.js` (`page::console_early()`) is the
+  same capture as a document-start user script; the helper adopts its
+  `window.__copperLogs` instead of hooking `console` again. Entries, text and
+  the 200-line cap are unchanged, so `browser_console_messages` reads the same.
+- **Instant scrolling into view.** `rect` and `click` scroll the target into
+  view with `behavior: 'instant'`; the Mac's default follows CSS
+  `scroll-behavior: smooth`, so on such pages the box was measured before the
+  scroll and the real click landed on whatever had been there.
 
 ## Tests
 
@@ -126,6 +139,7 @@ installed (first page-tool call), as on the Mac — earlier logs are not seen.
 | `page/console.js` | `Console` | `Fork/MCP/Tools.swift:447` `Tools.dispatch` | call | page | `page/helper.js` |
 | `page/find_text.js` | `FindText` | `Fork/MCP/Tools.swift:451` `Tools.dispatch` | call | page | `page/helper.js` |
 | `page/element.js` | `Element` | `Fork/MCP/Tools.swift:405` `Tools.dispatch` | call | page | `page/helper.js` |
+| `page/console_early.js` | `ConsoleEarly` | `Fork/MCP/Page.swift:138` `Page.helper` (its console capture) | user script: start, main frame | page |  |
 | `jev/fast.js` | `JevFast` | `Fork/MCP/Ultrafast.swift:132` `Ultrafast.script` | installer | page |  |
 | `jev/observe.js` | `JevObserve` | `Fork/MCP/Ultrafast.swift:365` `Ultrafast.observe` | call | page | `jev/fast.js` |
 | `jev/marker.js` | `JevMarker` | `Fork/MCP/Ultrafast.swift:377` `Ultrafast.fresh` | call | page | `jev/fast.js` |

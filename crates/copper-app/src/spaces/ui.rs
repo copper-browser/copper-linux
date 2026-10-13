@@ -393,9 +393,11 @@ pub fn editor(shell: &Shell, id: &str) -> Option<adw::Dialog> {
         delete.set_halign(gtk::Align::Center);
         let weak = shell.downgrade();
         let sid = id.to_string();
-        let dlg = dialog.clone();
+        let dlg = dialog.downgrade();
         delete.connect_clicked(move |_| {
-            dlg.close();
+            if let Some(d) = dlg.upgrade() {
+                d.close();
+            }
             if let Some(s) = weak.upgrade() {
                 ask_delete(&s, &sid);
             }
@@ -407,6 +409,16 @@ pub fn editor(shell: &Shell, id: &str) -> Option<adw::Dialog> {
     content.append(&page);
     view.set_content(Some(&content));
     dialog.set_child(Some(&view));
+
+    // Return in the name or the emoji is done: close, which saves.
+    for row in [&name, &icon] {
+        let dlg = dialog.downgrade();
+        row.connect_entry_activated(move |_| {
+            if let Some(d) = dlg.upgrade() {
+                d.close();
+            }
+        });
+    }
 
     // Apply on the way out: name, icon, profile.
     let weak = shell.downgrade();

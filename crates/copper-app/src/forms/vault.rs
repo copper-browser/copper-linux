@@ -14,15 +14,32 @@ use copper_creds::credential::{
 use copper_creds::onepassword::{Mode, OnePassword, OpConfig, OpState, Remembered};
 use copper_creds::store::{SecretStore, StoreError};
 use copper_creds::{Login, bitwarden::Bitwarden};
+use glib::prelude::*;
 use std::path::Path;
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::Mutex;
 
 /// Whether the Secret Service answered.
+///
+/// Copper never opens the keyring at launch: oo7 creates (or asks to unlock)
+/// the default collection the moment it connects, and on a session without
+/// one (i3, sway, XFCE, a fresh account) that is a "Choose password for new
+/// keyring" prompt over a window that has not even loaded a page. Launch only
+/// *looks* ([`probe`], plain D-Bus reads that never prompt); the store is
+/// opened by the first fill, save, import or visit to Settings › Passwords.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum Keyring {
     #[default]
     Unknown,
+    /// A Secret Service is there (or can be started) and Copper has not
+    /// opened it yet. `has_default`: `Some(false)` = no default keyring yet
+    /// (the first save asks the desktop to make one), `None` = not known
+    /// (not running yet, or a Flatpak, where the portal decides). `locked`:
+    /// the default keyring exists and is locked.
+    Closed {
+        has_default: Option<bool>,
+        locked: bool,
+    },
     Ready,
     /// No Secret Service (or it never answered): why, in one line.
     Unavailable(String),
@@ -65,9 +82,132 @@ impl Snapshot {
         self.op_state == Some(OpState::Locked)
     }
 
+    /// Whether passwords can go to the keyring: open, or there to open on
+    /// the first save.
     pub fn keyring_ready(&self) -> bool {
-        self.keyring == Keyring::Ready
+        matches!(self.keyring, Keyring::Ready | Keyring::Closed { .. })
     }
+}
+
+/// Why the store is wanted; decides whether opening it may prompt.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Want {
+    /// Keep something (save, import, forget, Set Up): may create the
+    /// default keyring.
+    Write,
+    /// Fill or answer an agent: opens an existing keyring (an unlock prompt
+    /// is fine, the person or agent asked), never creates one.
+    Read,
+    /// Show a list (Settings): opens only an existing, unlocked keyring.
+    View,
+}
+
+const SECRETS: &str = "org.freedesktop.secrets";
+
+/// Look at the session's Secret Service without opening it: no prompt. A
+/// service that is not running yet is left alone (`start` = false, launch)
+/// or started by D-Bus activation (`start` = true: Settings, the first
+/// fill). Awaited on the main loop; the D-Bus calls run off it.
+pub async fn probe(start: bool) -> Keyring {
+    super::rt::blocking(move || look(start))
+        .await
+        .unwrap_or_else(|| Keyring::Unavailable("the keyring check stopped".into()))
+}
+
+/// [`probe`], blocking (plain synchronous D-Bus calls, any thread).
+fn look(start: bool) -> Keyring {
+    // In a Flatpak oo7 keeps passwords in its own file, keyed by the secret
+    // portal; whether that asks anything is the portal's business.
+    if std::path::Path::new("/.flatpak-info").exists() {
+        return Keyring::Closed {
+            has_default: None,
+            locked: false,
+        };
+    }
+    look_bus(start).unwrap_or_else(Keyring::Unavailable)
+}
+
+fn look_bus(start: bool) -> Result<Keyring, String> {
+    use gio::DBusCallFlags as F;
+    let bus = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE)
+        .map_err(|e| format!("no session bus: {e}"))?;
+    let call = |dest: &str, path: &str, iface: &str, method: &str, args: glib::Variant, flags| {
+        bus.call_sync(
+            Some(dest),
+            path,
+            iface,
+            method,
+            Some(&args),
+            None,
+            flags,
+            3000,
+            gio::Cancellable::NONE,
+        )
+    };
+    let dbus = |method: &str, args: glib::Variant| {
+        call(
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+            method,
+            args,
+            F::NONE,
+        )
+    };
+    let running = dbus("NameHasOwner", (SECRETS,).to_variant())
+        .map_err(|e| e.to_string())?
+        .child_value(0)
+        .get::<bool>()
+        .unwrap_or(false);
+    if !running {
+        let startable = dbus("ListActivatableNames", ().to_variant())
+            .ok()
+            .and_then(|v| v.child_value(0).get::<Vec<String>>())
+            .is_some_and(|names| names.iter().any(|n| n == SECRETS));
+        if !startable {
+            return Err("no Secret Service is running in this session".into());
+        }
+        if !start {
+            return Ok(Keyring::Closed {
+                has_default: None,
+                locked: false,
+            });
+        }
+        // ReadAlias below starts it.
+    }
+    let flags = if running { F::NO_AUTO_START } else { F::NONE };
+    let alias = call(
+        SECRETS,
+        "/org/freedesktop/secrets",
+        "org.freedesktop.Secret.Service",
+        "ReadAlias",
+        ("default",).to_variant(),
+        flags,
+    )
+    .map_err(|e| e.to_string())?;
+    let path = alias.child_value(0).str().unwrap_or("/").to_string();
+    if path == "/" {
+        return Ok(Keyring::Closed {
+            has_default: Some(false),
+            locked: false,
+        });
+    }
+    let locked = call(
+        SECRETS,
+        &path,
+        "org.freedesktop.DBus.Properties",
+        "Get",
+        ("org.freedesktop.Secret.Collection", "Locked").to_variant(),
+        F::NO_AUTO_START,
+    )
+    .ok()
+    .and_then(|v| v.child_value(0).as_variant())
+    .and_then(|v| v.get::<bool>())
+    .unwrap_or(false);
+    Ok(Keyring::Closed {
+        has_default: Some(true),
+        locked,
+    })
 }
 
 pub struct Vault {
@@ -106,11 +246,62 @@ impl Vault {
         }
     }
 
-    /// The Secret Service, connected once (a failure is retried next time).
+    /// What [`probe`] saw, unless the store is already open.
+    pub fn note_probe(&self, k: Keyring) {
+        if let Ok(mut s) = self.snap.lock()
+            && s.keyring != Keyring::Ready
+        {
+            s.keyring = k;
+        }
+    }
+
+    /// Whether the store is open (nothing more will prompt to open it).
+    pub fn keyring_open(&self) -> bool {
+        self.snapshot().keyring == Keyring::Ready
+    }
+
+    /// The Secret Service for keeping something: connected once, creating
+    /// the default keyring if there is none (the desktop asks for its
+    /// password then). A failure is retried next time.
     pub async fn store(&self) -> Result<Arc<SecretStore>, StoreError> {
+        self.store_for(Want::Write).await
+    }
+
+    async fn store_for(&self, want: Want) -> Result<Arc<SecretStore>, StoreError> {
         let mut slot = self.store.lock().await;
         if let Some(s) = slot.as_ref() {
             return Ok(s.clone());
+        }
+        let mut before = self.snapshot().keyring;
+        // Not looked at closely yet (the service was not running at
+        // launch): look now, starting it, before anything may prompt.
+        if want != Want::Write
+            && before
+                == (Keyring::Closed {
+                    has_default: None,
+                    locked: false,
+                })
+            && !std::path::Path::new("/.flatpak-info").exists()
+        {
+            before = tokio::task::spawn_blocking(|| look(true))
+                .await
+                .unwrap_or(before);
+            self.set_keyring(before.clone());
+        }
+        if want != Want::Write {
+            let not_now = |why: &str| Err(StoreError::Unavailable(why.to_string()));
+            match &before {
+                Keyring::Unknown => return not_now("the keyring has not been looked at yet"),
+                Keyring::Unavailable(why) => return not_now(why),
+                Keyring::Closed {
+                    has_default: Some(false),
+                    ..
+                } => return not_now("there is no default keyring yet"),
+                Keyring::Closed { locked: true, .. } | Keyring::Locked if want == Want::View => {
+                    return Err(StoreError::Locked);
+                }
+                _ => {}
+            }
         }
         match SecretStore::open().await {
             Ok(s) => {
@@ -120,8 +311,18 @@ impl Vault {
                 Ok(s)
             }
             Err(e) => {
+                // A dismissed "create a keyring" prompt leaves things as
+                // they were, not "no keyring".
+                let missing = matches!(
+                    before,
+                    Keyring::Closed {
+                        has_default: Some(false),
+                        ..
+                    }
+                );
                 self.set_keyring(match &e {
                     StoreError::Locked => Keyring::Locked,
+                    _ if missing => before,
                     other => Keyring::Unavailable(other.to_string()),
                 });
                 Err(e)
@@ -129,9 +330,9 @@ impl Vault {
         }
     }
 
-    /// First look: the keyring, then whatever last launch left of the vaults.
+    /// First look: whatever last launch left of the vaults. The keyring is
+    /// only looked at ([`probe`], on the main loop), never opened here.
     pub async fn start(&self, remembered: Remembered) {
-        let _ = self.store().await;
         self.bw.lock().await.start().await;
         self.op.lock().await.start(remembered).await;
         self.refresh().await;
@@ -193,7 +394,7 @@ impl Vault {
 
     /// Every source's accounts for `host`, merged (a vault's copy wins).
     pub async fn candidates(&self, host: &str) -> Vec<Credential> {
-        let keyring = match self.store().await {
+        let keyring = match self.store_for(Want::Read).await {
             Ok(s) => s
                 .logins_matching(host)
                 .await
@@ -206,9 +407,9 @@ impl Vault {
         credential::combine(keyring, bw, op)
     }
 
-    /// Every account in every source (agent access lists).
+    /// Every account in every source (agent access lists in Settings).
     pub async fn all_credentials(&self) -> Vec<Credential> {
-        let keyring = match self.store().await {
+        let keyring = match self.store_for(Want::View).await {
             Ok(s) => s
                 .all()
                 .await
@@ -223,7 +424,10 @@ impl Vault {
 
     /// The Secret Service's own list (Settings).
     pub async fn logins(&self) -> Result<Vec<Login>, String> {
-        let s = self.store().await.map_err(|e| e.to_string())?;
+        let s = self
+            .store_for(Want::View)
+            .await
+            .map_err(|e| e.to_string())?;
         s.all().await.map_err(|e| e.to_string())
     }
 
@@ -231,7 +435,10 @@ impl Vault {
     pub async fn secret(&self, id: &CredentialId) -> Result<String, String> {
         match id {
             CredentialId::Keychain { host, user } => {
-                let s = self.store().await.map_err(|e| e.to_string())?;
+                let s = self
+                    .store_for(Want::Read)
+                    .await
+                    .map_err(|e| e.to_string())?;
                 s.secret(host, user)
                     .await
                     .map_err(|e| e.to_string())?
@@ -278,7 +485,7 @@ impl Vault {
     /// It was just used: lists put it first.
     pub async fn touch(&self, c: &Credential) {
         if let CredentialId::Keychain { host, user } = &c.id
-            && let Ok(s) = self.store().await
+            && let Ok(s) = self.store_for(Want::Read).await
         {
             let _ = s.touch(host, user, now()).await;
         }
@@ -362,7 +569,7 @@ impl Vault {
     /// The users already kept for `host` where a save would go.
     pub async fn known_users(&self, target: Source, host: &str) -> Vec<String> {
         match target {
-            Source::Keychain => match self.store().await {
+            Source::Keychain => match self.store_for(Want::Read).await {
                 Ok(s) => s
                     .logins_for(host)
                     .await
@@ -395,7 +602,7 @@ impl Vault {
     pub async fn kept(&self, target: Source, host: &str, user: &str) -> Result<Option<String>, ()> {
         match target {
             Source::Keychain => {
-                let s = self.store().await.map_err(|_| ())?;
+                let s = self.store_for(Want::Read).await.map_err(|_| ())?;
                 s.secret(host, user).await.map_err(|_| ())
             }
             Source::Bitwarden => {

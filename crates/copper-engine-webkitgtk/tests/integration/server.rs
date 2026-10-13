@@ -135,6 +135,18 @@ const PROBE_PAGE: &str = r#"<!doctype html>
   $('file').addEventListener('cancel', () => probe.cancels++);
 </script></body></html>"#;
 
+/// A file input at a known place (centre (120,35)) and what it heard.
+const FILE_PAGE: &str = r#"<!doctype html>
+<html><head><meta charset="utf-8"><title>file input</title>
+<style>body{margin:0;font:16px sans-serif} #file{position:absolute;left:20px;top:20px;width:200px;height:30px}</style></head>
+<body><input id="file" type="file">
+<script>
+  window.fc = { cancels: 0, changes: 0, names: [] };
+  const f = document.getElementById('file');
+  f.addEventListener('cancel', () => fc.cancels++);
+  f.addEventListener('change', () => { fc.changes++; fc.names = [...f.files].map((x) => x.name); });
+</script></body></html>"#;
+
 /// 1x1 transparent GIF.
 const GIF: &[u8] = &[
     0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -183,6 +195,7 @@ fn handle(mut stream: TcpStream, hits: &Hits, icon: &[u8]) -> std::io::Result<()
         "/input" => ("text/html; charset=utf-8", INPUT_PAGE.into()),
         "/user" => ("text/html; charset=utf-8", USER_PAGE.into()),
         "/probe" => ("text/html; charset=utf-8", PROBE_PAGE.into()),
+        "/file" => ("text/html; charset=utf-8", FILE_PAGE.into()),
         "/allowed.js" => ("text/javascript", b"window.allowedRan = true;".to_vec()),
         "/blocked.js" => ("text/javascript", b"window.blockedRan = true;".to_vec()),
         "/tracker.gif" => ("image/gif", GIF.to_vec()),

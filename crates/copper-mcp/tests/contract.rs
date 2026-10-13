@@ -694,6 +694,64 @@ async fn named_tabs_errors_and_groups() {
 }
 
 #[tokio::test]
+async fn digit_ids_and_tabs_in_other_spaces() {
+    local()
+        .run_until(async {
+            let r = start(false);
+            let port = r.server.port;
+            {
+                // One tab in another space (no index) whose short id is all
+                // digits, like the QA run's 72135451.
+                let mut w = r.host.0.borrow_mut();
+                w.tabs.push(TabInfo {
+                    id: TabId("72135451-AAAA-BBBB-CCCC-DDDDDDDDDDDD".into()),
+                    index: None,
+                    title: "Elsewhere".into(),
+                    url: Some("https://elsewhere.test/".into()),
+                    ..TabInfo::default()
+                });
+            }
+
+            // The list names it after the row, without an index.
+            let (list, error) = tool(port, "browser_tabs", json!({"action": "list"})).await;
+            assert!(!error);
+            assert_eq!(
+                list,
+                "### Open tabs\n- 0: (on screen, yours) [Home] (https://home.test/) {tab 00000000} (pinned)\n- 1: [Mail] (https://mail.test/) {tab 00000001} [Work]\n- -: [Elsewhere] (https://elsewhere.test/) {tab 72135451}"
+            );
+
+            // An all-digit short id selects that tab, not "index 72135451".
+            let (text, error) = tool(port, "browser_tabs", json!({"action": "select", "tab": "72135451"})).await;
+            assert!(!error, "{text}");
+            assert!(text.starts_with("Selected — your calls now land on this tab; the user's view did not change. {tab 72135451}"), "{text}");
+            let (text, error) = tool(port, "browser_get_text", json!({"tab": "7213"})).await;
+            assert!(!error, "{text}");
+            assert_eq!(r.host.0.borrow().calls.last().unwrap().0, "72135451");
+
+            // Short digit strings and JSON numbers stay indices.
+            let (_, error) = tool(port, "browser_get_text", json!({"tab": "1"})).await;
+            assert!(!error);
+            assert_eq!(r.host.0.borrow().calls.last().unwrap().0, "00000001");
+            let (_, error) = tool(port, "browser_get_text", json!({"tab": 0})).await;
+            assert!(!error);
+            assert_eq!(r.host.0.borrow().calls.last().unwrap().0, "00000000");
+            // A number no tab has, that starts an id: the id.
+            let (_, error) = tool(port, "browser_get_text", json!({"tab": "72"})).await;
+            assert!(!error);
+            assert_eq!(r.host.0.borrow().calls.last().unwrap().0, "72135451");
+            // Neither an index nor an id: the Mac's error.
+            let (text, error) = tool(port, "browser_get_text", json!({"tab": "9"})).await;
+            assert!(error);
+            assert!(text.starts_with("no tab 9 — ### Open tabs\n"), "{text}");
+            // Long digits matching no id are an index no tab has.
+            let (text, error) = tool(port, "browser_get_text", json!({"tab": "5555"})).await;
+            assert!(error);
+            assert!(text.starts_with("no tab 5555 — "), "{text}");
+        })
+        .await;
+}
+
+#[tokio::test]
 async fn stop_refuses_the_hand() {
     local()
         .run_until(async {
