@@ -188,11 +188,22 @@ impl Shell {
         if let Some(p) = self.page(id) {
             return Some(p);
         }
-        let (url, private, profile) = {
+        let (url, private, profile, sleeping) = {
             let b = self.browser();
             let t = b.tab(id)?;
-            (t.url.clone(), t.private, b.profile_of(id))
+            (t.url.clone(), t.private, b.profile_of(id), t.sleeping)
         };
+        // A tab that gets a page is awake, and was just used: left marked
+        // asleep, its next change would take the page away again (and a
+        // caller waiting on it would rebuild it, again and again); left with
+        // a stale `seen` (a tab restored from the session), the idle sleeper
+        // would put it back to sleep within a minute.
+        if sleeping {
+            self.browser_mut().update_tab(id, |t| {
+                t.sleeping = false;
+                t.seen = copper_core::date::UnixTime::now();
+            });
+        }
         let profile = if private {
             self.engine().profile(&crate::private::profile_id(id), true)
         } else {

@@ -752,6 +752,8 @@ pub fn run_with(args: &[String], env: &mut Env<'_>) -> i32 {
     let timeout = Duration::from_secs(match name {
         "jev_run" => 240,
         "cloud_history_delete" => 600,
+        // A big canvas may take up to a minute to come up before the call runs.
+        n if crate::catalogue::is_canvas(n) => 120,
         _ => 60,
     });
     let Some(response) = post(env, request, &conf, timeout) else {

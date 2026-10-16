@@ -115,7 +115,7 @@ tab again, and may sleep.
 | `browser_crashes` | Copper's own crash history on this computer, newest first. |
 | `browser_sign_in`, `browser_autofill` | Fill a saved sign-in, card, identity or custom field without the secret ever leaving Copper (below). |
 | `cloud_history_delete` | Deletes your history on Copper Cloud ([cloud.md](cloud.md)). History on this computer stays. Loopback clients only. |
-| `canvas_*` | Read and draw on your canvases: `canvas_list`, `canvas_open`, `canvas_read`, `canvas_apply`, `canvas_select`, `canvas_focus`, `canvas_create`, `canvas_invite`, `canvas_share_link`, `canvas_join`, `canvas_screenshot`, `canvas_chat`. |
+| `canvas_*` | Read and draw on your canvases: `canvas_list`, `canvas_open`, `canvas_read`, `canvas_apply`, `canvas_select`, `canvas_focus`, `canvas_create`, `canvas_invite`, `canvas_share_link`, `canvas_join`, `canvas_screenshot`, `canvas_chat`. A big canvas reads in pages: `canvas_read` with `overview` first, then `frame` or `region`, or follow `next` as `cursor`; `ids`, `types` and `query` narrow any read. A canvas that is closed, asleep or still loading is opened behind your tab and waited for (up to a minute for a huge one). |
 
 Each tool takes an optional `reason`: one short sentence on what the agent is
 doing and why. Copper never acts on it; it only shows it to you. While an

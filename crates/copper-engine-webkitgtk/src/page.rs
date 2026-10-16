@@ -349,6 +349,22 @@ impl WebKitPage {
         self.inner.view.clone().upcast()
     }
 
+    /// What is on screen right now, as the texture WebKit painted (device
+    /// pixels; no PNG encoding on the main thread — for callers that crop,
+    /// scale and encode elsewhere).
+    pub fn snapshot_texture(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<gdk4::Texture>>>> {
+        let fut = self
+            .inner
+            .view
+            .snapshot_future(webkit6::SnapshotRegion::Visible, SnapshotOptions::NONE);
+        Box::pin(async move {
+            fut.await
+                .map_err(|e| EngineError::Snapshot(e.message().to_owned()))
+        })
+    }
+
     /// The profile this page belongs to.
     pub fn profile(&self) -> &WebKitProfile {
         &self.inner.profile

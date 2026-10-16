@@ -818,7 +818,7 @@
         "name": "browser_wait_for"
       },
       {
-        "description": "Change a canvas in one transaction (opens its tab in the background if needed). Returns {applied, ids, errors}. Ops: {op:'add', shape:{type:'sticky'|'text'|'frame'|'arrow'|'image'|'link'|'checklist', id?, x?, y?, w?, h?, color?, text?|title?|url?|from?/to?|label?}} (omit x/y to place it in free space near the view; give it your own id, e.g. 'n1', to connect it later in the same call). A link with live:true (or type:'web') shows the site itself on the board, an iframe everyone on the board can browse — each person signed in as themselves; it defaults to 960×640 and needs an http(s) url; update {live:false} turns it back into a card. A checklist is a clickable RSVP / to-do card: {type:'checklist', title, columns?:['Yes','No'] (1–4; one column = to-do boxes), rows:['Ann', …] (≤60), picks?:{'Ann':'Yes'}} — it is stored as a sticky with view:'checklist' whose text is the list ('### Title' then '- [ ] Ann' / '- [x] Ann · No' lines), so older Coppers show it as a note with task boxes; each row has at most one pick; in update, picks name a row by label and null clears it, and rows/columns/title replace them in the text (rows keep their picks by label). {op:'update', id, patch:{view:'checklist', columns?}} turns a sticky that holds a heading and a task list into a card, ticks kept; view:null turns it back into a note. {op:'update', id, patch:{…}}; {op:'move', id, dx, dy}; {op:'resize', id, w, h}; {op:'delete', id}; {op:'connect', from:id, to:id, label?} (an arrow); {op:'clear', confirm:true} only when the user explicitly asked to wipe the board.",
+        "description": "Change a canvas in one transaction (opens its tab in the background if needed). Returns {applied, ids, errors}. Ops: {op:'add', shape:{type:'sticky'|'text'|'frame'|'arrow'|'image'|'link'|'checklist'|'timeline', id?, x?, y?, w?, h?, color?, text?|title?|url?|from?/to?|label?}} (omit x/y to place it in free space near the view; give it your own id, e.g. 'n1', to connect it later in the same call). A link with live:true (or type:'web') shows the site itself on the board, an iframe everyone on the board can browse — each person signed in as themselves; it defaults to 960×640 and needs an http(s) url; update {live:false} turns it back into a card. A checklist is a clickable RSVP / to-do card: {type:'checklist', title, columns?:['Yes','No'] (1–4; one column = to-do boxes), rows:['Ann', …] (≤60), picks?:{'Ann':'Yes'}, notes?:{'Ann':'Back at 6'}, assignees?:{'Fix login':['Grace Hopper','ann@example.com']}} — it is stored as a sticky with view:'checklist' whose text is the list ('### Title' then '- [ ] Ann' / '- [x] Ann · No' lines, a row's comment as indented '  > …' lines under it, then one indented '  @Name' line per assignee), so older Coppers show it as a note with task boxes; each row has at most one pick and one comment (multi-line text, shown collapsed under the row) and up to 12 assignees (people on the canvas named by name, email or id — each newly assigned one is notified like a chat @mention; anyone else by a name of their own); in update, picks, notes and assignees name a row by label, null clears it (assignees replace the row's list), and rows/columns/title replace them in the text (rows keep their picks, comments and assignees by label). {op:'update', id, patch:{view:'checklist', columns?}} turns a sticky that holds a heading and a task list into a card, ticks kept; view:null turns it back into a note. A timeline: {type:'timeline', title?, start:'YYYY-MM-DD', end, step?:'day'|'week'|'month'|'quarter'|'year', items?:[{date, end?, label, text?, color?}]} (text makes a bubble, end a section), stored as a sticky with view:'timeline' whose text is the timeline; update takes the same (items replaces the list) plus addItems:[…] and editItems:{ref: patch|null} (ref: 'YYYY-MM-DD · label', a label, a date or an index; null removes). {op:'update', id, patch:{…}}; {op:'move', id, dx, dy}; {op:'resize', id, w, h}; {op:'delete', id}; {op:'connect', from:id, to:id, label?} (an arrow); comment threads on a shape, Figma-style: {op:'comment', on:shapeId, text} starts one (its ids[i] is the thread id), {op:'reply', thread, text} adds onto one (a resolved thread opens again), {op:'resolve', thread, resolved:true|false} resolves or reopens; {op:'clear', confirm:true} only when the user explicitly asked to wipe the board.",
         "inputSchema": {
           "properties": {
             "as": {
@@ -1012,9 +1012,17 @@
         "name": "canvas_open"
       },
       {
-        "description": "Read a canvas: {canvas, viewport, shapes:[{id,type,x,y,w,h,color,text|title|label|url,live?,by}], agents, selection}; a checklist card (a sticky with view:'checklist') also has title, columns, rows:[{label,pick,by?,at?}] and tally {column: count}. Text is cut at 500 characters unless full is true. Read before you write.",
+        "description": "Read a canvas: {canvas, viewport, shapes:[{id,type,x,y,w,h,color,text|title|label|url,live?,by}], agents, selection}; a checklist card (a sticky with view:'checklist') also has title, columns, rows:[{label,pick,by?,at?,note?,noteBy?,noteAt?,assignees?:[{name,id?,email?}]}] (note: the row's comment, when it has one; assignees: who the row is assigned to, id their Copper Cloud user id) and tally {column: count}; a timeline (view:'timeline') has title, start, end, step and items:[{date, end?, label, text?, color?, kind:'note'|'bubble'|'section'}]; comments:[{id, anchor (shape id), anchorDeleted?, resolved, resolvedBy?, messages:[{id, by, at, text, edited?}]}] lists the comment threads people left on shapes (a frame is often a slide). Text is cut at 500 characters unless full is true. Big canvases come in pages: every answer has total (the shapes that match) and returned, and next while more remain — pass it back as cursor for the following page. On a big canvas read overview first, then one frame or region at a time, or follow next; ids, types and query narrow any read. Read before you write.",
         "inputSchema": {
           "properties": {
+            "cursor": {
+              "description": "The next of a previous answer: the page after it",
+              "type": "string"
+            },
+            "frame": {
+              "description": "A frame's shape id: that frame and the shapes inside it",
+              "type": "string"
+            },
             "full": {
               "description": "Whole texts instead of the first 500 characters",
               "type": "boolean"
@@ -1023,9 +1031,59 @@
               "description": "Canvas id or name (from canvas_list); omit for the canvas tab in front, else Personal",
               "type": "string"
             },
+            "ids": {
+              "description": "Exactly these shapes",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "limit": {
+              "description": "Shapes per page; default 200, at most 500",
+              "type": "integer"
+            },
+            "overview": {
+              "description": "No shapes: the canvas, viewport, total, counts by type, bounds, frames [{id, title, x, y, w, h, shapes}], comments {threads, open}, agents and selection — read this first on a big canvas",
+              "type": "boolean"
+            },
+            "query": {
+              "description": "Only shapes whose text, title, label or url contains this (any case)",
+              "type": "string"
+            },
             "reason": {
               "description": "One short sentence on what you are doing and why — shown to the user watching the browser",
               "type": "string"
+            },
+            "region": {
+              "description": "Only the shapes intersecting this rectangle, in board units",
+              "properties": {
+                "h": {
+                  "type": "number"
+                },
+                "w": {
+                  "type": "number"
+                },
+                "x": {
+                  "type": "number"
+                },
+                "y": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "x",
+                "y",
+                "w",
+                "h"
+              ],
+              "type": "object"
+            },
+            "types": {
+              "description": "Only these types, as read reports them (sticky, text, frame, arrow, image, link, checklist, timeline, …)",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
             }
           },
           "required": [],

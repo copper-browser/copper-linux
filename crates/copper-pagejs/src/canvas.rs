@@ -55,12 +55,25 @@ pub fn apply(input: &str) -> Call<String> {
 
 /// `canvas_read`: answers JSON text.
 pub fn read(full: bool) -> Call<String> {
-    let opts = if full {
-        "{\"full\":true}"
-    } else {
-        "{\"full\":false}"
-    };
-    Call::new(Script::CanvasRead, json!({ "opts": opts }))
+    read_with(&json!({ "full": full }))
+}
+
+/// `canvas_read` with the paging / narrowing options (`full`, `overview`,
+/// `frame`, `region`, `ids`, `types`, `query`, `limit`, `cursor`), handed to
+/// `copperCanvas.read` as one JSON string. A page that predates an option
+/// ignores it. Answers JSON text.
+pub fn read_with(opts: &Value) -> Call<String> {
+    Call::new(Script::CanvasRead, json!({ "opts": opts.to_string() }))
+}
+
+/// A live frame's poster (`copperCanvas.framePoster(name, dataUrl | null)`):
+/// `data_url` is a `data:image/jpeg;base64,…` picture of the frame, or `None`
+/// when it could not be taken. Answers whether the page has `framePoster`.
+pub fn frame_poster(name: &str, data_url: Option<&str>) -> Call<bool> {
+    Call::new(
+        Script::CanvasFramePoster,
+        json!({ "name": name, "url": data_url }),
+    )
 }
 
 pub fn select(ids: &[String]) -> Call<Value> {
@@ -111,7 +124,9 @@ pub fn frame_event(event: &impl Serialize) -> Call<bool> {
     Call::new(Script::CanvasFrameEvent, json!({ "e": event }))
 }
 
-/// The frame reports collected so far (`{reports: …}`).
+/// Whether this host reports its live frames' loads (`{reports: true}`
+/// once the frame reporter is installed): the page then takes a frame
+/// that never reports as one that didn't load.
 pub fn frame_host(reports: &impl Serialize) -> Call<Value> {
     Call::new(
         Script::CanvasFrameHost,

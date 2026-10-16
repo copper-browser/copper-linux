@@ -280,6 +280,8 @@ scripts! {
     CanvasShowChat = "canvas/show_chat.js", AsyncCall, Page, None;
     CanvasRevealChat = "canvas/reveal_chat.js", AsyncCall, Page, None;
     CanvasChatSend = "canvas/chat_send.js", AsyncCall, Page, None;
+    /// A live frame's poster for the page (`copperCanvas.framePoster`).
+    CanvasFramePoster = "canvas/frame_poster.js", AsyncCall, Page, None;
 }
 
 impl Script {

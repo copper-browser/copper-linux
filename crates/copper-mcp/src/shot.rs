@@ -63,6 +63,11 @@ pub fn encode_png(img: &Rgba) -> Result<Vec<u8>, String> {
 
 /// Encode as JPEG, quality 80, alpha flattened onto white.
 pub fn encode_jpeg(img: &Rgba) -> Result<Vec<u8>, String> {
+    encode_jpeg_quality(img, 80)
+}
+
+/// Encode as JPEG at `quality` (1–100), alpha flattened onto white.
+pub fn encode_jpeg_quality(img: &Rgba, quality: u8) -> Result<Vec<u8>, String> {
     let rgb: Vec<u8> = img
         .pixels
         .as_chunks::<4>()
@@ -77,7 +82,7 @@ pub fn encode_jpeg(img: &Rgba) -> Result<Vec<u8>, String> {
     let w = u16::try_from(img.width).map_err(|_| "picture too wide for JPEG")?;
     let h = u16::try_from(img.height).map_err(|_| "picture too tall for JPEG")?;
     let mut out = Vec::new();
-    jpeg_encoder::Encoder::new(&mut out, 80)
+    jpeg_encoder::Encoder::new(&mut out, quality.clamp(1, 100))
         .encode(&rgb, w, h, jpeg_encoder::ColorType::Rgb)
         .map_err(|e| e.to_string())?;
     Ok(out)

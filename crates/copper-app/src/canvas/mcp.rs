@@ -8,7 +8,6 @@ use crate::shell::Shell;
 use copper_core::canvas::CanvasEntry;
 use serde_json::{Map, Value, json};
 use std::rc::Rc;
-use std::time::Duration;
 
 /// `tool` is the full tool name (e.g. `canvas_read`). Returns JSON content
 /// items as the Mac does (a JSON value per content item; text items as
@@ -147,6 +146,31 @@ fn caller(said: Option<&Value>) -> Value {
     json!({"id": id, "name": name, "color": color})
 }
 
+/// The options `canvas_read` hands the page's `read()` as they came
+/// (canvas-perf contract B): the page reads the document, pages and narrows.
+pub const READ_OPTIONS: [&str; 9] = [
+    "full", "overview", "frame", "region", "ids", "types", "query", "limit", "cursor",
+];
+
+/// `canvas_read`'s arguments as the page's `read(opts)`: the known options
+/// only (the tool's own `id`, `name` and `reason` stay here), `full` always
+/// there.
+pub fn read_opts(args: &Map<String, Value>) -> Value {
+    let mut opts = Map::new();
+    for key in READ_OPTIONS {
+        match args.get(key) {
+            None | Some(Value::Null) => {}
+            Some(v) => {
+                opts.insert(key.to_string(), v.clone());
+            }
+        }
+    }
+    if !opts.get("full").is_some_and(Value::is_boolean) {
+        opts.insert("full".into(), json!(false));
+    }
+    Value::Object(opts)
+}
+
 fn ids(args: &Map<String, Value>) -> Vec<String> {
     args.get("shapeIds")
         .or_else(|| args.get("ids"))
@@ -178,14 +202,15 @@ async fn run(shell: &Shell, tool: &str, args: &Map<String, Value>) -> Result<Vec
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
             let h = open(shell, &e, foreground).await?;
-            h.wait_ready(Duration::from_secs(15)).await.map_err(fail)?;
+            h.wait_ready(super::host::READY_WITHIN)
+                .await
+                .map_err(fail)?;
             Ok(vec![Value::String(json_text(&summary(shell, &e)))])
         }
         "canvas_read" => {
             let e = resolve(shell, args, true)?;
             let h = open(shell, &e, false).await?;
-            let full = args.get("full").and_then(Value::as_bool).unwrap_or(false);
-            let read = h.read(full).await.map_err(fail)?;
+            let read = h.read(&read_opts(args)).await.map_err(fail)?;
             Ok(vec![Value::String(json_text(&read))])
         }
         "canvas_apply" => {
@@ -426,5 +451,35 @@ mod tests {
         let d = caller(Some(&json!({"name": "Bot", "color": "#fff"})));
         assert_eq!(d["color"], "#fff");
         assert_eq!(caller(None)["name"], "Agent");
+    }
+
+    #[test]
+    fn read_options_pass_through() {
+        let args = json!({
+            "id": "Roadmap", "reason": "why", "overview": true, "limit": 50,
+            "region": {"x": 0, "y": 0, "w": 10, "h": 10}, "cursor": null, "bogus": 1,
+        });
+        let opts = read_opts(args.as_object().unwrap());
+        assert_eq!(
+            opts,
+            json!({"full": false, "overview": true, "limit": 50, "region": {"x": 0, "y": 0, "w": 10, "h": 10}})
+        );
+        let full = read_opts(
+            json!({"full": true, "types": ["frame"]})
+                .as_object()
+                .unwrap(),
+        );
+        assert_eq!(full, json!({"full": true, "types": ["frame"]}));
+    }
+
+    #[test]
+    fn assignees_anywhere_in_the_ops() {
+        use super::super::host::mentions_key;
+        let add = json!([{"op": "add", "shape": {"type": "checklist", "rows": ["a"], "assignees": {"a": ["Ann"]}}}]);
+        let update = json!([{"op": "update", "id": "c1", "patch": {"assignees": {"a": null}}}]);
+        let plain = json!([{"op": "add", "shape": {"type": "sticky", "text": "assignees"}}]);
+        assert!(mentions_key(add.as_array().unwrap(), "assignees"));
+        assert!(mentions_key(update.as_array().unwrap(), "assignees"));
+        assert!(!mentions_key(plain.as_array().unwrap(), "assignees"));
     }
 }

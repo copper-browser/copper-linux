@@ -9,8 +9,10 @@
 //! * [`store`] is each canvas's Yjs history on disk;
 //! * [`mcp`] is the `canvas_*` tools.
 
+pub mod chatprefs;
 pub mod host;
 pub mod mcp;
+pub mod poster;
 pub mod registry;
 pub mod scheme;
 pub mod store;
@@ -409,18 +411,52 @@ pub async fn open(
         .map(|e| e.name)
         .unwrap_or_else(|| id.to_string());
     let tab = show(shell, id, foreground);
-    for _ in 0..250 {
+    // The host comes when WebKit asks the tab's page for the canvas address
+    // (`scheme`): first the tab needs a page (it may be asleep), then the
+    // page has to start loading. Each may take a while on a busy machine;
+    // neither may stall.
+    let started = std::time::Instant::now();
+    let mut stage = "building the tab's page";
+    let mut since = started;
+    let mut stamped: Option<std::time::Instant> = None;
+    let mut reloaded = false;
+    loop {
         if let Some(h) = host::for_tab(&tab)
             && h.canvas_id() == id
         {
             return Ok(h);
         }
-        if shell.slot(&tab).is_none() {
-            shell.ensure_page(&tab);
+        if shell.browser().tab(&tab).is_none() {
+            return Err(format!("the canvas tab for {name} was closed"));
+        }
+        if stamped.is_none_or(|t| t.elapsed() >= host::STAMP_EVERY) {
+            stamped = Some(std::time::Instant::now());
+            host::keep_awake(shell, &tab);
+        }
+        let now = match shell.slot(&tab) {
+            None => {
+                shell.ensure_page(&tab);
+                "building the tab's page"
+            }
+            Some(slot) if slot.crashed.get() && !reloaded => {
+                reloaded = true;
+                shell.reload(&tab);
+                "loading the canvas page"
+            }
+            Some(_) => "loading the canvas page",
+        };
+        if now != stage {
+            stage = now;
+            since = std::time::Instant::now();
+        }
+        if since.elapsed() >= host::STALL {
+            return Err(format!(
+                "the canvas tab for {name} didn't open: still {stage} after {} s",
+                since.elapsed().as_secs()
+            ));
         }
         glib::timeout_future(Duration::from_millis(60)).await;
     }
-    Err(format!("the canvas tab for {name} didn't open"))
 }
 
 /// "New Canvas": shared when signed in, on this device otherwise.
@@ -588,7 +624,7 @@ pub async fn land_chrome_canvas(shell: &Shell) -> Option<String> {
     let fresh = existing.is_none();
     let entry = existing.unwrap_or_else(|| registry::create_local(NAME));
     let host = open(shell, &entry.id, true).await.ok()?;
-    host.wait_ready(Duration::from_secs(15)).await.ok()?;
+    host.wait_ready(host::READY_WITHIN).await.ok()?;
     if fresh {
         let ops: Vec<serde_json::Value> = serde_json::from_str(SWITCHING_FROM_CHROME).ok()?;
         let agent = serde_json::json!({"id": "agent:copper", "name": "Copper", "color": stable_color("Copper")});

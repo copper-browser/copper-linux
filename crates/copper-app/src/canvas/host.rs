@@ -131,6 +131,49 @@ impl From<&str> for Failure {
     }
 }
 
+/// How long a canvas page may take to come up, every stage together: a
+/// huge board's whole state goes to the page in one call.
+pub const READY_WITHIN: Duration = Duration::from_secs(60);
+/// How long one of the stages before the hand-over may go without moving
+/// on before the wait gives up on it.
+pub const STALL: Duration = Duration::from_secs(30);
+/// How often a wait marks its tab as used, so the idle sleeper leaves it.
+pub const STAMP_EVERY: Duration = Duration::from_secs(5);
+
+/// Where a canvas tab is on its way to being ready.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stage {
+    /// The tab has no page (asleep, or just made).
+    Tab,
+    /// The page is loading the canvas address.
+    Page,
+    /// The page has loaded but its board has not said `ready`.
+    Script,
+    /// The page said `ready`; the canvas is being handed to it.
+    State,
+    Ready,
+}
+
+impl Stage {
+    pub fn describe(self) -> &'static str {
+        match self {
+            Stage::Tab => "building the tab's page",
+            Stage::Page => "loading the canvas page",
+            Stage::Script => "starting the board (the page hasn't said it is ready)",
+            Stage::State => "handing the canvas to the page",
+            Stage::Ready => "ready",
+        }
+    }
+}
+
+/// Mark a tab as just used (its `seen`), so the idle sleeper leaves it be
+/// while a call waits on it.
+pub fn keep_awake(shell: &crate::shell::Shell, tab: &TabId) {
+    shell
+        .browser_mut()
+        .update_tab(tab, |t| t.seen = copper_core::date::UnixTime::now());
+}
+
 /// One canvas tab's bridge.
 pub struct CanvasHost {
     pub tab: TabId,
@@ -158,9 +201,16 @@ pub struct CanvasHost {
     compacting: Cell<Option<Instant>>,
     compaction_unsupported: Cell<bool>,
     last_error: RefCell<Option<String>>,
+    /// Why the last hand-over of the canvas to the page failed (cleared by
+    /// the next `ready`): a wait stops at once instead of running out.
+    init_error: RefCell<Option<String>>,
     members: RefCell<Option<Vec<Value>>>,
+    members_read: Cell<Option<Instant>>,
     chat_open: Cell<bool>,
     frame_events: RefCell<Vec<Value>>,
+    /// Who the page last said is in the room (`presence`), for `describe`.
+    presence: RefCell<Vec<Value>>,
+    posters: super::poster::Posters,
     /// Frames page → room (sent, dropped) and room → page.
     counts: Cell<(u64, u64, u64)>,
 }
@@ -265,9 +315,13 @@ impl CanvasHost {
             compacting: Cell::new(None),
             compaction_unsupported: Cell::new(false),
             last_error: RefCell::default(),
+            init_error: RefCell::default(),
             members: RefCell::default(),
+            members_read: Cell::new(None),
             chat_open: Cell::new(false),
             frame_events: RefCell::default(),
+            presence: RefCell::default(),
+            posters: super::poster::Posters::default(),
             counts: Cell::new((0, 0, 0)),
         })
     }
@@ -485,7 +539,14 @@ impl CanvasHost {
                     s.toast("Share this canvas with canvas_invite / canvas_share_link, or from another Copper");
                 }
             }
-            "presence" => {}
+            "presence" => {
+                *self.presence.borrow_mut() = body
+                    .get("people")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+            }
+            "framePoster" => self.frame_poster(&body),
             "ws" => {
                 if let Some(b) = body.get("b64").and_then(Value::as_str) {
                     let frame = unb64(b);
@@ -557,7 +618,33 @@ impl CanvasHost {
             "chat" => {
                 if let Some(open) = body.get("open").and_then(Value::as_bool) {
                     self.chat_open.set(open);
+                    let canvas = self.canvas_id();
+                    super::chatprefs::update(&registry::identity().0, &canvas, |p| {
+                        p.open = Some(open);
+                    });
+                    // Every other tab on this canvas follows.
+                    for other in hosts_of(&canvas) {
+                        if other.tab != self.tab && other.is_ready() {
+                            other.chat_open.set(open);
+                            other.post(copper_pagejs::canvas::show_chat(open));
+                        }
+                    }
                 }
+            }
+            "chatRead" => {
+                // The read mark, kept for the next load. The mentions it
+                // read (`mentionIds`) would be marked read on the cloud's
+                // mentions inbox, which Linux does not keep.
+                let id = body.get("id").and_then(Value::as_str).map(String::from);
+                let at = body.get("at").and_then(Value::as_f64);
+                super::chatprefs::update(&registry::identity().0, &self.canvas_id(), |p| {
+                    if id.is_some() {
+                        p.read_id = id;
+                    }
+                    if at.is_some() {
+                        p.read_at = at;
+                    }
+                });
             }
             "chatMembers" => {
                 *self.members.borrow_mut() = None;
@@ -615,10 +702,15 @@ impl CanvasHost {
     async fn ready(self: Rc<Self>) {
         self.generation.set(self.generation.get() + 1);
         let ticket = self.generation.get();
-        // Signed in but the list not read yet this run: give it a moment.
+        *self.init_error.borrow_mut() = None;
+        // Signed in but the list not read yet this run: give it a moment —
+        // so the room is the right one from the start — and, when the
+        // canvas is not in the list kept on disk (new on the server), long
+        // enough for the list to come.
         if registry::cloud_ready() && !registry::refreshed() {
             super::refresh_soon();
-            let until = Instant::now() + Duration::from_millis(1500);
+            let known = self.entry().is_some();
+            let until = Instant::now() + Duration::from_millis(if known { 1500 } else { 15_000 });
             while !registry::refreshed() && Instant::now() < until {
                 glib::timeout_future(Duration::from_millis(50)).await;
             }
@@ -627,7 +719,9 @@ impl CanvasHost {
             return;
         }
         let Some(entry) = self.entry() else {
-            *self.last_error.borrow_mut() = Some("That canvas isn't here any more.".into());
+            let gone = "That canvas isn't here any more.".to_string();
+            *self.last_error.borrow_mut() = Some(gone.clone());
+            *self.init_error.borrow_mut() = Some(gone);
             return;
         };
         *self.store_key.borrow_mut() = registry::store_key(&entry);
@@ -653,11 +747,21 @@ impl CanvasHost {
             &entry.name,
             &ticket.to_string(),
         );
+        let t0 = Instant::now();
         if let Err(e) = self.run(&call).await {
             tracing::error!(target: "copper_app::canvas", error = %e, "canvas init failed");
+            if ticket == self.generation.get() {
+                *self.init_error.borrow_mut() = Some(e.0.clone());
+            }
             *self.last_error.borrow_mut() = Some(e.0);
             return;
         }
+        tracing::debug!(
+            target: "copper_app::canvas",
+            ms = t0.elapsed().as_millis() as u64,
+            updates = updates.len(),
+            "canvas handed to the page"
+        );
         if ticket != self.generation.get() {
             return;
         }
@@ -684,6 +788,9 @@ impl CanvasHost {
         super::recount();
         self.status_now();
         self.share_now();
+        // The frame reporter is on this page (`bind`): a live frame that
+        // never reports didn't load (Mac `tellFrameHost`).
+        self.post(copper_pagejs::canvas::frame_host(&true));
         self.compact_if_needed(!updates.is_empty());
     }
 
@@ -711,32 +818,110 @@ impl CanvasHost {
         });
     }
 
+    /// Where this tab is on its way to ready.
+    pub fn stage(&self) -> Stage {
+        let Some(slot) = super::shell().and_then(|s| s.slot(&self.tab)) else {
+            return Stage::Tab;
+        };
+        let ptr = slot.page.widget().as_ptr() as usize;
+        if self.bound.get() != ptr {
+            // A page WebKit hasn't asked for the canvas address yet.
+            return Stage::Page;
+        }
+        if self.ready_on.get() != ptr {
+            return if slot.page.is_loading() {
+                Stage::Page
+            } else {
+                Stage::Script
+            };
+        }
+        if self.is_ready() {
+            Stage::Ready
+        } else {
+            Stage::State
+        }
+    }
+
     /// Until the page has said `ready` and been given its state; a sleeping
-    /// tab is woken for it.
-    pub async fn wait_ready(self: &Rc<Self>, timeout: Duration) -> Result<(), Failure> {
+    /// tab is woken for it, and kept awake meanwhile. The wait follows the
+    /// page through its stages (page built, loaded, `ready`, canvas handed
+    /// over): it gives up when one of the first three makes no progress for
+    /// [`STALL`], when the hand-over fails, or after `within` in all, and
+    /// says which stage it was at.
+    pub async fn wait_ready(self: &Rc<Self>, within: Duration) -> Result<(), Failure> {
         let started = Instant::now();
-        let mut adopted = false;
-        while started.elapsed() < timeout {
-            if self.is_ready() {
+        let mut stage = self.stage();
+        let mut since = started;
+        let mut adopted: Option<Instant> = None;
+        let mut stamped: Option<Instant> = None;
+        let mut reloaded = false;
+        loop {
+            let now = self.stage();
+            if now == Stage::Ready {
+                if started.elapsed() > Duration::from_secs(2) {
+                    tracing::debug!(target: "copper_app::canvas", ms = started.elapsed().as_millis() as u64, "canvas ready after a wait");
+                }
                 return Ok(());
             }
-            if let Some(shell) = super::shell()
-                && shell.slot(&self.tab).is_none()
-            {
-                shell.ensure_page(&self.tab);
+            if now != stage {
+                tracing::debug!(target: "copper_app::canvas", from = ?stage, to = ?now, ms = since.elapsed().as_millis() as u64, "canvas stage");
+                stage = now;
+                since = Instant::now();
             }
-            if !adopted && started.elapsed() > Duration::from_secs(2) {
-                adopted = true;
+            let shell = super::shell().ok_or("the window has gone")?;
+            if stamped.is_none_or(|t| t.elapsed() >= STAMP_EVERY) {
+                stamped = Some(Instant::now());
+                keep_awake(&shell, &self.tab);
+            }
+            match shell.slot(&self.tab) {
+                None => {
+                    if shell.browser().tab(&self.tab).is_none() {
+                        return Err(Failure("the canvas tab was closed".into()));
+                    }
+                    shell.ensure_page(&self.tab);
+                }
+                Some(slot) if slot.crashed.get() => {
+                    if reloaded {
+                        return Err(Failure(format!(
+                            "the canvas page stopped while {} (its web process quit twice)",
+                            stage.describe()
+                        )));
+                    }
+                    reloaded = true;
+                    tracing::warn!(target: "copper_app::canvas", "canvas page crashed; reloading it for a waiting call");
+                    shell.reload(&self.tab);
+                    since = Instant::now();
+                }
+                Some(_) => {}
+            }
+            if stage == Stage::Script
+                && since.elapsed() > Duration::from_secs(2)
+                && adopted.is_none_or(|t| t.elapsed() > Duration::from_secs(3))
+            {
+                adopted = Some(Instant::now());
                 self.adopt_if_live();
             }
-            glib::timeout_future(Duration::from_millis(80)).await;
+            if stage == Stage::State
+                && let Some(e) = self.init_error.borrow().clone()
+            {
+                return Err(Failure(format!(
+                    "couldn't hand the canvas to its page: {e}"
+                )));
+            }
+            let stalled = stage != Stage::State && since.elapsed() >= STALL;
+            if stalled || started.elapsed() >= within {
+                let why = self.last_error.borrow().clone();
+                return Err(Failure(format!(
+                    "the canvas page didn't come up: still {} after {} s ({} s in all){}",
+                    stage.describe(),
+                    since.elapsed().as_secs(),
+                    started.elapsed().as_secs(),
+                    why.map(|w| format!("; the page said: {w}"))
+                        .unwrap_or_default()
+                )));
+            }
+            glib::timeout_future(Duration::from_millis(60)).await;
         }
-        let why = self.last_error.borrow().clone();
-        Err(Failure(format!(
-            "the canvas page didn't come up within {} s{}",
-            timeout.as_secs(),
-            why.map(|w| format!(" ({w})")).unwrap_or_default()
-        )))
     }
 
     // MARK: host → page
@@ -789,7 +974,12 @@ impl CanvasHost {
     }
 
     pub async fn apply(self: &Rc<Self>, ops: &[Value], agent: &Value) -> Result<Value, Failure> {
-        self.wait_ready(Duration::from_secs(15)).await?;
+        self.wait_ready(READY_WITHIN).await?;
+        // Checklist assignees are named against the canvas's people: the
+        // page has them first (Mac `CanvasTools`).
+        if self.chat_offered() && mentions_key(ops, "assignees") {
+            self.prepare_chat().await;
+        }
         let input = json!({"ops": ops, "as": agent}).to_string();
         let raw = self.run(&copper_pagejs::canvas::apply(&input)).await?;
         let mut out =
@@ -800,9 +990,11 @@ impl CanvasHost {
         Ok(Value::Object(out))
     }
 
-    pub async fn read(self: &Rc<Self>, full: bool) -> Result<Value, Failure> {
-        self.wait_ready(Duration::from_secs(15)).await?;
-        let raw = self.run(&copper_pagejs::canvas::read(full)).await?;
+    /// `canvas_read`: `opts` go to the page's `read()` as they are (`full`,
+    /// and the paging / narrowing options of pages that have them).
+    pub async fn read(self: &Rc<Self>, opts: &Value) -> Result<Value, Failure> {
+        self.wait_ready(READY_WITHIN).await?;
+        let raw = self.run(&copper_pagejs::canvas::read_with(opts)).await?;
         let mut out =
             Self::object(Value::String(raw)).ok_or("the canvas page gave back nothing to read")?;
         if let Some(entry) = self.entry() {
@@ -827,27 +1019,27 @@ impl CanvasHost {
     }
 
     pub async fn select(self: &Rc<Self>, ids: &[String]) -> Result<(), Failure> {
-        self.wait_ready(Duration::from_secs(15)).await?;
+        self.wait_ready(READY_WITHIN).await?;
         self.run(&copper_pagejs::canvas::select(ids)).await?;
         *self.selection.borrow_mut() = ids.to_vec();
         Ok(())
     }
 
     pub async fn zoom_to(self: &Rc<Self>, ids: &[String]) -> Result<(), Failure> {
-        self.wait_ready(Duration::from_secs(15)).await?;
+        self.wait_ready(READY_WITHIN).await?;
         self.run(&copper_pagejs::canvas::zoom_to(ids)).await?;
         Ok(())
     }
 
     pub async fn presence(self: &Rc<Self>) -> Result<Value, Failure> {
-        self.wait_ready(Duration::from_secs(15)).await?;
+        self.wait_ready(READY_WITHIN).await?;
         let raw = self.run(&copper_pagejs::canvas::presence()).await?;
         Ok(serde_json::from_str(&raw).unwrap_or(json!([])))
     }
 
     /// The board as it looks (PNG).
     pub async fn picture(self: &Rc<Self>) -> Result<Vec<u8>, Failure> {
-        self.wait_ready(Duration::from_secs(15)).await?;
+        self.wait_ready(READY_WITHIN).await?;
         let page = self.page().ok_or("the canvas page isn't loaded")?;
         let shot = page
             .snapshot(SnapshotRegion::Visible)
@@ -857,7 +1049,7 @@ impl CanvasHost {
     }
 
     pub async fn chat_send(self: &Rc<Self>, input: &str) -> Result<Value, Failure> {
-        self.wait_ready(Duration::from_secs(15)).await?;
+        self.wait_ready(READY_WITHIN).await?;
         self.prepare_chat().await;
         let raw = self.run(&copper_pagejs::canvas::chat_send(input)).await?;
         Ok(match raw {
@@ -1214,12 +1406,21 @@ impl CanvasHost {
         let mentions = crate::cloud::get()
             .and_then(|c| c.client.supports(copper_cloud::client::Feature::Mentions))
             == Some(true);
+        let pref = super::chatprefs::get(&registry::identity().0, &self.canvas_id());
+        let open = pref.open.unwrap_or(self.chat_open.get());
+        self.chat_open.set(open);
         let mut out = json!({
-            "enabled": true, "open": self.chat_open.get(), "mentionsApi": mentions,
-            "mentioned": [], "invited": [], "known": false,
+            "enabled": true, "open": open, "mentionsApi": mentions,
+            "mentioned": [], "invited": [],
         });
         if let Some(m) = self.members.borrow().as_ref() {
             out["members"] = json!(m);
+        }
+        if pref.read_id.is_some() || pref.read_at.is_some() {
+            out["lastReadId"] = json!(pref.read_id);
+            out["lastReadAt"] = json!(pref.read_at);
+        } else {
+            out["known"] = json!(false);
         }
         out
     }
@@ -1263,10 +1464,15 @@ impl CanvasHost {
             })
             .collect();
         *self.members.borrow_mut() = Some(people);
+        self.members_read.set(Some(Instant::now()));
     }
 
     async fn prepare_chat(&self) {
-        if self.members.borrow().is_none() {
+        let stale = self
+            .members_read
+            .get()
+            .is_none_or(|t| t.elapsed() > Duration::from_secs(60));
+        if self.members.borrow().is_none() || stale {
             self.load_members().await;
         }
         let _ = self
@@ -1302,6 +1508,15 @@ impl CanvasHost {
         let Some(cloud) = crate::cloud::get() else {
             return;
         };
+        // Nobody to tell, or a cloud without mentions (Mac: `mentionsApi != false`).
+        if users.is_empty()
+            || cloud
+                .client
+                .supports(copper_cloud::client::Feature::Mentions)
+                == Some(false)
+        {
+            return;
+        }
         let api = cloud.canvas.clone();
         crate::cloud::spawn(async move {
             if let Err(e) = api
@@ -1313,7 +1528,126 @@ impl CanvasHost {
         });
     }
 
+    // MARK: live frames' posters (super::poster)
+
+    /// `{type: 'framePoster', …}`: queue a picture of that frame.
+    fn frame_poster(self: &Rc<Self>, body: &serde_json::Map<String, Value>) {
+        use super::poster::{Offer, parse};
+        let request = match parse(body) {
+            Ok(r) => r,
+            Err(Some(name)) => {
+                self.answer_poster(&name, None);
+                return;
+            }
+            Err(None) => return,
+        };
+        match self.posters.offer(request, Instant::now()) {
+            Offer::Refuse(names) => {
+                for n in names {
+                    self.answer_poster(&n, None);
+                }
+            }
+            Offer::Queued => {
+                if !self.posters.busy.replace(true) {
+                    let me = self.clone();
+                    glib::spawn_future_local(async move {
+                        me.poster_batches().await;
+                        me.posters.busy.set(false);
+                    });
+                }
+            }
+        }
+    }
+
+    fn answer_poster(&self, name: &str, url: Option<&str>) {
+        self.posters.answered(name, url.is_some(), Instant::now());
+        self.post(copper_pagejs::canvas::frame_poster(name, url));
+    }
+
+    async fn poster_batches(self: &Rc<Self>) {
+        loop {
+            // Requests that come together share one picture of the board.
+            glib::timeout_future(Duration::from_millis(60)).await;
+            let batch = self.posters.take();
+            if batch.is_empty() {
+                return;
+            }
+            let t0 = Instant::now();
+            let answers = self.poster_batch(&batch).await;
+            let made = answers.iter().filter(|(_, u)| u.is_some()).count();
+            tracing::debug!(target: "copper_app::canvas", asked = batch.len(), made, ms = t0.elapsed().as_millis() as u64, "frame posters");
+            for (name, url) in answers {
+                self.answer_poster(&name, url.as_deref());
+            }
+        }
+    }
+
+    /// One snapshot of the board, each frame's rect cut out of it and
+    /// encoded on a worker thread.
+    async fn poster_batch(
+        &self,
+        batch: &[super::poster::Request],
+    ) -> Vec<(String, Option<String>)> {
+        use super::poster;
+        let none = || -> Vec<(String, Option<String>)> {
+            batch.iter().map(|r| (r.name.clone(), None)).collect()
+        };
+        let Some(page) = self.page() else {
+            return none();
+        };
+        let widget = page.widget();
+        let (ww, wh) = (widget.width(), widget.height());
+        if !widget.is_mapped() || ww < 16 || wh < 16 {
+            // Not on screen: the page's frames aren't either.
+            return none();
+        }
+        let tex = match page.snapshot_texture().await {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::debug!(target: "copper_app::canvas", error = %e, "frame poster snapshot");
+                return none();
+            }
+        };
+        if self.page().is_none_or(|p| p.widget() != widget) {
+            return none();
+        }
+        let (tw, th) = (tex.width().max(0) as u32, tex.height().max(0) as u32);
+        // CSS px → widget px (page zoom) → device px (the snapshot's scale).
+        let scale = f64::from(tw) / f64::from(ww) * page.zoom().max(0.01);
+        let jobs: Vec<(String, Option<super::poster::Rect>, u32)> = batch
+            .iter()
+            .map(|r| {
+                (
+                    r.name.clone(),
+                    poster::device_rect(r.rect, scale, tw, th),
+                    r.max_width,
+                )
+            })
+            .collect();
+        if jobs.iter().all(|(_, r, _)| r.is_none()) {
+            return none();
+        }
+        let mut down = gdk4::TextureDownloader::new(&tex);
+        down.set_format(gdk4::MemoryFormat::R8g8b8a8);
+        let (bytes, stride) = down.download_bytes();
+        let work = gio::spawn_blocking(move || {
+            let board = poster::rgba(tw, th, stride, &bytes);
+            jobs.into_iter()
+                .map(|(name, rect, max_width)| {
+                    let url = board
+                        .as_ref()
+                        .zip(rect)
+                        .and_then(|(b, r)| poster::render(b, r, max_width));
+                    (name, url)
+                })
+                .collect::<Vec<_>>()
+        });
+        work.await.unwrap_or_else(|_| none())
+    }
+
     fn frame_report(&self, body: Value) {
+        let kind = body.get("kind").and_then(|k| k.as_str()).unwrap_or("");
+        tracing::debug!(target: "copper_app::canvas", kind, "frame report");
         let mut ev = self.frame_events.borrow_mut();
         ev.push(body.clone());
         let n = ev.len();
@@ -1361,6 +1695,9 @@ impl CanvasHost {
             "clients": self.peers.borrow().len(), "lastError": *self.last_error.borrow(),
             "tab": self.tab.0, "socket": format!("{:?}", self.page_socket.get()),
             "framesOut": self.counts.get().0, "framesDropped": self.counts.get().1, "framesIn": self.counts.get().2,
+            "stage": format!("{:?}", self.stage()), "presence": *self.presence.borrow(),
+            "frameReports": self.frame_events.borrow().len(),
+            "posters": self.posters.counts.get().0, "postersNull": self.posters.counts.get().1,
         })
     }
 
@@ -1380,6 +1717,19 @@ impl CanvasHost {
             self.share_now();
         }
     }
+}
+
+/// Whether any op carries `key` at any depth (checklist `assignees` in an
+/// add's shape or an update's patch; Mac `CanvasTools.mentions`).
+pub fn mentions_key(ops: &[Value], key: &str) -> bool {
+    fn walk(v: &Value, key: &str) -> bool {
+        match v {
+            Value::Object(m) => m.iter().any(|(k, v)| k == key || walk(v, key)),
+            Value::Array(a) => a.iter().any(|v| walk(v, key)),
+            _ => false,
+        }
+    }
+    ops.iter().any(|op| walk(op, key))
 }
 
 /// The first of two futures to finish (`None` when the second did).
