@@ -10,6 +10,7 @@
 //! ```
 
 pub mod column;
+pub mod dropzone;
 pub mod header;
 pub mod settings;
 pub mod stage;

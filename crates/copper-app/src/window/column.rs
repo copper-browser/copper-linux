@@ -6,6 +6,7 @@
 //! Nothing here has a border. The live row is a paper pill a shade stronger
 //! than the column; everything else is spacing.
 
+use super::dropzone::{self, Band, Landing, Layout};
 use super::{Nav, tabs};
 use crate::palette::Mode;
 use crate::shell::{Shell, TabView};
@@ -32,13 +33,24 @@ pub struct Column {
     pub widget: gtk::Box,
     nav: Nav,
     scroller: gtk::ScrolledWindow,
+    /// Header, Saved, the seam, New Tab, Today: one drop target.
+    body: gtk::Box,
     pins: gtk::FlowBox,
     head: gtk::Box,
     saved: gtk::Box,
     rule: gtk::Box,
+    /// While a tab is dragged and Saved is empty: where to drop it to save.
+    slot: gtk::Revealer,
+    new_tab: gtk::Box,
     today: gtk::Box,
+    /// The drop marker: a line where the dragged tab will land.
+    marker: gtk::Box,
     chips: gtk::Box,
     rows: RefCell<HashMap<TabId, Row>>,
+    /// The Saved and Today rows as drawn, in order.
+    order: RefCell<(Vec<TabId>, Vec<TabId>)>,
+    /// The tab being dragged, from the moment its row is picked up.
+    dragging: RefCell<Option<TabId>>,
 }
 
 impl Column {
@@ -105,15 +117,46 @@ impl Column {
         let rule = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         rule.add_css_class("hairline");
         body.append(&rule);
-        body.append(&new_tab_row(shell));
+        // Saved is empty and a tab is being dragged: the seam opens into a
+        // slot that says what dropping there does.
+        let slot = gtk::Revealer::new();
+        slot.set_transition_type(gtk::RevealerTransitionType::SlideDown);
+        slot.set_transition_duration(120);
+        slot.set_can_target(false);
+        let slot_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        slot_box.add_css_class("save-slot");
+        let slot_mark = gtk::Image::from_icon_name("bookmark-new-symbolic");
+        slot_mark.set_pixel_size(14);
+        slot_box.append(&slot_mark);
+        let slot_label = gtk::Label::new(Some("Drop here to save"));
+        slot_label.add_css_class("title");
+        slot_label.set_xalign(0.0);
+        slot_box.append(&slot_label);
+        slot_box.update_property(&[gtk::accessible::Property::Label("Drop here to save")]);
+        slot.set_child(Some(&slot_box));
+        body.append(&slot);
+        let new_tab = new_tab_row(shell);
+        body.append(&new_tab);
         let today = gtk::Box::new(gtk::Orientation::Vertical, 2);
         today.set_margin_top(2);
         body.append(&today);
 
+        // The body and the drop marker over it, scrolled together.
+        let marker = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        marker.add_css_class("drop-marker");
+        marker.set_valign(gtk::Align::Start);
+        marker.set_halign(gtk::Align::Fill);
+        marker.set_can_target(false);
+        marker.set_visible(false);
+        let stack = gtk::Overlay::new();
+        stack.set_child(Some(&body));
+        stack.add_overlay(&marker);
+        stack.set_clip_overlay(&marker, true);
+
         let scroller = gtk::ScrolledWindow::new();
         scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
         scroller.set_vexpand(true);
-        scroller.set_child(Some(&body));
+        scroller.set_child(Some(&stack));
         widget.append(&scroller);
 
         // The foot: the spaces, and the window menu.
@@ -140,18 +183,154 @@ impl Column {
         foot.append(&menu);
         widget.append(&foot);
 
-        Rc::new(Column {
+        let me = Rc::new(Column {
             widget,
             nav,
             scroller,
+            body,
             pins,
             head,
             saved,
             rule,
+            slot,
+            new_tab,
             today,
+            marker,
             chips,
             rows: RefCell::default(),
-        })
+            order: RefCell::default(),
+            dragging: RefCell::default(),
+        });
+        me.wire_drop(shell);
+        me
+    }
+
+    /// One drop target for the whole body: the header, Saved, the seam,
+    /// New Tab and Today. The marker shows where the tab will land, and the
+    /// drop puts it exactly there ([`dropzone::land`]).
+    fn wire_drop(self: &Rc<Self>, shell: &Shell) {
+        let drop = gtk::DropTarget::new(glib::types::Type::STRING, gtk::gdk::DragAction::MOVE);
+        let weak = Rc::downgrade(self);
+        drop.connect_motion(move |_, _, y| {
+            if let Some(me) = weak.upgrade() {
+                let landing = me.landing(y);
+                me.show_marker(&landing);
+            }
+            gtk::gdk::DragAction::MOVE
+        });
+        let weak = Rc::downgrade(self);
+        drop.connect_leave(move |_| {
+            if let Some(me) = weak.upgrade() {
+                me.hide_marker();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        let weak_shell = shell.downgrade();
+        drop.connect_drop(move |_, value, _, y| {
+            let (Some(me), Some(s), Ok(id)) =
+                (weak.upgrade(), weak_shell.upgrade(), value.get::<String>())
+            else {
+                return false;
+            };
+            if id.starts_with("space:") {
+                return false;
+            }
+            let id = TabId(id);
+            me.dragging.replace(Some(id.clone()));
+            let landing = me.landing(y);
+            me.drag_ended();
+            tracing::debug!(tab = %id, saved = landing.saved, before = ?landing.before, "tab dropped in the column");
+            // Not now: the rows under the drop are about to be rebuilt.
+            glib::idle_add_local_once(move || {
+                s.drop_at(&id, landing.saved, landing.before.as_ref())
+            });
+            true
+        });
+        self.body.add_controller(drop);
+        // Over the favourites the drop is theirs (they take it to pin): no
+        // marker in the rows meanwhile.
+        let over_pins = gtk::DropControllerMotion::new();
+        let weak = Rc::downgrade(self);
+        over_pins.connect_enter(move |_, _, _| {
+            if let Some(me) = weak.upgrade() {
+                me.hide_marker();
+            }
+        });
+        self.pins.add_controller(over_pins);
+    }
+
+    /// The column as a drop sees it, in the body's coordinates.
+    fn layout(&self) -> Layout {
+        let rows = self.rows.borrow();
+        let band = |id: &TabId| -> Option<Band> {
+            let b = rows.get(id)?.root.compute_bounds(&self.body)?;
+            Some(Band {
+                id: id.clone(),
+                top: b.y() as f64,
+                bottom: (b.y() + b.height()) as f64,
+            })
+        };
+        let order = self.order.borrow();
+        let new_tab = self
+            .new_tab
+            .compute_bounds(&self.body)
+            .map(|b| (b.y() as f64, (b.y() + b.height()) as f64))
+            .unwrap_or_default();
+        let saved_top = self
+            .head
+            .compute_bounds(&self.body)
+            .map(|b| (b.y() + b.height()) as f64)
+            .unwrap_or_default();
+        Layout {
+            saved: order.0.iter().filter_map(band).collect(),
+            today: order.1.iter().filter_map(band).collect(),
+            saved_top,
+            new_tab,
+        }
+    }
+
+    fn landing(&self, y: f64) -> Landing {
+        let dragged = self
+            .dragging
+            .borrow()
+            .clone()
+            .unwrap_or_else(|| TabId(String::new()));
+        dropzone::land(&self.layout(), y, &dragged)
+    }
+
+    fn show_marker(&self, landing: &Landing) {
+        let armed = landing.saved && landing.empty && self.slot.reveals_child();
+        if armed {
+            // The slot itself lights up; no line over it.
+            self.slot.add_css_class("armed");
+            self.marker.set_visible(false);
+            return;
+        }
+        self.slot.remove_css_class("armed");
+        self.marker
+            .set_margin_top((landing.line - 1.5).max(0.0).round() as i32);
+        self.marker.set_visible(true);
+    }
+
+    fn hide_marker(&self) {
+        self.marker.set_visible(false);
+        self.slot.remove_css_class("armed");
+    }
+
+    /// A tab's row (or square, or pill) was picked up: open the Saved slot
+    /// if Saved is empty, so there is somewhere visible to drop it.
+    pub fn drag_began(&self, id: &TabId) {
+        self.dragging.replace(Some(id.clone()));
+        let empty = self.order.borrow().0.iter().all(|t| t == id);
+        self.slot
+            .set_reveal_child(empty && self.widget.get_visible());
+    }
+
+    /// The drag is over (dropped or not).
+    pub fn drag_ended(&self) {
+        self.dragging.replace(None);
+        self.hide_marker();
+        self.slot.set_reveal_child(false);
     }
 
     pub fn update_nav(&self, shell: &Shell) {
@@ -203,6 +382,10 @@ impl Column {
             rows.insert(t.id.clone(), row);
         }
         drop(rows);
+        self.order.replace((
+            v.saved.iter().map(|t| t.id.clone()).collect(),
+            v.today.iter().map(|t| t.id.clone()).collect(),
+        ));
         self.reveal_live(shell);
     }
 
@@ -279,22 +462,30 @@ fn tab_row(shell: &Shell, t: &TabView) -> Row {
     badge.add_css_class("badge");
     badge.set_pixel_size(12);
     root.append(&badge);
+    // The cross: on a Saved row the one way to take it out of Saved (it
+    // closes too; Reopen Closed Tab puts it back); on a Today row, close.
+    // ⌘W, middle-click and Delete only unload a Saved row (Arc).
     let close = gtk::Button::from_icon_name("window-close-symbolic");
     close.add_css_class("close");
     close.set_valign(gtk::Align::Center);
     close.set_focusable(false);
-    close.set_tooltip_text(Some("Close Tab"));
-    close.update_property(&[gtk::accessible::Property::Label("Close tab")]);
+    let (tip, name) = if t.saved {
+        ("Remove from Saved", "Remove from Saved")
+    } else {
+        ("Close Tab", "Close tab")
+    };
+    close.set_tooltip_text(Some(tip));
+    close.update_property(&[gtk::accessible::Property::Label(name)]);
     let weak = shell.downgrade();
     let id = t.id.clone();
     close.connect_clicked(move |_| {
         if let Some(s) = weak.upgrade() {
-            s.close(&id);
+            s.cross(&id);
         }
     });
     root.append(&close);
     tabs::wire_activation(shell, root.upcast_ref(), &t.id);
-    tabs::wire_drag(shell, root.upcast_ref(), &t.id, true);
+    tabs::wire_drag_source(shell, root.upcast_ref(), &t.id);
     let row = Row {
         root,
         mark,
@@ -439,19 +630,7 @@ fn new_tab_row(shell: &Shell) -> gtk::Box {
         glib::Propagation::Proceed
     });
     root.add_controller(keys);
-    // A tab dropped here becomes today's, at the top.
-    let drop = gtk::DropTarget::new(glib::types::Type::STRING, gtk::gdk::DragAction::MOVE);
-    let weak = shell.downgrade();
-    drop.connect_drop(move |_, value, _, _| {
-        let (Some(s), Ok(id)) = (weak.upgrade(), value.get::<String>()) else {
-            return false;
-        };
-        if id.starts_with("space:") {
-            return false;
-        }
-        glib::idle_add_local_once(move || s.drop_in_section(&TabId(id), false));
-        true
-    });
-    root.add_controller(drop);
+    // A tab dropped on it lands through the column's own target: its upper
+    // half ends Saved, its lower half starts Today.
     root
 }

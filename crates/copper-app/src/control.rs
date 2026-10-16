@@ -334,14 +334,15 @@ impl Control {
         .await?
     }
 
-    /// Close a tab for good (a pin too).
+    /// Close a tab (a pin for good); a Saved row is only unloaded, and
+    /// stays saved (Arc).
     pub async fn close(&self, id: &TabId) -> Result<()> {
         let id = id.clone();
         self.run(move |s| {
             if s.browser().tab(&id).is_none() {
                 return Err(ControlError::NoTab(id.to_string()));
             }
-            s.close_force(&id);
+            s.close_keeping_saved(&id);
             Ok(())
         })
         .await?

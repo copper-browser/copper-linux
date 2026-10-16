@@ -61,7 +61,7 @@ impl Header {
         let scroller = gtk::ScrolledWindow::new();
         scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
         scroller.set_propagate_natural_height(true);
-        scroller.set_max_content_height(8 * 40);
+        scroller.set_max_content_height(12 * 40);
         scroller.set_child(Some(&core.list.list));
         dropdown.append(&scroller);
 

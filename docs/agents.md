@@ -97,7 +97,7 @@ tab again, and may sleep.
 
 | tool | does |
 |---|---|
-| `browser_tabs` | `list`, `new {url}`, `close {index\|tab}`, `select {index\|tab}` (+ `focus`). `new` opens a background tab of the caller's own. Neither `new` nor `select` switches your tab unless `focus: true`. |
+| `browser_tabs` | `list`, `new {url}`, `close {index\|tab}`, `select {index\|tab}` (+ `focus`). `new` opens a background tab of the caller's own. Neither `new` nor `select` switches your tab unless `focus: true`. `close` on a Saved tab only puts it to sleep; it stays saved. |
 | `browser_navigate`, `browser_navigate_back`, `browser_navigate_forward` | Moves the caller's tab, then waits for the load to settle. |
 | `browser_snapshot` | Accessibility tree with `[ref=e12]` on interactive nodes. `interactive: true` gives a smaller tree; `selector` gives a subtree. |
 | `browser_click` | Clicks by `ref` or `selector`, at the element's centre, as a real input event. Takes `doubleClick`, `button` and `modifiers`. |

@@ -442,7 +442,8 @@ impl Shell {
             }
             PageEvent::CloseRequested => {
                 // `window.close()`: back to the opener if this was on screen.
-                self.close_force(id);
+                // A Saved row is only unloaded; it stays saved.
+                self.close_keeping_saved(id);
             }
             PageEvent::PermissionRequest { id: pid, kind, url } => {
                 self.ask_permission(slot, pid, kind, url.as_deref());

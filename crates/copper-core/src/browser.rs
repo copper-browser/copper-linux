@@ -166,6 +166,8 @@ pub struct ClosedTab {
     /// Its index in that row.
     pub index: usize,
     pub group: Option<String>,
+    /// It was a Saved row: Reopen Closed Tab puts it back in Saved.
+    pub saved: bool,
 }
 
 /// A space and its row.
@@ -194,6 +196,37 @@ pub struct OpenOptions {
     pub index: Option<usize>,
 }
 
+/// What closing a kept tab does (Arc: closing a kept tab never loses it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Closing {
+    /// A pin is put down (asleep) rather than closed.
+    pub keep_pins: bool,
+    /// A Saved row is unloaded (asleep, still saved, in its place) rather
+    /// than closed.
+    pub keep_saved: bool,
+}
+
+impl Closing {
+    /// ⌘W, middle-click, an agent's close, Close Other Tabs: a pin is put
+    /// down, a Saved row unloaded, a Today row closed.
+    pub const CLOSE: Closing = Closing {
+        keep_pins: true,
+        keep_saved: true,
+    };
+    /// The explicit removals — the cross on a Saved row, the menu's Close
+    /// Tab, the cloud deleting a kept tab: closed for good, pin or not.
+    pub const REMOVE: Closing = Closing {
+        keep_pins: false,
+        keep_saved: false,
+    };
+    /// The command line and a page's own `window.close()`: a pin closes for
+    /// good (as it always has there), a Saved row is only unloaded.
+    pub const KEEP_SAVED: Closing = Closing {
+        keep_pins: false,
+        keep_saved: true,
+    };
+}
+
 /// What closing did.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CloseOutcome {
@@ -203,6 +236,10 @@ pub enum CloseOutcome {
     },
     /// A pin is put down (asleep), not closed.
     PutDown {
+        selected: Option<TabId>,
+    },
+    /// A Saved row is unloaded (asleep), still saved, in its place.
+    Unloaded {
         selected: Option<TabId>,
     },
     NotFound,
@@ -798,14 +835,31 @@ impl Browser {
         }
     }
 
-    /// Close a tab (`Browser.close`). A pin is put down (asleep) instead,
-    /// unless `force`. A closed non-private tab joins the closed stack.
+    /// Close a tab (`Browser.close`). Unless `force`, a pin is put down
+    /// (asleep) and a Saved row unloaded instead ([`Closing::CLOSE`]); with
+    /// it, anything closes for good ([`Closing::REMOVE`]).
     pub fn close_tab(&mut self, id: &TabId, force: bool) -> CloseOutcome {
+        self.close_with(
+            id,
+            if force {
+                Closing::REMOVE
+            } else {
+                Closing::CLOSE
+            },
+        )
+    }
+
+    /// Close a tab, keeping what `how` keeps. A closed non-private tab joins
+    /// the closed stack (a Saved one remembers it was saved).
+    pub fn close_with(&mut self, id: &TabId, how: Closing) -> CloseOutcome {
         let Some(tab) = self.tabs.get(id).cloned() else {
             return CloseOutcome::NotFound;
         };
         let was_active = self.active_id().as_ref() == Some(id);
-        if tab.is_pinned() && !force {
+        if !tab.is_pinned() && tab.saved && !tab.private && how.keep_saved {
+            return self.unload(id, was_active);
+        }
+        if tab.is_pinned() && how.keep_pins {
             if let Some(t) = self.tabs.get_mut(id) {
                 t.sleeping = true;
             }
@@ -852,6 +906,7 @@ impl Browser {
                         space: tab.space.clone(),
                         index,
                         group: tab.group.clone(),
+                        saved: tab.saved,
                     });
                     if self.closed.len() > CLOSED_CAP {
                         self.closed.remove(0);
@@ -885,6 +940,32 @@ impl Browser {
         CloseOutcome::Closed { selected }
     }
 
+    /// A Saved row closed the Arc way: its page goes (asleep), the row stays
+    /// where it is with its title and icon, and the selection moves on
+    /// exactly as a close would — to the row that would slide into its
+    /// place, else the one before it.
+    fn unload(&mut self, id: &TabId, was_active: bool) -> CloseOutcome {
+        if let Some(t) = self.tabs.get_mut(id) {
+            t.sleeping = true;
+        }
+        self.changed(BrowserEvent::TabChanged(id.clone()));
+        let mut selected = self.active_id();
+        if was_active {
+            let visible = self.visible_ids(&self.current);
+            let at = visible.iter().position(|t| t == id);
+            let others: Vec<TabId> = visible.into_iter().filter(|t| t != id).collect();
+            selected = at.and_then(|i| others.get(i.min(others.len().saturating_sub(1))).cloned());
+            match &selected {
+                Some(s) => {
+                    let s = s.clone();
+                    self.select(&s);
+                }
+                None => self.set_active(None),
+            }
+        }
+        CloseOutcome::Unloaded { selected }
+    }
+
     /// ⌘⇧T: the newest closed tab, back where it was, selected.
     pub fn reopen_closed(&mut self) -> Option<TabId> {
         let ghost = self.closed.pop()?;
@@ -905,6 +986,7 @@ impl Browser {
         );
         if let Some(t) = self.tabs.get_mut(&id) {
             t.group = ghost.group;
+            t.saved = ghost.saved;
         }
         Some(id)
     }
@@ -1054,6 +1136,41 @@ impl Browser {
         list.insert(index.min(list.len()), item);
         self.changed(BrowserEvent::RowChanged { space });
         true
+    }
+
+    /// A tab dropped into the current space's Saved (`saved`) or Today
+    /// block: before `before` (a row of that block) or at the block's end.
+    /// A pin is unpinned and a tab from another space comes over first; a
+    /// private tab is never saved.
+    pub fn place_in_section(&mut self, id: &TabId, saved: bool, before: Option<&TabId>) -> bool {
+        let Some(tab) = self.tabs.get(id) else {
+            return false;
+        };
+        let saved = saved && !tab.private;
+        let current = self.current.clone();
+        if tab.is_pinned() {
+            self.unpin(id);
+        } else if tab.space != current {
+            self.move_to_space(id, &current);
+        }
+        self.update_tab(id, |t| t.saved = saved);
+        if before == Some(id) {
+            // Dropped on its own place.
+            return true;
+        }
+        let row: Vec<(TabId, bool)> = self
+            .row(&current)
+            .into_iter()
+            .filter(|t| t.id != *id)
+            .map(|t| (t.id.clone(), t.saved))
+            .collect();
+        let anchor = before.and_then(|b| row.iter().position(|(t, s)| t == b && *s == saved));
+        let at = match anchor {
+            Some(at) => at,
+            None if saved => row.iter().rposition(|(_, s)| *s).map_or(0, |p| p + 1),
+            None => row.len(),
+        };
+        self.move_tab(id, at)
     }
 
     /// Move a loose tab to the end of another space's row.
@@ -1353,6 +1470,231 @@ mod tests {
             s2,
             "selecting a tab of another space switches to it"
         );
+    }
+
+    /// Pins, then the current row as the column draws it: Saved, then Today.
+    fn sections(b: &Browser) -> (Vec<TabId>, Vec<TabId>) {
+        let row = b.row(b.current_space_id());
+        (
+            row.iter()
+                .filter(|t| t.saved)
+                .map(|t| t.id.clone())
+                .collect(),
+            row.iter()
+                .filter(|t| !t.saved)
+                .map(|t| t.id.clone())
+                .collect(),
+        )
+    }
+
+    fn saved_tab(b: &mut Browser, url: &str) -> TabId {
+        let id = b.open_tab(
+            url,
+            OpenOptions {
+                at_end: true,
+                ..Default::default()
+            },
+        );
+        b.update_tab(&id, |t| t.saved = true);
+        id
+    }
+
+    #[test]
+    fn closing_a_saved_row_unloads_it_and_moves_on_like_a_close() {
+        let mut b = Browser::new();
+        let s1 = saved_tab(&mut b, "https://s1.test/");
+        let s2 = saved_tab(&mut b, "https://s2.test/");
+        let t1 = b.open_tab(
+            "https://t1.test/",
+            OpenOptions {
+                at_end: true,
+                ..Default::default()
+            },
+        );
+        b.set_title(&s1, "Saved One");
+        b.select(&s1);
+        b.take_events();
+        // ⌘W on a Saved row: the row stays, asleep, saved, titled; the
+        // selection goes where a close would have sent it (the next row).
+        assert_eq!(
+            b.close_tab(&s1, false),
+            CloseOutcome::Unloaded {
+                selected: Some(s2.clone())
+            }
+        );
+        let t = b.tab(&s1).expect("still there");
+        assert!(t.saved && t.sleeping);
+        assert_eq!(t.title, "Saved One");
+        assert_eq!(sections(&b).0, vec![s1.clone(), s2.clone()], "same place");
+        assert_eq!(b.active_id(), Some(s2.clone()));
+        assert!(
+            b.closed_tabs().is_empty(),
+            "nothing to reopen: it never left"
+        );
+        assert!(
+            b.take_events()
+                .contains(&BrowserEvent::TabChanged(s1.clone())),
+            "the shell drops its page"
+        );
+        // Not the selected one: only unloaded, the selection stays.
+        b.select(&t1);
+        assert_eq!(
+            b.close_with(&s2, Closing::CLOSE),
+            CloseOutcome::Unloaded {
+                selected: Some(t1.clone())
+            }
+        );
+        // Closing the last Saved row moves on to the one before it, as a
+        // close would.
+        b.close_tab(&t1, false);
+        assert_eq!(b.active_id(), Some(s2.clone()));
+        b.close_tab(&s2, false);
+        assert_eq!(b.active_id(), Some(s1.clone()));
+        assert!(!b.tab(&s1).unwrap().sleeping, "selecting it woke it");
+        assert!(b.tab(&s2).unwrap().sleeping);
+        assert_eq!(sections(&b).0.len(), 2, "both still saved");
+        // A window's last tab, a Saved one: unloaded, nothing selected.
+        let w = b.add_space("Work");
+        b.switch_space(&w);
+        let only = saved_tab(&mut b, "https://only.test/");
+        b.select(&only);
+        b.close_tab(&only, false);
+        assert_eq!(b.active_id(), None);
+        assert!(b.tab(&only).is_some_and(|t| t.saved && t.sleeping));
+        // Clicking it again wakes it.
+        b.select(&only);
+        assert!(!b.tab(&only).unwrap().sleeping);
+        // The session still has both, as saved.
+        let shape = b.to_session();
+        let saved: Vec<_> = shape
+            .tabs
+            .iter()
+            .filter(|e| e.saved == Some(true))
+            .map(|e| e.url.as_str())
+            .collect();
+        assert_eq!(
+            saved,
+            ["https://s1.test/", "https://s2.test/", "https://only.test/"]
+        );
+    }
+
+    #[test]
+    fn removing_a_saved_row_closes_it_and_reopen_brings_it_back_saved() {
+        let mut b = Browser::new();
+        let s1 = saved_tab(&mut b, "https://s1.test/");
+        let s2 = saved_tab(&mut b, "https://s2.test/");
+        let s3 = saved_tab(&mut b, "https://s3.test/");
+        let t1 = b.open_tab(
+            "https://t1.test/",
+            OpenOptions {
+                at_end: true,
+                foreground: true,
+                ..Default::default()
+            },
+        );
+        // The cross on a Saved row: gone, remembered as saved.
+        assert!(matches!(
+            b.close_with(&s2, Closing::REMOVE),
+            CloseOutcome::Closed { .. }
+        ));
+        assert!(b.tab(&s2).is_none());
+        assert_eq!(b.closed_tabs().last().map(|c| c.saved), Some(true));
+        let back = b.reopen_closed().unwrap();
+        let (saved, today) = sections(&b);
+        assert_eq!(saved, vec![s1, back.clone(), s3], "back at its old place");
+        assert_eq!(today, vec![t1.clone()]);
+        assert_eq!(b.tab(&back).unwrap().url, "https://s2.test/");
+        // A Today row is unchanged: closed, and reopened as today's.
+        b.close_tab(&t1, false);
+        assert_eq!(b.closed_tabs().last().map(|c| c.saved), Some(false));
+        let again = b.reopen_closed().unwrap();
+        assert!(!b.tab(&again).unwrap().saved);
+        // The command line keeps Saved rows but still closes pins for good.
+        let p = b.open_tab("https://p.test/", opts(false));
+        b.pin(&p, None);
+        assert!(matches!(
+            b.close_with(&back, Closing::KEEP_SAVED),
+            CloseOutcome::Unloaded { .. }
+        ));
+        assert!(matches!(
+            b.close_with(&p, Closing::KEEP_SAVED),
+            CloseOutcome::Closed { .. }
+        ));
+        assert!(b.tab(&p).is_none());
+    }
+
+    #[test]
+    fn a_private_saved_tab_is_never_kept_asleep() {
+        let mut b = Browser::new();
+        let p = b.open_tab(
+            "https://p.test/",
+            OpenOptions {
+                private: true,
+                ..Default::default()
+            },
+        );
+        b.place_in_section(&p, true, None);
+        assert!(!b.tab(&p).unwrap().saved, "a private tab is never saved");
+        b.update_tab(&p, |t| t.saved = true);
+        assert!(matches!(
+            b.close_tab(&p, false),
+            CloseOutcome::Closed { .. }
+        ));
+    }
+
+    #[test]
+    fn a_row_dropped_into_a_section_lands_where_the_marker_said() {
+        let mut b = Browser::new();
+        let s1 = saved_tab(&mut b, "https://s1.test/");
+        let s2 = saved_tab(&mut b, "https://s2.test/");
+        let t1 = b.open_tab(
+            "https://t1.test/",
+            OpenOptions {
+                at_end: true,
+                ..Default::default()
+            },
+        );
+        let t2 = b.open_tab(
+            "https://t2.test/",
+            OpenOptions {
+                at_end: true,
+                ..Default::default()
+            },
+        );
+        // Today → Saved, between the two saved rows.
+        assert!(b.place_in_section(&t2, true, Some(&s2)));
+        assert_eq!(
+            sections(&b),
+            (vec![s1.clone(), t2.clone(), s2.clone()], vec![t1.clone()])
+        );
+        // … at the end of Saved, even with Today rows interleaved in the row.
+        b.place_in_section(&t1, true, None);
+        assert_eq!(
+            sections(&b),
+            (vec![s1.clone(), t2.clone(), s2.clone(), t1.clone()], vec![])
+        );
+        // Saved → Today, at the top of an empty Today.
+        b.place_in_section(&s1, false, None);
+        assert!(!b.tab(&s1).unwrap().saved);
+        assert_eq!(sections(&b).1, vec![s1.clone()]);
+        // Reordering inside Saved.
+        b.place_in_section(&t1, true, Some(&t2));
+        assert_eq!(sections(&b).0, vec![t1.clone(), t2.clone(), s2.clone()]);
+        // On its own place: nothing moves.
+        b.place_in_section(&t2, true, Some(&t2));
+        assert_eq!(sections(&b).0, vec![t1.clone(), t2.clone(), s2.clone()]);
+        // A pin dropped into Saved is unpinned and saved there.
+        let p = b.open_tab("https://p.test/", opts(false));
+        b.pin(&p, None);
+        b.place_in_section(&p, true, Some(&t1));
+        assert!(!b.tab(&p).unwrap().is_pinned());
+        assert_eq!(sections(&b).0[0], p);
+        // Into Saved in an empty space's row.
+        let w = b.add_space("Work");
+        b.switch_space(&w);
+        let x = b.open_tab("https://x.test/", opts(true));
+        b.place_in_section(&x, true, None);
+        assert_eq!(sections(&b), (vec![x], vec![]));
     }
 
     #[test]

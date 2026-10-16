@@ -426,9 +426,9 @@ async fn run(req: Value) -> Result<Value, String> {
             Ok(json!({"id": shell.active_id().map(|i| i.0)}))
         }
         "close" => {
-            // The row's cross.
+            // The row's cross (on a Saved row: out of Saved, and closed).
             let id = tab_at(&shell, s(&req, "url")).ok_or("no such tab")?;
-            shell.close(&id);
+            shell.cross(&id);
             Ok(json!({"id": id.0}))
         }
         "kept" => Ok(json!(

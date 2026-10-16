@@ -27,12 +27,19 @@ drive it through the same MCP tools.
 ## What it does
 
 - **One field.** Type an address and you go there; type words and you
-  search. It completes from your history and from the tabs you keep, and
-  sends nothing anywhere until you press Enter. Ctrl+K lists your open tabs
-  and every command.
+  search. Suggestions come in groups — Open Tabs, then History, then the
+  search — and Enter takes the first one, so Ctrl+T, a few letters, Enter
+  goes back to the tab or page you meant (a whole address still goes
+  there). Tab and Shift+Tab jump between the groups, ↑ ↓ move within them,
+  → or End takes the offered completion. Nothing is sent anywhere until
+  you press Enter. Ctrl+K lists your open tabs and every command.
 - **Tabs that stay out of the way.** Pin the pages you keep open all day.
-  Tabs from your last session come back instantly and cost nothing until you
-  click them. Ctrl+Shift+S moves the tabs between a column and a row.
+  Saved tabs work like Arc's: Ctrl+W on one only puts it to sleep — it stays
+  in Saved, where it was — and the × on the row (or Unsave in its menu) is
+  what takes it out; Ctrl+Shift+T brings it back to its place. Drag any tab
+  into Saved to keep it; a line shows where it will land. Tabs from your
+  last session come back instantly and cost nothing until you click them.
+  Ctrl+Shift+S moves the tabs between a column and a row.
 - **Spaces.** Rows of tabs with a name, an icon and a colour the whole
   column wears. Ctrl+Alt+← and → move between them.
 - **Private tabs.** Ctrl+Shift+N. Cookies and site data stay in memory and
@@ -114,7 +121,7 @@ to bookmark, Alt+← to go back, F5 to reload), Copper uses that key.
 
 | | |
 |---|---|
-| `Ctrl+L` (or `Alt+D`, `F6`) address · `Ctrl+K` tabs and commands · `Ctrl+T` new tab · `Ctrl+W` close · `Ctrl+Shift+T` reopen | `Alt+←` `Alt+→` (or `Ctrl+[` `Ctrl+]`) back, forward · `Ctrl+Tab` `Ctrl+Shift+Tab` next, previous tab · `Ctrl+1`–`Ctrl+9` jump |
+| `Ctrl+L` (or `Alt+D`, `F6`) address · `Ctrl+K` tabs and commands · `Ctrl+T` new tab · `Ctrl+W` close (a Saved tab sleeps) · `Ctrl+Shift+T` reopen | `Alt+←` `Alt+→` (or `Ctrl+[` `Ctrl+]`) back, forward · `Ctrl+Tab` `Ctrl+Shift+Tab` next, previous tab · `Ctrl+1`–`Ctrl+9` jump |
 | `Ctrl+Shift+N` private tab · `Ctrl+Shift+D` pin · `Ctrl+Shift+S` tabs in a column or a row | `Ctrl+R` reload · `Ctrl+Shift+R` hard reload · `Ctrl+Shift+I` (or `F12`) inspector |
 | `Ctrl+F` find · `Ctrl+G` `Ctrl+Shift+G` next, previous match · `Ctrl+=` `Ctrl+-` `Ctrl+0` zoom | `Ctrl+Alt+R` reading mode · `Ctrl+Shift+H` hide something |
 | `Ctrl+D` bookmark · `Ctrl+Shift+O` bookmarks · `Ctrl+Y` history · `Ctrl+Shift+Y` downloads | `Ctrl+Alt+←` `Ctrl+Alt+→` previous, next space · `Ctrl+Shift+E` new canvas · `Ctrl+,` settings · `Ctrl+Q` quit |

@@ -264,13 +264,19 @@ fn pill(shell: &Shell, t: &TabView, compact: bool) -> Pill {
     close.add_css_class("close");
     close.set_valign(gtk::Align::Center);
     close.set_focusable(false);
-    close.set_tooltip_text(Some("Close Tab"));
-    close.update_property(&[gtk::accessible::Property::Label("Close tab")]);
+    let (tip, name) = if t.saved {
+        ("Remove from Saved", "Remove from Saved")
+    } else {
+        ("Close Tab", "Close tab")
+    };
+    close.set_tooltip_text(Some(tip));
+    close.update_property(&[gtk::accessible::Property::Label(name)]);
     let weak = shell.downgrade();
     let id = t.id.clone();
     close.connect_clicked(move |_| {
         if let Some(s) = weak.upgrade() {
-            s.close(&id);
+            // As the column's cross: a Saved tab is taken out of Saved.
+            s.cross(&id);
         }
     });
     root.append(&close);

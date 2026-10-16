@@ -22,7 +22,7 @@ use crate::options::Options;
 use crate::session;
 use crate::spaces::colour::SpaceColour;
 use crate::window::{Refresh, Ui};
-use copper_core::browser::{BrowserEvent, CloseOutcome};
+use copper_core::browser::{BrowserEvent, CloseOutcome, Closing};
 use copper_core::history::Suggestion;
 use copper_core::settings::{Look, TabsPosition, keys};
 use copper_core::store::Store;
@@ -555,18 +555,46 @@ impl Shell {
         self.select(&id);
     }
 
-    /// Close a tab (a pin is put down instead).
+    /// Close a tab the everyday way (⌘W, middle-click, an agent): a pin is
+    /// put down and a Saved row unloaded — it stays saved, in its place,
+    /// dimmed — instead (Arc; Mac `docs/sections.md`).
     pub fn close(&self, id: &TabId) -> CloseOutcome {
-        let out = self.close_tab(id, false);
-        if let CloseOutcome::PutDown { .. } = out {
+        self.close_with(id, Closing::CLOSE)
+    }
+
+    /// Close a tab for good, pin or Saved row or not (the menu's Close Tab,
+    /// the cloud removing a kept tab). A Saved row comes back saved with
+    /// Reopen Closed Tab.
+    pub fn close_force(&self, id: &TabId) -> CloseOutcome {
+        self.close_with(id, Closing::REMOVE)
+    }
+
+    /// The command line's close and a page's `window.close()`: a pin closes
+    /// for good, a Saved row is only unloaded.
+    pub fn close_keeping_saved(&self, id: &TabId) -> CloseOutcome {
+        self.close_with(id, Closing::KEEP_SAVED)
+    }
+
+    /// The cross on a row: on a Saved row it is the way to take the tab out
+    /// of Saved (and close it); anywhere else it closes.
+    pub fn cross(&self, id: &TabId) -> CloseOutcome {
+        let saved = self
+            .browser()
+            .tab(id)
+            .is_some_and(|t| t.saved && !t.is_pinned());
+        if saved {
+            self.close_force(id)
+        } else {
+            self.close(id)
+        }
+    }
+
+    fn close_with(&self, id: &TabId, how: Closing) -> CloseOutcome {
+        let out = self.close_tab(id, how);
+        if let CloseOutcome::PutDown { .. } | CloseOutcome::Unloaded { .. } = out {
             self.drop_page(id);
         }
         out
-    }
-
-    /// Close a tab for good, pin or not.
-    pub fn close_force(&self, id: &TabId) -> CloseOutcome {
-        self.close_tab(id, true)
     }
 
     /// Remember that `opener`'s page opened tab `id`.
@@ -589,15 +617,20 @@ impl Shell {
     /// (a sign-in popup closing itself once you are in, a link that opened
     /// a new window), you land back on that tab rather than on whichever
     /// neighbour the row would pick (Mac `webViewDidClose`).
-    fn close_tab(&self, id: &TabId, force: bool) -> CloseOutcome {
+    fn close_tab(&self, id: &TabId, how: Closing) -> CloseOutcome {
         let back = self
             .opener_of(id)
             .filter(|_| self.active_id().as_ref() == Some(id));
         self.with_browser(|b| {
-            let out = b.close_tab(id, force);
+            let out = b.close_with(id, how);
             match (out, back) {
                 (CloseOutcome::Closed { .. }, Some(opener)) if b.select(&opener) => {
                     CloseOutcome::Closed {
+                        selected: Some(opener),
+                    }
+                }
+                (CloseOutcome::Unloaded { .. }, Some(opener)) if b.select(&opener) => {
+                    CloseOutcome::Unloaded {
                         selected: Some(opener),
                     }
                 }
@@ -638,9 +671,18 @@ impl Shell {
         }
     }
 
-    /// Keep a tab (Saved) or let it be today's.
+    /// Save a tab or let it go (the menu's Save / Unsave; Mac
+    /// `Sections.set`): saving parks the row at the end of Saved, unsaving
+    /// puts it at the top of Today. A pin is left as it is.
     pub fn set_saved(&self, id: &TabId, saved: bool) {
-        self.with_browser(|b| b.update_tab(id, |t| t.saved = saved));
+        if self.browser().tab(id).is_none_or(|t| t.is_pinned()) {
+            return;
+        }
+        if saved {
+            self.drop_at(id, true, None);
+        } else {
+            self.drop_in_section(id, false);
+        }
     }
 
     pub fn move_tab(&self, id: &TabId, index: usize) -> bool {
@@ -687,7 +729,7 @@ impl Shell {
                     b.unpin(dragged);
                 }
                 let space = b.current_space_id().to_string();
-                b.update_tab(dragged, |t| t.saved = t_saved);
+                b.update_tab(dragged, |t| t.saved = t_saved && !t.private);
                 let row: Vec<TabId> = b
                     .row(&space)
                     .iter()
@@ -709,28 +751,23 @@ impl Shell {
         }
     }
 
-    /// A drag let go on a section's edge (the space header: keep it, at the
-    /// top; New Tab: today's, at the top of today).
+    /// A drag let go in the column's Saved (`saved`) or Today block, before
+    /// `before` (a row of that block) or at the block's end — where the
+    /// column's drop marker showed it would land.
+    pub fn drop_at(&self, dragged: &TabId, saved: bool, before: Option<&TabId>) {
+        self.with_browser(|b| b.place_in_section(dragged, saved, before));
+    }
+
+    /// A drag let go on a section's head (Saved: kept, at the top; Today:
+    /// today's, at the top).
     pub fn drop_in_section(&self, dragged: &TabId, saved: bool) {
-        self.with_browser(|b| {
-            if b.tab(dragged).is_some_and(|t| t.is_pinned()) {
-                b.unpin(dragged);
-            }
-            b.update_tab(dragged, |t| t.saved = saved);
-            let space = b.current_space_id().to_string();
-            let row: Vec<(TabId, bool)> = b
-                .row(&space)
-                .iter()
-                .filter(|t| t.id != *dragged)
-                .map(|t| (t.id.clone(), t.saved))
-                .collect();
-            let at = if saved {
-                0
-            } else {
-                row.iter().position(|(_, s)| !*s).unwrap_or(row.len())
-            };
-            b.move_tab(dragged, at);
-        });
+        let first = self
+            .browser()
+            .row(self.browser().current_space_id())
+            .iter()
+            .find(|t| t.saved == saved && t.id != *dragged)
+            .map(|t| t.id.clone());
+        self.drop_at(dragged, saved, first.as_ref());
     }
 
     /// A new private tab, in front, with the card asking where to.

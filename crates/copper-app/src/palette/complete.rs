@@ -35,6 +35,33 @@ pub enum Kind {
     Command,
 }
 
+/// The groups the rows come in, always in this order: the tabs you have
+/// open, the places you have been, your bookmarks, the browser's commands
+/// (`Ctrl+K` only), and last what Return does with the text itself (the
+/// search, or the address typed). Tab and Shift-Tab move between them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Section {
+    Tabs,
+    History,
+    Bookmarks,
+    Commands,
+    Search,
+}
+
+impl Section {
+    /// The quiet label over the group (`first`: its first row's kind).
+    pub fn title(self, first: Kind) -> &'static str {
+        match self {
+            Section::Tabs => "Open Tabs",
+            Section::History => "History",
+            Section::Bookmarks => "Bookmarks",
+            Section::Commands => "Commands",
+            Section::Search if first == Kind::Address => "Go To",
+            Section::Search => "Search",
+        }
+    }
+}
+
 /// One row.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Row {
@@ -49,6 +76,15 @@ pub struct Row {
     pub url: Option<String>,
     /// A symbolic icon (commands).
     pub icon: Option<String>,
+    /// The group it is drawn in.
+    pub section: Option<Section>,
+}
+
+/// The rows, and the one highlighted to begin with (what Return does).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Offers {
+    pub rows: Vec<Row>,
+    pub default: Option<usize>,
 }
 
 /// A command as the palette sees it.
@@ -90,9 +126,12 @@ pub struct Inputs<'a> {
     pub full: &'a str,
     /// The search engine's name ("Google").
     pub engine: &'a str,
-    /// Where Return would go with the typed text (address or search).
+    /// Where Return would go with the text: for an address, what the field
+    /// holds (with the offered completion); for words, the search for what
+    /// was typed.
     pub destination: Option<String>,
-    /// The typed text is an address rather than words.
+    /// What was typed (not the offered completion) is an address rather
+    /// than words: a domain, `localhost:3000`, an http(s) URL.
     pub is_address: bool,
     /// Open-tab rows (`Browser::open_tab_suggestions`) — this space first.
     pub tabs: Vec<Suggestion>,
@@ -103,138 +142,139 @@ pub struct Inputs<'a> {
     pub open: Vec<OpenRow>,
 }
 
-/// How many rows a card draws (Mac: `CommandBar.limit`).
+/// How many open tabs the palette lists for an empty field (Mac:
+/// `CommandBar.limit`).
 pub const LIMIT: usize = 8;
 
-/// The rows for `inputs`, best first.
-pub fn rows(purpose: Purpose, inputs: &Inputs<'_>) -> Vec<Row> {
-    let typed = inputs.typed.trim();
-    let mut out: Vec<Row> = Vec::new();
-    if typed.is_empty() {
-        if purpose == Purpose::Palette {
-            for t in inputs.open.iter().take(LIMIT) {
-                out.push(Row {
-                    kind: Kind::Tab,
-                    title: if t.title.trim().is_empty() {
-                        address::pretty_str(&t.url)
-                    } else {
-                        t.title.clone()
-                    },
-                    detail: t
-                        .elsewhere
-                        .clone()
-                        .unwrap_or_else(|| address::pretty_str(&t.url)),
-                    hint: "Switch to Tab".into(),
-                    action: Action::Switch(t.id.clone()),
-                    url: Some(t.url.clone()),
-                    icon: None,
-                });
-            }
-        }
-        return out;
-    }
+/// How many rows each group may bring, so the card stays something you
+/// glance at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Caps {
+    pub tabs: usize,
+    pub history: usize,
+    pub bookmarks: usize,
+    pub commands: usize,
+}
 
-    let mut seen: Vec<String> = Vec::new();
-    let mut add = |out: &mut Vec<Row>, row: Row| {
-        let key = row
-            .url
-            .as_deref()
-            .map(address::strip_typed)
-            .unwrap_or_else(|| row.title.to_lowercase());
-        if row.kind != Kind::Command && seen.contains(&key) {
-            return;
-        }
-        seen.push(key);
-        out.push(row);
-    };
-
-    // What Return does with the text itself comes first, except in the
-    // palette, where an open tab wins (Ctrl+K, Return = back to that page).
-    let typed_row = inputs.destination.as_ref().map(|dest| {
-        // The text is a place already known (completed from history or an
-        // open tab): go to that place exactly — its scheme and port, which
-        // the shown form leaves out — under its title.
-        if inputs.is_address
-            && let Some(known) = known_place(
-                if inputs.full.trim().is_empty() {
-                    typed
-                } else {
-                    inputs.full
-                },
-                &inputs.tabs,
-                &inputs.visited,
-            )
-        {
-            return Row {
-                kind: Kind::Address,
-                title: if known.title.trim().is_empty() {
-                    address::pretty_str(&known.url)
-                } else {
-                    known.title.clone()
-                },
-                detail: address::pretty_str(&known.url),
-                hint: if purpose == Purpose::Edit {
-                    "Go"
-                } else {
-                    "Open"
-                }
-                .into(),
-                action: Action::Go(known.url.clone()),
-                url: Some(known.url.clone()),
-                icon: None,
-            };
-        }
-        if inputs.is_address {
-            Row {
-                kind: Kind::Address,
-                title: address::pretty_str(dest),
-                detail: String::new(),
-                hint: if purpose == Purpose::Edit {
-                    "Go"
-                } else {
-                    "Open"
-                }
-                .into(),
-                action: Action::Go(dest.clone()),
-                url: Some(dest.clone()),
-                icon: None,
-            }
-        } else {
-            Row {
-                kind: Kind::Search,
-                title: typed.to_string(),
-                detail: format!("Search {}", inputs.engine),
-                hint: "Search".into(),
-                action: Action::Go(dest.clone()),
-                url: None,
-                icon: None,
-            }
-        }
-    });
-
-    if purpose != Purpose::Palette
-        && let Some(r) = typed_row.clone()
-    {
-        add(&mut out, r);
-    }
-    for s in inputs.tabs.iter().take(3) {
-        let Some(id) = s.tab.clone() else { continue };
-        add(
-            &mut out,
-            Row {
-                kind: Kind::Tab,
-                title: if s.title.trim().is_empty() {
-                    address::pretty_str(&s.url)
-                } else {
-                    s.title.clone()
-                },
-                detail: address::pretty_str(&s.url),
-                hint: "Switch to Tab".into(),
-                action: Action::Switch(id),
-                url: Some(s.url.clone()),
-                icon: None,
+impl Caps {
+    pub fn of(purpose: Purpose) -> Caps {
+        match purpose {
+            Purpose::Palette => Caps {
+                tabs: 3,
+                history: 3,
+                bookmarks: 2,
+                commands: 4,
             },
-        );
+            Purpose::Launch | Purpose::Edit => Caps {
+                tabs: 3,
+                history: 5,
+                bookmarks: 2,
+                commands: 0,
+            },
+        }
+    }
+
+    fn of_section(self, section: Section) -> usize {
+        match section {
+            Section::Tabs => self.tabs,
+            Section::History => self.history,
+            Section::Bookmarks => self.bookmarks,
+            Section::Commands => self.commands,
+            Section::Search => 1,
+        }
+    }
+}
+
+/// The rows for `inputs`, in order.
+pub fn rows(purpose: Purpose, inputs: &Inputs<'_>) -> Vec<Row> {
+    offers(purpose, inputs).rows
+}
+
+/// The rows for `inputs`, grouped, and the one Return takes before any
+/// arrow key.
+///
+/// Groups come in [`Section`] order — Open Tabs, History, Bookmarks,
+/// Commands (`Ctrl+K`), then the search or the address — each ranked as
+/// before. The first row of the first group that has one is highlighted, so
+/// typing then Return goes back to the open tab or the place you meant;
+/// when nothing matches, Return searches. An address typed in full
+/// (`example.com`, `localhost:3000`, an http(s) URL) still goes to that
+/// address: its row, at the foot, is the one highlighted.
+pub fn offers(purpose: Purpose, inputs: &Inputs<'_>) -> Offers {
+    let typed = inputs.typed.trim();
+    if typed.is_empty() {
+        if purpose != Purpose::Palette {
+            return Offers::default();
+        }
+        // `Ctrl+K` on an empty field: what is open, most recent first.
+        let rows: Vec<Row> = inputs
+            .open
+            .iter()
+            .take(LIMIT)
+            .map(|t| Row {
+                kind: Kind::Tab,
+                title: if t.title.trim().is_empty() {
+                    address::pretty_str(&t.url)
+                } else {
+                    t.title.clone()
+                },
+                detail: t
+                    .elsewhere
+                    .clone()
+                    .unwrap_or_else(|| address::pretty_str(&t.url)),
+                hint: "Switch to Tab".into(),
+                action: Action::Switch(t.id.clone()),
+                url: Some(t.url.clone()),
+                icon: None,
+                section: Some(Section::Tabs),
+            })
+            .collect();
+        let default = (!rows.is_empty()).then_some(0);
+        return Offers { rows, default };
+    }
+
+    let caps = Caps::of(purpose);
+    let typed_row = typed_row(purpose, inputs);
+    // A typed address that is a known place says the same as that place's
+    // history row, under the same title: the history row folds into it. An
+    // open tab there stays (switching to it is another answer).
+    let place = typed_row
+        .as_ref()
+        .filter(|r| r.kind == Kind::Address)
+        .map(fold_key);
+    let mut out: Vec<Row> = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    // Adds `row` to `section` unless that group is full (`false`: stop
+    // looking) or it says what an earlier row already says.
+    let mut add = |out: &mut Vec<Row>, mut row: Row, section: Section| -> bool {
+        if out.iter().filter(|r| r.section == Some(section)).count() >= caps.of_section(section) {
+            return false;
+        }
+        let key = fold_key(&row);
+        let folds = row.kind != Kind::Command
+            && (seen.contains(&key) || (section != Section::Tabs && place.as_ref() == Some(&key)));
+        if !folds {
+            seen.push(key);
+            row.section = Some(section);
+            out.push(row);
+        }
+        true
+    };
+    for s in &inputs.tabs {
+        let Some(id) = s.tab.clone() else { continue };
+        if !add(&mut out, tab_row(s, id), Section::Tabs) {
+            break;
+        }
+    }
+    for v in &inputs.visited {
+        if !add(&mut out, visited_row(v), Section::History) {
+            break;
+        }
+    }
+    for row in inputs.bookmarks.iter().filter_map(bookmark_row) {
+        if !add(&mut out, row, Section::Bookmarks) {
+            break;
+        }
     }
     if purpose == Purpose::Palette {
         let needle = typed.trim_start_matches('/').to_lowercase();
@@ -242,68 +282,212 @@ pub fn rows(purpose: Purpose, inputs: &Inputs<'_>) -> Vec<Row> {
             .commands
             .iter()
             .filter(|c| command_matches(&c.name, &needle))
-            .take(4)
         {
-            add(
-                &mut out,
-                Row {
-                    kind: Kind::Command,
-                    title: c.name.clone(),
-                    detail: c.shortcut.clone().unwrap_or_default(),
-                    hint: "Run".into(),
-                    action: Action::Command(c.id.clone()),
-                    url: None,
-                    icon: Some(c.icon.clone()),
-                },
-            );
+            let row = Row {
+                kind: Kind::Command,
+                title: c.name.clone(),
+                detail: c.shortcut.clone().unwrap_or_default(),
+                hint: "Run".into(),
+                action: Action::Command(c.id.clone()),
+                url: None,
+                icon: Some(c.icon.clone()),
+                section: None,
+            };
+            if !add(&mut out, row, Section::Commands) {
+                break;
+            }
         }
     }
-    for b in inputs.bookmarks.iter().take(3) {
-        let Some(url) = b.bookmark.url.clone() else {
-            continue;
-        };
-        add(
-            &mut out,
-            Row {
-                kind: Kind::Bookmark,
-                title: if b.bookmark.title.is_empty() {
-                    address::pretty_str(&url)
-                } else {
-                    b.bookmark.title.clone()
-                },
-                detail: address::pretty_str(&url),
-                hint: "Open".into(),
-                action: Action::Go(url.clone()),
-                url: Some(url),
-                icon: None,
+    let mut default = (!out.is_empty()).then_some(0);
+    if let Some(mut row) = typed_row {
+        row.section = Some(Section::Search);
+        if inputs.is_address || default.is_none() {
+            default = Some(out.len());
+        }
+        out.push(row);
+    }
+    Offers { rows: out, default }
+}
+
+/// A row's identity for folding duplicates: its address, else its title.
+fn fold_key(row: &Row) -> String {
+    row.url
+        .as_deref()
+        .map(address::strip_typed)
+        .unwrap_or_else(|| row.title.to_lowercase())
+}
+
+fn tab_row(s: &Suggestion, id: TabId) -> Row {
+    Row {
+        kind: Kind::Tab,
+        title: if s.title.trim().is_empty() {
+            address::pretty_str(&s.url)
+        } else {
+            s.title.clone()
+        },
+        detail: address::pretty_str(&s.url),
+        hint: "Switch to Tab".into(),
+        action: Action::Switch(id),
+        url: Some(s.url.clone()),
+        icon: None,
+        section: None,
+    }
+}
+
+fn visited_row(v: &Suggestion) -> Row {
+    Row {
+        kind: Kind::Visited,
+        title: if v.title.trim().is_empty() {
+            v.key.clone()
+        } else {
+            v.title.clone()
+        },
+        detail: address::pretty_str(&v.url),
+        hint: "Open".into(),
+        action: Action::Go(v.url.clone()),
+        url: Some(v.url.clone()),
+        icon: None,
+        section: None,
+    }
+}
+
+fn bookmark_row(b: &BookmarkHit) -> Option<Row> {
+    let url = b.bookmark.url.clone()?;
+    Some(Row {
+        kind: Kind::Bookmark,
+        title: if b.bookmark.title.is_empty() {
+            address::pretty_str(&url)
+        } else {
+            b.bookmark.title.clone()
+        },
+        detail: address::pretty_str(&url),
+        hint: "Open".into(),
+        action: Action::Go(url.clone()),
+        url: Some(url),
+        icon: None,
+        section: None,
+    })
+}
+
+/// What Return does with the text itself: the address (a place already
+/// known goes there exactly, under its title), or the search.
+fn typed_row(purpose: Purpose, inputs: &Inputs<'_>) -> Option<Row> {
+    let typed = inputs.typed.trim();
+    let dest = inputs.destination.as_ref()?;
+    let go = if purpose == Purpose::Edit {
+        "Go"
+    } else {
+        "Open"
+    };
+    if !inputs.is_address {
+        return Some(Row {
+            kind: Kind::Search,
+            title: typed.to_string(),
+            detail: format!("Search {}", inputs.engine),
+            hint: "Search".into(),
+            action: Action::Go(dest.clone()),
+            url: None,
+            icon: None,
+            section: None,
+        });
+    }
+    // The text is a place already known (completed from history or an open
+    // tab): go to that place exactly — its scheme and port, which the shown
+    // form leaves out — under its title.
+    let full = if inputs.full.trim().is_empty() {
+        typed
+    } else {
+        inputs.full
+    };
+    Some(match known_place(full, &inputs.tabs, &inputs.visited) {
+        Some(known) => Row {
+            kind: Kind::Address,
+            title: if known.title.trim().is_empty() {
+                address::pretty_str(&known.url)
+            } else {
+                known.title.clone()
             },
-        );
+            detail: address::pretty_str(&known.url),
+            hint: go.into(),
+            action: Action::Go(known.url.clone()),
+            url: Some(known.url.clone()),
+            icon: None,
+            section: None,
+        },
+        None => Row {
+            kind: Kind::Address,
+            title: address::pretty_str(dest),
+            detail: String::new(),
+            hint: go.into(),
+            action: Action::Go(dest.clone()),
+            url: Some(dest.clone()),
+            icon: None,
+            section: None,
+        },
+    })
+}
+
+/// The first row of each group, in order.
+pub fn section_starts(rows: &[Row]) -> Vec<usize> {
+    (0..rows.len())
+        .filter(|&i| {
+            rows[i].section.is_some() && (i == 0 || rows[i].section != rows[i - 1].section)
+        })
+        .collect()
+}
+
+/// Where Tab (`forward`) or Shift-Tab moves the highlight from `at`: the
+/// first row of the next (or previous) group, wrapping. `None` when there
+/// are no groups.
+pub fn jump(rows: &[Row], at: Option<usize>, forward: bool) -> Option<usize> {
+    let starts = section_starts(rows);
+    let n = starts.len();
+    if n == 0 {
+        return None;
     }
-    for v in inputs.visited.iter().take(6) {
-        add(
-            &mut out,
-            Row {
-                kind: Kind::Visited,
-                title: if v.title.trim().is_empty() {
-                    v.key.clone()
-                } else {
-                    v.title.clone()
-                },
-                detail: address::pretty_str(&v.url),
-                hint: "Open".into(),
-                action: Action::Go(v.url.clone()),
-                url: Some(v.url.clone()),
-                icon: None,
-            },
-        );
+    let here = at
+        .filter(|&a| a < rows.len())
+        .map(|a| starts.iter().rposition(|&s| s <= a).unwrap_or(0));
+    Some(match here {
+        None if forward => starts[0],
+        None => starts[n - 1],
+        Some(k) if forward => starts[(k + 1) % n],
+        Some(k) => starts[(k + n - 1) % n],
+    })
+}
+
+/// The inline completion the field offers after what was typed.
+///
+/// For an address being typed, the rest of the best known address that
+/// carries on from it ([`inline`]). For words, the rest of the address the
+/// highlighted row goes to, when it carries on from what was typed — so
+/// what the field shows is what Return does — and nothing when that row is
+/// the search. Never in the palette.
+pub fn completion(purpose: Purpose, inputs: &Inputs<'_>) -> Option<String> {
+    let typed = inputs.typed;
+    if purpose == Purpose::Palette {
+        return None;
     }
-    if purpose == Purpose::Palette
-        && let Some(r) = typed_row
-    {
-        add(&mut out, r);
+    if inputs.is_address {
+        return inline(typed, &inputs.tabs, &inputs.visited);
     }
-    out.truncate(LIMIT);
-    out
+    if typed.contains(' ') {
+        return None;
+    }
+    let want = address::strip_typed(typed);
+    if want.chars().count() < 2 {
+        return None;
+    }
+    let offers = offers(purpose, inputs);
+    let row = offers.default.and_then(|i| offers.rows.get(i))?;
+    if row.section == Some(Section::Search) {
+        return None;
+    }
+    let shown = address::strip_typed(&address::pretty_str(row.url.as_deref()?));
+    shown
+        .strip_prefix(&want)
+        .filter(|rest| !rest.is_empty())
+        .map(str::to_string)
 }
 
 /// The open tab or visit whose shown address is exactly `typed`.
@@ -447,54 +631,244 @@ mod tests {
         rows(Purpose::Launch, &Inputs::default()).is_empty()
     }
 
-    #[test]
-    fn typed_words_search_first_in_the_field_and_last_in_the_palette() {
-        let tab = TabId::new();
-        let inputs = Inputs {
-            typed: "rust",
+    fn open_tab(title: &str, url: &str, id: &TabId) -> Suggestion {
+        Suggestion {
+            key: title.into(),
+            title: title.into(),
+            url: url.into(),
+            kind: SuggestionKind::Open,
+            tab: Some(id.clone()),
+            score: 12.0,
+        }
+    }
+
+    fn bookmark(title: &str, url: &str) -> BookmarkHit {
+        BookmarkHit {
+            bookmark: copper_core::bookmarks::Bookmark {
+                title: title.into(),
+                url: Some(url.into()),
+                ..Default::default()
+            },
+            path: Vec::new(),
+        }
+    }
+
+    /// "git" with something in every group.
+    fn git(tab: &TabId) -> Inputs<'static> {
+        Inputs {
+            typed: "git",
             engine: "Google",
-            destination: Some("https://www.google.com/search?q=rust".into()),
+            destination: Some("https://www.google.com/search?q=git".into()),
             is_address: false,
-            tabs: vec![Suggestion {
-                key: "Rust".into(),
-                title: "Rust".into(),
-                url: "https://www.rust-lang.org/".into(),
-                kind: SuggestionKind::Open,
-                tab: Some(tab.clone()),
-                score: 12.0,
-            }],
-            visited: vec![visited(
-                "rust-lang.org",
-                "https://www.rust-lang.org/",
-                "Rust",
+            tabs: vec![open_tab(
+                "Git Guide",
+                "http://127.0.0.1:8737/git-guide.html",
+                tab,
             )],
+            visited: vec![
+                visited("github.com", "https://github.com/", "GitHub"),
+                visited("git-scm.com/book", "https://git-scm.com/book", "Git - Book"),
+                // The open tab, again: it folds into the tab's row.
+                visited(
+                    "127.0.0.1/git-guide.html",
+                    "http://127.0.0.1:8737/git-guide.html",
+                    "Git Guide",
+                ),
+            ],
+            bookmarks: vec![bookmark("Gitea", "https://gitea.io/")],
             commands: vec![CommandRow {
                 id: "x".into(),
-                name: "Rust Thing".into(),
+                name: "Git Thing".into(),
                 icon: "x".into(),
                 shortcut: None,
             }],
             ..Default::default()
-        };
-        let field = rows(Purpose::Launch, &inputs);
-        assert_eq!(field[0].kind, Kind::Search);
-        assert_eq!(field[1].action, Action::Switch(tab.clone()));
+        }
+    }
+
+    fn sections(rows: &[Row]) -> Vec<Section> {
+        let mut v: Vec<Section> = rows.iter().filter_map(|r| r.section).collect();
+        v.dedup();
+        v
+    }
+
+    #[test]
+    fn the_field_groups_open_tabs_then_history_then_search() {
+        let tab = TabId::new();
+        let inputs = git(&tab);
+        let o = offers(Purpose::Launch, &inputs);
+        assert_eq!(
+            sections(&o.rows),
+            [
+                Section::Tabs,
+                Section::History,
+                Section::Bookmarks,
+                Section::Search
+            ]
+        );
+        let titles: Vec<&str> = o.rows.iter().map(|r| r.title.as_str()).collect();
+        assert_eq!(
+            titles,
+            ["Git Guide", "GitHub", "Git - Book", "Gitea", "git"]
+        );
+        assert_eq!(o.rows[0].action, Action::Switch(tab.clone()));
+        assert_eq!(o.rows.last().unwrap().kind, Kind::Search);
+        assert_eq!(o.default, Some(0), "the open tab is what Return does");
         assert!(
-            field.iter().all(|r| r.kind != Kind::Command),
+            o.rows.iter().all(|r| r.kind != Kind::Command),
             "no commands in the field"
         );
+        // Every row is in a group, groups are contiguous and in order.
+        let order: Vec<Section> = o.rows.iter().map(|r| r.section.unwrap()).collect();
+        assert!(order.windows(2).all(|w| w[0] <= w[1]));
+        // Ctrl+L is grouped the same way.
+        assert_eq!(rows(Purpose::Edit, &inputs), o.rows);
+    }
+
+    #[test]
+    fn the_first_group_with_a_row_is_highlighted() {
+        let tab = TabId::new();
+        // No open tab matches: the history hit.
+        let inputs = Inputs {
+            tabs: vec![],
+            ..git(&tab)
+        };
+        let o = offers(Purpose::Launch, &inputs);
+        assert_eq!(o.rows[0].section, Some(Section::History));
+        assert_eq!(o.default, Some(0));
+        assert_eq!(o.rows[0].action, Action::Go("https://github.com/".into()));
+        // Nothing but the search: Return searches.
+        let only = Inputs {
+            typed: "zzz qq",
+            engine: "Google",
+            destination: Some("https://www.google.com/search?q=zzz+qq".into()),
+            ..Default::default()
+        };
+        let o = offers(Purpose::Launch, &only);
+        assert_eq!(o.rows.len(), 1);
+        assert_eq!((o.rows[0].kind, o.default), (Kind::Search, Some(0)));
+        assert_eq!(o.rows[0].section.unwrap().title(o.rows[0].kind), "Search");
+    }
+
+    #[test]
+    fn a_typed_address_still_goes_there_on_return() {
+        let tab = TabId::new();
+        for typed in [
+            "example.com",
+            "localhost:3000",
+            "https://example.com/x",
+            "127.0.0.1:8737/git",
+        ] {
+            let dest = format!("https://{}/", typed.trim_start_matches("https://"));
+            let inputs = Inputs {
+                typed,
+                destination: Some(dest.clone()),
+                is_address: true,
+                tabs: vec![open_tab("Somewhere", "https://somewhere.test/", &tab)],
+                visited: vec![visited("other.test", "https://other.test/", "Other")],
+                ..Default::default()
+            };
+            let o = offers(Purpose::Launch, &inputs);
+            let at = o.default.unwrap();
+            assert_eq!(
+                at,
+                o.rows.len() - 1,
+                "{typed}: the address row, at the foot"
+            );
+            assert_eq!(o.rows[at].kind, Kind::Address);
+            assert_eq!(o.rows[at].action, Action::Go(dest));
+            assert_eq!(o.rows[at].section.unwrap().title(Kind::Address), "Go To");
+            assert_eq!(o.rows[0].section, Some(Section::Tabs), "groups still first");
+        }
+    }
+
+    #[test]
+    fn tab_jumps_between_groups_and_wraps() {
+        let tab = TabId::new();
+        let rows = rows(Purpose::Launch, &git(&tab));
+        // 0 tab | 1 2 history | 3 bookmark | 4 search
+        assert_eq!(section_starts(&rows), [0, 1, 3, 4]);
+        assert_eq!(jump(&rows, Some(0), true), Some(1));
+        assert_eq!(jump(&rows, Some(1), true), Some(3));
+        assert_eq!(jump(&rows, Some(2), true), Some(3), "from inside a group");
+        assert_eq!(jump(&rows, Some(3), true), Some(4));
+        assert_eq!(jump(&rows, Some(4), true), Some(0), "wraps to the top");
+        assert_eq!(jump(&rows, Some(0), false), Some(4), "Shift-Tab wraps back");
+        assert_eq!(jump(&rows, Some(2), false), Some(0), "to the group before");
+        assert_eq!(jump(&rows, Some(1), false), Some(0));
+        assert_eq!(jump(&rows, None, true), Some(0));
+        assert_eq!(jump(&rows, None, false), Some(4));
+        assert_eq!(jump(&[], Some(0), true), None);
+        // One group: Tab stays on its first row.
+        let one = rows[4..].to_vec();
+        assert_eq!(jump(&one, Some(0), true), Some(0));
+    }
+
+    #[test]
+    fn the_completion_is_what_the_highlighted_row_opens() {
+        let tab = TabId::new();
+        // The open tab's address does not carry on from "git": nothing.
+        assert_eq!(completion(Purpose::Launch, &git(&tab)), None);
+        // GitHub highlighted: the rest of its address.
+        let inputs = Inputs {
+            tabs: vec![],
+            ..git(&tab)
+        };
         assert_eq!(
-            field
+            completion(Purpose::Launch, &inputs).as_deref(),
+            Some("hub.com")
+        );
+        // An address being typed: the best known address carrying on.
+        let addr = Inputs {
+            typed: "github.co",
+            destination: Some("https://github.co/".into()),
+            is_address: true,
+            visited: vec![visited("github.com", "https://github.com/", "GitHub")],
+            ..Default::default()
+        };
+        assert_eq!(completion(Purpose::Launch, &addr).as_deref(), Some("m"));
+        assert_eq!(completion(Purpose::Palette, &inputs), None);
+    }
+
+    #[test]
+    fn the_palette_groups_the_same_way_with_commands_before_the_search() {
+        let tab = TabId::new();
+        let inputs = git(&tab);
+        let o = offers(Purpose::Palette, &inputs);
+        assert_eq!(
+            sections(&o.rows),
+            [
+                Section::Tabs,
+                Section::History,
+                Section::Bookmarks,
+                Section::Commands,
+                Section::Search
+            ]
+        );
+        assert_eq!(o.rows[0].action, Action::Switch(tab));
+        assert_eq!(o.default, Some(0));
+        assert_eq!(
+            o.rows
                 .iter()
-                .filter(|r| r.url.as_deref() == Some("https://www.rust-lang.org/"))
+                .filter(|r| r.url.as_deref() == Some("http://127.0.0.1:8737/git-guide.html"))
                 .count(),
             1,
             "the open tab and the visit fold into one row"
         );
-        let palette = rows(Purpose::Palette, &inputs);
-        assert_eq!(palette[0].action, Action::Switch(tab));
-        assert_eq!(palette[1].kind, Kind::Command);
-        assert_eq!(palette.last().unwrap().kind, Kind::Search);
+        let commands = rows(
+            Purpose::Palette,
+            &Inputs {
+                typed: "git th",
+                ..git(&TabId::new())
+            },
+        );
+        assert_eq!(
+            commands
+                .iter()
+                .find(|r| r.kind == Kind::Command)
+                .map(|r| r.section),
+            Some(Some(Section::Commands))
+        );
     }
 
     #[test]
