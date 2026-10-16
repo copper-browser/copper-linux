@@ -55,6 +55,15 @@ window.copper { background: transparent; }
 .new-tab-row .title { font-size: 14px; }
 .new-tab-row image { opacity: .8; }
 
+/* — dragging a tab in the column: where it will land — */
+.column-body:drop(active) { box-shadow: none; outline: none; }
+.drop-marker { min-height: 3px; margin: 0 8px; border-radius: 2px; }
+.save-slot {
+  min-height: 32px; margin: 4px 0 2px 0; padding: 0 9px; border-radius: 9px;
+  transition: background-color 100ms ease-out, color 100ms ease-out;
+}
+.save-slot .title { font-size: 13px; }
+
 .pins { margin: 2px 0 10px 0; }
 .pins > flowboxchild { padding: 0; }
 .pin {
@@ -159,6 +168,8 @@ row.copper-suggestion .detail { font-size: 12.5px; }
 row.copper-suggestion .hint { font-size: 12px; opacity: 0; }
 row.copper-suggestion:selected .hint { opacity: 1; }
 row.copper-suggestion .mark { min-width: 16px; min-height: 16px; }
+.suggestion-header { padding: 8px 10px 3px 10px; font-size: 11.5px; font-weight: 600; }
+list.copper-suggestions > label.suggestion-header:first-child { padding-top: 2px; }
 
 .copper-dropdown { padding: 6px; border-radius: 12px; }
 
@@ -223,6 +234,7 @@ row.copper-suggestion {{ color: {ink}; background: transparent; }}
 row.copper-suggestion:hover {{ background-color: {hover}; }}
 row.copper-suggestion:selected {{ background-color: {selected}; }}
 row.copper-suggestion .detail, row.copper-suggestion .hint, row.copper-suggestion .mark {{ color: {muted}; }}
+.suggestion-header {{ color: {muted}; }}
 .copper-dropdown {{ background-color: {card}; box-shadow: 0 0 0 1px {rim}, 0 8px 28px {deep}; }}
 "#,
         ground = p.ground.hex(),
@@ -275,6 +287,9 @@ fn surface(scope: &str, t: &Tint) -> String {
 {scope} .drop-before {{ box-shadow: inset 0 2px {dot}; }}
 {scope} .drop-after {{ box-shadow: inset 0 -2px {dot}; }}
 {scope} .drop-into {{ box-shadow: inset 0 0 0 2px {dot_soft}; }}
+{scope} .drop-marker {{ background-color: {marker}; box-shadow: 0 0 0 1px {pill}; }}
+{scope} .save-slot {{ color: {muted}; box-shadow: inset 0 0 0 1px {hair}; }}
+{scope} .armed .save-slot {{ color: {ink}; background-color: {hover}; box-shadow: inset 0 0 0 2px {dot}; }}
 "#,
         bg = t.background_css(),
         ink = ink.hex(),
@@ -291,6 +306,7 @@ fn surface(scope: &str, t: &Tint) -> String {
         lift = t.lift(),
         dot = t.dot().css(0.9),
         dot_soft = t.dot().css(0.5),
+        marker = ink.css(0.85),
     )
 }
 

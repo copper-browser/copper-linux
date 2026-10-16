@@ -1,10 +1,12 @@
 //! The one field, and the card it becomes (Mac: `Omnibox.swift`,
 //! `Fork/CommandPalette.swift`, `Fork/CommandBar.swift`).
 //!
-//! * [`FieldCore`] — a text field with inline completion (the rest of a
-//!   visited address, selected, taken by Tab or Return) and a list of
-//!   suggestions under it. Used by the slim header (tabs in the column) and
-//!   by the card.
+//! * [`FieldCore`] — a text field with inline completion (the rest of the
+//!   address Return would open, selected, taken by → / End or Return) and
+//!   a list of suggestions under it in groups — Open Tabs, History,
+//!   Bookmarks, Commands (`Ctrl+K`), then the search — that Tab and
+//!   Shift-Tab jump between. Used by the slim header (tabs in the column)
+//!   and by the card.
 //! * [`Card`] — the floating card: `Ctrl+T` (where to, in a new tab),
 //!   `Ctrl+Shift+N` (the same, private), `Ctrl+K` (open tabs, commands,
 //!   places), and `Ctrl+L` when the tabs are on top.
@@ -16,7 +18,7 @@ pub mod complete;
 
 use crate::actions;
 use crate::shell::Shell;
-use complete::{Action, Inputs, Kind, OpenRow, Purpose, Row};
+use complete::{Action, Inputs, Kind, Offers, OpenRow, Purpose, Row};
 use gtk4 as gtk;
 use gtk4::prelude::*;
 use std::cell::{Cell, RefCell};
@@ -66,23 +68,81 @@ impl SuggestionList {
         list.add_css_class("copper-suggestions");
         list.set_activate_on_single_click(true);
         list.set_focusable(false);
-        Rc::new(SuggestionList {
+        let me = Rc::new(SuggestionList {
             list,
             rows: RefCell::default(),
-        })
+        });
+        // A quiet label over the first row of each group.
+        let weak = Rc::downgrade(&me);
+        me.list.set_header_func(move |row, before| {
+            let Some(me) = weak.upgrade() else { return };
+            let rows = me.rows.borrow();
+            let here = rows.get(row.index() as usize);
+            let prev = before.and_then(|b| rows.get(b.index() as usize));
+            let title = here
+                .and_then(|r| Some((r.section?, r.kind)))
+                .filter(|(section, _)| prev.and_then(|p| p.section) != Some(*section))
+                .map(|(section, kind)| section.title(kind));
+            match title {
+                Some(t) => {
+                    let label = gtk::Label::builder()
+                        .label(t)
+                        .xalign(0.0)
+                        .accessible_role(gtk::AccessibleRole::Heading)
+                        .css_classes(["suggestion-header"])
+                        .build();
+                    row.set_header(Some(&label));
+                }
+                None => row.set_header(gtk::Widget::NONE),
+            }
+        });
+        me
     }
 
-    fn set(&self, shell: &Shell, rows: Vec<Row>) {
-        while let Some(child) = self.list.first_child() {
-            self.list.remove(&child);
+    /// Draw `offers`, the default row highlighted.
+    fn set(&self, shell: &Shell, offers: Offers) {
+        self.list.remove_all();
+        // The rows first: the header function reads them.
+        let widgets: Vec<gtk::ListBoxRow> =
+            offers.rows.iter().map(|r| row_widget(shell, r)).collect();
+        self.rows.replace(offers.rows);
+        for w in &widgets {
+            self.list.append(w);
         }
-        for r in &rows {
-            self.list.append(&row_widget(shell, r));
+        if let Some(i) = offers.default {
+            self.select(i);
         }
-        if let Some(first) = self.list.row_at_index(0) {
-            self.list.select_row(Some(&first));
+    }
+
+    /// Highlight row `i` and bring it (and its group's label) into view.
+    fn select(&self, i: usize) {
+        let Some(r) = self.list.row_at_index(i as i32) else {
+            return;
+        };
+        self.list.select_row(Some(&r));
+        if r.height() > 0 {
+            reveal(&self.list, &r);
+        } else {
+            // Just drawn: once it has a place.
+            let list = self.list.clone();
+            glib::idle_add_local_once(move || {
+                if list.selected_row().as_ref() == Some(&r) {
+                    reveal(&list, &r);
+                }
+            });
         }
-        self.rows.replace(rows);
+    }
+
+    fn selected_index(&self) -> Option<usize> {
+        self.list.selected_row().map(|r| r.index() as usize)
+    }
+
+    /// Tab / Shift-Tab: the first row of the next or previous group.
+    fn jump(&self, forward: bool) {
+        let to = complete::jump(&self.rows.borrow(), self.selected_index(), forward);
+        if let Some(i) = to {
+            self.select(i);
+        }
     }
 
     fn len(&self) -> usize {
@@ -105,9 +165,31 @@ impl SuggestionList {
         }
         let at = self.list.selected_row().map(|r| r.index()).unwrap_or(-1);
         let next = (at + by).rem_euclid(n);
-        if let Some(r) = self.list.row_at_index(next) {
-            self.list.select_row(Some(&r));
-        }
+        self.select(next as usize);
+    }
+}
+
+/// Scroll the list's window so `row` (and its group's label) shows.
+fn reveal(list: &gtk::ListBox, row: &gtk::ListBoxRow) {
+    let Some(scroller) = list
+        .ancestor(gtk::ScrolledWindow::static_type())
+        .and_downcast::<gtk::ScrolledWindow>()
+    else {
+        return;
+    };
+    let Some(bounds) = row.compute_bounds(list) else {
+        return;
+    };
+    let top = row
+        .header()
+        .and_then(|h| h.compute_bounds(list))
+        .map_or(bounds.y(), |h| h.y()) as f64;
+    let bottom = (bounds.y() + bounds.height()) as f64;
+    let adj = scroller.vadjustment();
+    if top < adj.value() {
+        adj.set_value(top);
+    } else if bottom > adj.value() + adj.page_size() {
+        adj.set_value(bottom - adj.page_size());
     }
 }
 
@@ -329,15 +411,34 @@ impl FieldCore {
             // it away a moment ago; after a key that is not walking the
             // rows, what is selected is the user's business.
             core.restore_choice();
-            let walks_rows = matches!(key, Key::Down | Key::Up)
+            let tab = matches!(key, Key::Tab | Key::ISO_Left_Tab | Key::KP_Tab) && !ctrl;
+            let walks_rows = tab
+                || matches!(key, Key::Down | Key::Up)
                 || (ctrl && matches!(key, Key::n | Key::j | Key::p));
-            if !walks_rows && !is_modifier(key) {
+            // → or End with the offered rest selected takes it (it used to
+            // be Tab, which now moves between the groups).
+            let takes = matches!(key, Key::Right | Key::End | Key::KP_Right | Key::KP_End)
+                && !ctrl
+                && !state.contains(gtk::gdk::ModifierType::SHIFT_MASK)
+                && core.offering();
+            if !walks_rows && !takes && !is_modifier(key) {
                 core.chosen.take();
             }
             // Moving through the rows or taking the completion acts on what
             // the last keystroke would show, even if it is still waiting.
-            if walks_rows || key == Key::Tab {
+            if walks_rows || takes {
                 core.settle(&shell);
+            }
+            if takes {
+                core.accept_completion(&shell);
+                return glib::Propagation::Stop;
+            }
+            if tab {
+                // Never leaves the field, never types a tab.
+                let back =
+                    key == Key::ISO_Left_Tab || state.contains(gtk::gdk::ModifierType::SHIFT_MASK);
+                core.list.jump(!back);
+                return glib::Propagation::Stop;
             }
             match key {
                 Key::Down => {
@@ -354,10 +455,6 @@ impl FieldCore {
                 }
                 Key::p if ctrl => {
                     core.list.step(-1);
-                    glib::Propagation::Stop
-                }
-                Key::Tab if !ctrl => {
-                    core.accept_completion(&shell);
                     glib::Propagation::Stop
                 }
                 Key::Escape => {
@@ -462,8 +559,26 @@ impl FieldCore {
         self.refresh(shell);
     }
 
-    /// Add the rest of a known address after what was typed, selected, if
-    /// the field still holds exactly that with the caret at its end.
+    /// The field shows an offered completion after what was typed, still
+    /// selected (or waiting to be, after this keystroke).
+    fn offering(&self) -> bool {
+        if self.deferred.get() {
+            return true;
+        }
+        let text = self.text.text();
+        let typed = self.typed.borrow();
+        text.len() > typed.len()
+            && text.starts_with(typed.as_str())
+            && self
+                .chosen
+                .borrow()
+                .as_ref()
+                .is_some_and(|c| c.text == text.as_str() && c.start == typed.chars().count() as i32)
+    }
+
+    /// Add the rest of the address Return would open after what was typed,
+    /// selected, if the field still holds exactly that with the caret at
+    /// its end ([`complete::completion`]).
     fn offer_completion(&self, shell: &Shell) {
         let now = self.text.text().to_string();
         let caret = self.text.position();
@@ -471,8 +586,8 @@ impl FieldCore {
         if !complete::may_offer(&now, &self.typed.borrow(), caret, selection) {
             return;
         }
-        let (tabs, visited) = shell.suggestions(&now, 6);
-        let Some(rest) = complete::inline(&now, &tabs, &visited) else {
+        let purpose = self.purpose.get();
+        let Some(rest) = complete::completion(purpose, &inputs(shell, &now, &now, purpose)) else {
             return;
         };
         let start = now.chars().count() as i32;
@@ -520,15 +635,20 @@ impl FieldCore {
         self.text.select_region(start, end);
     }
 
-    /// Take the offered completion: the caret after it, nothing opened.
+    /// Take the offered completion: the caret after it, nothing opened;
+    /// the rows follow the longer text.
     fn accept_completion(&self, shell: &Shell) {
-        // Tab pressed before the main loop got to the completion.
+        // → pressed before the main loop got to the completion.
         self.settle(shell);
         let full = self.text.text().to_string();
+        let grew = *self.typed.borrow() != full;
         self.typed.replace(full.clone());
         self.chosen.take();
         self.text.set_position(-1);
         self.text.select_region(-1, -1);
+        if grew {
+            self.refresh(shell);
+        }
     }
 
     /// Rebuild the rows for the current text.
@@ -544,13 +664,13 @@ impl FieldCore {
                 .selection_bounds()
                 .is_some_and(|(a, b)| a == 0 && b as usize == full.chars().count())
             && typed == full;
-        let rows = if untouched {
-            Vec::new()
+        let offers = if untouched {
+            Offers::default()
         } else {
-            complete::rows(purpose, &inputs(shell, &typed, &full, purpose))
+            complete::offers(purpose, &inputs(shell, &typed, &full, purpose))
         };
-        let n = rows.len();
-        self.list.set(shell, rows);
+        let n = offers.rows.len();
+        self.list.set(shell, offers);
         if let Some(f) = self.on_rows.borrow().clone() {
             f(n);
         }
@@ -583,6 +703,7 @@ impl FieldCore {
                     action: Action::Go(dest),
                     url: None,
                     icon: None,
+                    section: None,
                 }
             }
         };
@@ -599,8 +720,11 @@ impl FieldCore {
 /// What the ranking reads, gathered from the shell.
 fn inputs<'a>(shell: &Shell, typed: &'a str, full: &'a str, purpose: Purpose) -> Inputs<'a> {
     let engine = shell.settings().search_engine();
-    let destination = shell.destination(full);
-    let is_address = copper_core::address::url_from_typed(full).is_some();
+    // Whether it is an address is a question about what was typed, not the
+    // completion offered after it ("git" + "hub.com" is still words): an
+    // address goes where the field shows, words are searched as typed.
+    let is_address = copper_core::address::url_from_typed(typed).is_some();
+    let destination = shell.destination(if is_address { full } else { typed });
     let (tabs, visited) = shell.suggestions(typed, 6);
     let bookmarks = if typed.trim().is_empty() {
         Vec::new()
@@ -776,7 +900,7 @@ impl Card {
         let scroller = gtk::ScrolledWindow::new();
         scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
         scroller.set_propagate_natural_height(true);
-        scroller.set_max_content_height(8 * 44);
+        scroller.set_max_content_height(11 * 40);
         scroller.set_child(Some(&field.list.list));
         card.append(&scroller);
         layer.append(&card);
@@ -879,7 +1003,11 @@ impl Card {
             self.layer.remove_css_class("over");
         }
         let h = shell.window().height().max(600);
-        self.card.set_margin_top((h as f64 * 0.2) as i32);
+        let top = (h as f64 * 0.2) as i32;
+        self.card.set_margin_top(top);
+        // Room for every group without scrolling, inside the window.
+        self.scroller
+            .set_max_content_height((h - top - 54 - 32).clamp(8 * 40, 13 * 40));
         self.field
             .text
             .set_placeholder_text(Some(mode.placeholder()));

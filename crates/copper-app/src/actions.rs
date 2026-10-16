@@ -388,6 +388,8 @@ pub fn register_core(shell: &Shell) {
     register_action_with_id(
         shell,
         "tab-close",
+        // The menu's Close Tab is explicit: a Saved row goes too (and
+        // comes back saved with Reopen Closed Tab).
         tab(|s, id| {
             s.close_force(id);
         }),
@@ -431,8 +433,9 @@ pub fn register_core(shell: &Shell) {
                 .filter(|t| t.id != *id && t.pin.is_none())
                 .map(|t| t.id.clone())
                 .collect();
+            // Today rows close; Saved rows are only unloaded (Arc).
             for o in others {
-                s.close_force(&o);
+                s.close(&o);
             }
         }),
     );

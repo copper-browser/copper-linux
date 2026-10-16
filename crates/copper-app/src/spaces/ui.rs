@@ -150,20 +150,8 @@ pub fn header(shell: &Shell) -> gtk::Button {
             popover(&s, &id, b).popup();
         }
     });
-    // A tab dropped on the header is kept (Saved), at the top.
-    let drop = gtk::DropTarget::new(glib::types::Type::STRING, gdk_move());
-    let weak = shell.downgrade();
-    drop.connect_drop(move |_, value, _, _| {
-        let (Some(s), Ok(id)) = (weak.upgrade(), value.get::<String>()) else {
-            return false;
-        };
-        if id.starts_with("space:") {
-            return false;
-        }
-        s.drop_in_section(&TabId(id), true);
-        true
-    });
-    button.add_controller(drop);
+    // A tab dropped on the header lands at the top of Saved, through the
+    // column's own drop target (which shows the marker there).
     button
 }
 

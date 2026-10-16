@@ -77,8 +77,9 @@ pub fn menu(shell: &Shell, id: &TabId) -> gio::Menu {
         );
     }
     if !t.is_pinned() && !t.private {
+        // Explicit, like the cross: Unsave puts it at the top of Today.
         place.append(
-            Some(if t.saved { "Move to Today" } else { "Keep" }),
+            Some(if t.saved { "Unsave" } else { "Save" }),
             Some(&format!("win.tab-keep::{id}")),
         );
         let others: Vec<_> = b.spaces().filter(|s| s.id != t.space).collect();
@@ -190,9 +191,9 @@ pub fn after_half(pos: f64, extent: i32) -> bool {
     pos > extent as f64 / 2.0
 }
 
-/// Make `widget` a drag source for tab `id`, and a drop target that
-/// reorders onto it (`vertical`: before/after by y, else by x).
-pub fn wire_drag(shell: &Shell, widget: &gtk::Widget, id: &TabId, vertical: bool) {
+/// Make `widget` a drag source for tab `id`. The column hears when a drag
+/// starts and ends (to open the Saved slot while Saved is empty).
+pub fn wire_drag_source(shell: &Shell, widget: &gtk::Widget, id: &TabId) {
     let drag = gtk::DragSource::new();
     drag.set_actions(gtk::gdk::DragAction::MOVE);
     let tab = id.clone();
@@ -200,13 +201,32 @@ pub fn wire_drag(shell: &Shell, widget: &gtk::Widget, id: &TabId, vertical: bool
         Some(gtk::gdk::ContentProvider::for_value(&tab.0.to_value()))
     });
     let w = widget.downgrade();
+    let weak = shell.downgrade();
+    let tab = id.clone();
     drag.connect_drag_begin(move |src, _| {
         if let Some(w) = w.upgrade() {
             let icon = gtk::WidgetPaintable::new(Some(&w));
             src.set_icon(Some(&icon), 12, 12);
         }
+        if let Some(s) = weak.upgrade() {
+            s.ui().column.drag_began(&tab);
+        }
+    });
+    let weak = shell.downgrade();
+    drag.connect_drag_end(move |_, _, _| {
+        if let Some(s) = weak.upgrade() {
+            s.ui().column.drag_ended();
+        }
     });
     widget.add_controller(drag);
+}
+
+/// Make `widget` a drag source for tab `id`, and a drop target that
+/// reorders onto it (`vertical`: before/after by y, else by x) — the
+/// favourites and the row of tabs on top. (The column's rows drop through
+/// the column's own target, which shows where they will land.)
+pub fn wire_drag(shell: &Shell, widget: &gtk::Widget, id: &TabId, vertical: bool) {
+    wire_drag_source(shell, widget, id);
 
     let drop = gtk::DropTarget::new(glib::types::Type::STRING, gtk::gdk::DragAction::MOVE);
     let w = widget.downgrade();

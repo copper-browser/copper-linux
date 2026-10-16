@@ -195,6 +195,9 @@ impl BrowserState for AppBrowser {
     }
 
     fn close_kept(&self, tab_id: &str) {
+        // Gone from the spaces document: removed, not merely unloaded — an
+        // unloaded Saved row would still be kept here and come straight
+        // back on the next push.
         let id = TabId(tab_id.to_string());
         apply(move |s| {
             s.close_force(&id);
@@ -414,6 +417,43 @@ mod tests {
         let twice = serde_json::to_string(&again.to_session()).unwrap();
         assert!(twice.contains(r#""cloudKey":"k-saved""#));
         assert!(twice.contains(r#""cloudKey":"k-pin""#));
+    }
+
+    #[test]
+    fn unloading_a_saved_tab_keeps_it_kept_and_removing_it_does_not() {
+        let (mut b, saved, pin) = keep_one();
+        keep_keys_in(&mut b, &[(saved.0.clone(), "k-saved".into())]);
+        let before = kept_in(&b);
+        b.select(&saved);
+        // ⌘W, an agent's close, Close Other Tabs: only unloaded. The kept
+        // list the sync engine diffs is exactly what it was, so nothing is
+        // deleted remotely.
+        assert!(matches!(
+            b.close_with(&saved, copper_core::browser::Closing::CLOSE),
+            copper_core::CloseOutcome::Unloaded { .. }
+        ));
+        assert!(b.tab(&saved).unwrap().sleeping);
+        assert_eq!(kept_in(&b), before);
+        // The pin put down: still kept too.
+        b.close_tab(&pin, false);
+        assert_eq!(kept_in(&b), before);
+        // The command line's close: still kept.
+        b.close_with(&saved, copper_core::browser::Closing::KEEP_SAVED);
+        assert_eq!(kept_in(&b), before);
+        // The cross on the row: removed, so the next push deletes it.
+        b.close_with(&saved, copper_core::browser::Closing::REMOVE);
+        let after = kept_in(&b);
+        assert_eq!(after.len(), 1);
+        assert!(after.iter().all(|k| k.tab_id != saved.0));
+        // Reopen Closed Tab: kept again (a new entry until the engine keys it).
+        let back = b.reopen_closed().unwrap();
+        let again = kept_in(&b);
+        assert_eq!(again.len(), 2);
+        assert!(
+            again
+                .iter()
+                .any(|k| k.tab_id == back.0 && !k.pinned && k.url == "http://127.0.0.1:8080/r")
+        );
     }
 
     #[test]

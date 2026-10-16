@@ -82,7 +82,7 @@ Linux computer can pair a Mac.
 
 | Switch | What | Notes |
 |---|---|---|
-| Spaces and kept tabs | Every space (name, colour, icon, theme, profile *name*, order) and its pinned and Saved tabs | Today's tabs stay on this computer. A profile syncs only as a name; the cookies behind it never travel. |
+| Spaces and kept tabs | Every space (name, colour, icon, theme, profile *name*, order) and its pinned and Saved tabs | Today's tabs stay on this computer. A profile syncs only as a name; the cookies behind it never travel. Closing a Saved tab (Ctrl+W, an agent, `copper close`) only puts it to sleep, so it stays kept everywhere; the × on its row, the menu's Close Tab or Unsave remove it, and that removal is what syncs. |
 | Settings | A short allowlist (below) | Never passwords, paths, keys, accounts or agent setup. |
 | Bookmarks | The whole tree, folders and all | |
 | Open tabs | This computer's open (non-pinned) tabs, for your other devices to see | One way only: another device's tabs never open here by themselves. Click one to open it. |
