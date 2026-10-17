@@ -473,6 +473,22 @@ mod tests {
     }
 
     #[test]
+    fn a_refused_read_is_a_tool_error() {
+        use super::super::host::read_refused;
+        let refused = json!({"error": "no shape f9 on this canvas — overview lists the frames"});
+        assert_eq!(
+            read_refused(refused.as_object().unwrap()).as_deref(),
+            Some("no shape f9 on this canvas — overview lists the frames")
+        );
+        let shapes = json!({"error": "x", "shapes": []});
+        let overview = json!({"error": "x", "overview": true});
+        let fine = json!({"shapes": [], "total": 0});
+        assert_eq!(read_refused(shapes.as_object().unwrap()), None);
+        assert_eq!(read_refused(overview.as_object().unwrap()), None);
+        assert_eq!(read_refused(fine.as_object().unwrap()), None);
+    }
+
+    #[test]
     fn assignees_anywhere_in_the_ops() {
         use super::super::host::mentions_key;
         let add = json!([{"op": "add", "shape": {"type": "checklist", "rows": ["a"], "assignees": {"a": ["Ann"]}}}]);

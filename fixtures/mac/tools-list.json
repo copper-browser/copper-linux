@@ -1012,15 +1012,15 @@
         "name": "canvas_open"
       },
       {
-        "description": "Read a canvas: {canvas, viewport, shapes:[{id,type,x,y,w,h,color,text|title|label|url,live?,by}], agents, selection}; a checklist card (a sticky with view:'checklist') also has title, columns, rows:[{label,pick,by?,at?,note?,noteBy?,noteAt?,assignees?:[{name,id?,email?}]}] (note: the row's comment, when it has one; assignees: who the row is assigned to, id their Copper Cloud user id) and tally {column: count}; a timeline (view:'timeline') has title, start, end, step and items:[{date, end?, label, text?, color?, kind:'note'|'bubble'|'section'}]; comments:[{id, anchor (shape id), anchorDeleted?, resolved, resolvedBy?, messages:[{id, by, at, text, edited?}]}] lists the comment threads people left on shapes (a frame is often a slide). Text is cut at 500 characters unless full is true. Big canvases come in pages: every answer has total (the shapes that match) and returned, and next while more remain — pass it back as cursor for the following page. On a big canvas read overview first, then one frame or region at a time, or follow next; ids, types and query narrow any read. Read before you write.",
+        "description": "Read a canvas: {canvas, viewport, shapes:[{id,type,x,y,w,h,color,text|title|label|url,live?,by,frame?}], agents, selection, total, returned, next?}; a checklist card (a sticky with view:'checklist') also has title, columns, rows:[{label,pick,by?,at?,note?,noteBy?,noteAt?,assignees?:[{name,id?,email?}]}] (note: the row's comment, when it has one; assignees: who the row is assigned to, id their Copper Cloud user id) and tally {column: count}; a timeline (view:'timeline') has title, start, end, step and items:[{date, end?, label, text?, color?, kind:'note'|'bubble'|'section'}]; comments:[{id, anchor (shape id), anchorDeleted?, resolved, resolvedBy?, messages:[{id, by, at, text, edited?}]}] lists the comment threads people left on shapes (a frame is often a slide). Text is cut at 500 characters unless full is true. A big canvas comes a page at a time — at most limit shapes (default 200) and about 48 KB per answer, frames first, then by y, x and id, each comment thread with its shape: while the answer has next, call again with cursor set to it (the cursor keeps the filters) until next is absent; total is how many shapes match. On a big canvas start with overview:true (counts by type, bounds, the frames with their ids, titles and shape counts, comment counts — no shapes), then read one frame (frame:<id>) or one area (region), or narrow with ids, types or query. Read before you write.",
         "inputSchema": {
           "properties": {
             "cursor": {
-              "description": "The next of a previous answer: the page after it",
+              "description": "The next value of the previous answer, to read the page after it",
               "type": "string"
             },
             "frame": {
-              "description": "A frame's shape id: that frame and the shapes inside it",
+              "description": "A frame's shape id (from overview): the frame and the shapes inside it",
               "type": "string"
             },
             "full": {
@@ -1039,15 +1039,17 @@
               "type": "array"
             },
             "limit": {
-              "description": "Shapes per page; default 200, at most 500",
+              "description": "Shapes per answer; default 200, at most 500",
+              "maximum": 500,
+              "minimum": 1,
               "type": "integer"
             },
             "overview": {
-              "description": "No shapes: the canvas, viewport, total, counts by type, bounds, frames [{id, title, x, y, w, h, shapes}], comments {threads, open}, agents and selection — read this first on a big canvas",
+              "description": "No shapes: total, counts by type, bounds, frames [{id, title, x, y, w, h, shapes}], comments {threads, open}, agents and selection. Read this first on a big canvas",
               "type": "boolean"
             },
             "query": {
-              "description": "Only shapes whose text, title, label or url contains this (any case)",
+              "description": "Case-insensitive text to find in text, titles, labels and urls",
               "type": "string"
             },
             "reason": {
@@ -1055,7 +1057,7 @@
               "type": "string"
             },
             "region": {
-              "description": "Only the shapes intersecting this rectangle, in board units",
+              "description": "Board-unit rectangle: the shapes that intersect it",
               "properties": {
                 "h": {
                   "type": "number"
@@ -1079,8 +1081,19 @@
               "type": "object"
             },
             "types": {
-              "description": "Only these types, as read reports them (sticky, text, frame, arrow, image, link, checklist, timeline, …)",
+              "description": "Only shapes of these types, as read reports them",
               "items": {
+                "enum": [
+                  "sticky",
+                  "text",
+                  "frame",
+                  "arrow",
+                  "image",
+                  "link",
+                  "web",
+                  "checklist",
+                  "timeline"
+                ],
                 "type": "string"
               },
               "type": "array"

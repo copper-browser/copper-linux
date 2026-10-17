@@ -997,6 +997,9 @@ impl CanvasHost {
         let raw = self.run(&copper_pagejs::canvas::read_with(opts)).await?;
         let mut out =
             Self::object(Value::String(raw)).ok_or("the canvas page gave back nothing to read")?;
+        if let Some(error) = read_refused(&out) {
+            return Err(Failure(error));
+        }
         if let Some(entry) = self.entry() {
             let mut canvas = out
                 .get("canvas")
@@ -1717,6 +1720,14 @@ impl CanvasHost {
             self.share_now();
         }
     }
+}
+
+/// The page refused a read's options (an unknown frame, a bad region, a
+/// stale or foreign cursor): its words are the answer, as a tool error (Mac
+/// `CanvasHost.read`). An answer with shapes or an overview is never refused.
+pub fn read_refused(out: &serde_json::Map<String, Value>) -> Option<String> {
+    let error = out.get("error").and_then(Value::as_str)?;
+    (!out.contains_key("shapes") && !out.contains_key("overview")).then(|| error.to_string())
 }
 
 /// Whether any op carries `key` at any depth (checklist `assignees` in an

@@ -414,12 +414,14 @@ async fn tools_list_is_the_mac_catalogue_minus_voice() {
 
             // The Mac's wire bytes: same escaping, so the same length when
             // every tool is there (the fixture's 45 came to 32921 bytes;
-            // 36024 with canvas_read's paging options, 2026-10-16).
+            // 36024 with canvas_read's paging options, 2026-10-16; 36366 with
+            // the integrated Mac build's canvas_read text, jev_run/jev_step
+            // kept at the options Linux implements).
             let all: Vec<Value> = mac.values().cloned().collect();
             let wire = copper_pagejs::render::compact_json(
                 &json!({"jsonrpc": "2.0", "id": 2, "result": {"tools": all}}),
             );
-            assert_eq!(wire.len(), 36024);
+            assert_eq!(wire.len(), 36366);
         })
         .await;
 }

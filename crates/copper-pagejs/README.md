@@ -210,4 +210,4 @@ Two deliberate Linux changes to the helper, both marked `// Linux:` in
 | `canvas/show_chat.js` | `CanvasShowChat` | `Fork/Canvas/CanvasChat.swift:272` `CanvasChat.received` | async call | page |  |
 | `canvas/reveal_chat.js` | `CanvasRevealChat` | `Fork/Canvas/CanvasChat.swift:468` `CanvasChat.open` | async call | page |  |
 | `canvas/chat_send.js` | `CanvasChatSend` | `Fork/Canvas/CanvasChatUI.swift:246` `CanvasChat.runTool` | async call | page |  |
-| `canvas/frame_poster.js` | `CanvasFramePoster` | `Fork/Canvas/CanvasFrames.swift:1` `CanvasHost.framePoster` (canvas-perf contract A.3; Mac line in wave 2) | async call | page |  |
+| `canvas/frame_poster.js` | `CanvasFramePoster` | `Fork/Canvas/CanvasPosters.swift:127` `CanvasPosters.send` (canvas-perf contract A.3) | async call | page |  |

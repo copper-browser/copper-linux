@@ -165,9 +165,9 @@ impl<H: Host> Mcp<H> {
             "browser_tabs" => return self.tabs_tool(args, ctx).await,
             "browser_close" => {
                 let tab = self.current(ctx)?;
-                self.close_tab(&tab.id);
+                let said = self.close_tab(&tab.id);
                 return Ok(vec![Content::text(format!(
-                    "Closed. {}",
+                    "{said} {}",
                     self.tab_list(ctx)
                 ))]);
             }
@@ -600,9 +600,9 @@ impl<H: Host> Mcp<H> {
             }
             "close" => {
                 let tab = pick(false)?;
-                self.close_tab(&tab.id);
+                let said = self.close_tab(&tab.id);
                 Ok(vec![Content::text(format!(
-                    "Closed. {}",
+                    "{said} {}",
                     self.tab_list(ctx)
                 ))])
             }

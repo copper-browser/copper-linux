@@ -51,6 +51,17 @@
   </requires>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.2.0" date="2026-10-16">
+      <description>
+        <p>Big canvases are fast, agents can read them a page at a time, and tabs are easier to keep.</p>
+        <ul>
+          <li>A canvas draws only what is on screen. Live web frames load only when they are on screen and big enough to read, a few at a time. A frame that is let go shows a snapshot of its site. Images drawn small use a small copy, and notes far zoomed out draw as simple blocks.</li>
+          <li>Agents read a big canvas in pages: canvas_read takes overview, frame, region, ids, types, query, limit and cursor. Canvas tools now wait for a canvas tab that is asleep, just restored or slow to load.</li>
+          <li>Ctrl+T lists Open Tabs, then History, then Search. Tab and Shift+Tab jump between the sections.</li>
+          <li>Closing a Saved tab keeps it in Saved, as in Arc. Only the row's close button removes it. You can drag a tab into Saved.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.1" date="2026-10-13">
       <description><p>Installer refreshes apt package lists on fresh machines (fixes installs on clean Ubuntu and Debian).</p></description>
     </release>

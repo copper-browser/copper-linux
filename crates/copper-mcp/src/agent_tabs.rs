@@ -184,12 +184,19 @@ impl<H: Host> Mcp<H> {
         Ok(self.host.tab(&tab.id).unwrap_or(tab))
     }
 
-    /// Close a tab wherever it is, and let go of it.
-    pub(crate) fn close_tab(&self, id: &TabId) {
+    /// Close a tab wherever it is, and let go of it. A Saved tab is put
+    /// down, as Ctrl+W does it — still in Saved, its page let go — and the
+    /// answer says so (Mac `Tools.close`).
+    pub(crate) fn close_tab(&self, id: &TabId) -> &'static str {
         if self.state.borrow_mut().held.remove(id).is_some() {
             self.host.release_tab(id);
         }
         self.host.close_tab(id);
+        if self.host.tab(id).is_some() {
+            "Closed — it is a Saved tab, so it stays in Saved, unloaded."
+        } else {
+            "Closed."
+        }
     }
 
     /// Let go of every tab nobody has asked for in [`LINGER`], and of tabs
