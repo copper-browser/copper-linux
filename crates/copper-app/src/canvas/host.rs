@@ -1040,15 +1040,62 @@ impl CanvasHost {
         Ok(serde_json::from_str(&raw).unwrap_or(json!([])))
     }
 
-    /// The board as it looks (PNG).
-    pub async fn picture(self: &Rc<Self>) -> Result<Vec<u8>, Failure> {
+    /// The board as it looks (PNG), and — when the page's `settled` timed
+    /// out — what was still loading on screen when it was taken.
+    ///
+    /// The page is `ready` before its images decode (by design), so a cold
+    /// board would come out with blank pictures: wait (bounded) for what is
+    /// on screen first (canvas-perf contract §E). Pages without `settled`
+    /// are pictured at once.
+    ///
+    /// A canvas tab nobody is looking at is a hidden view, and WebKit runs
+    /// no rendering updates for a hidden view: its images never decode, so
+    /// the picture would stay blank however long it waited. For the picture
+    /// the page is held backstage (Mac: the Backstage window `picture` needs)
+    /// — visible to WebKit, not on the user's screen — and let go after.
+    /// Held from the start, so a board still being handed over already
+    /// decodes what it shows.
+    pub async fn picture(self: &Rc<Self>) -> Result<(Vec<u8>, Option<String>), Failure> {
+        let hold = PictureHold::take(&self.tab);
         self.wait_ready(READY_WITHIN).await?;
+        if hold.as_ref().is_some_and(|h| h.changed) {
+            glib::timeout_future(Duration::from_millis(120)).await;
+        }
+        let pending = self.settle(SETTLE_MS).await;
         let page = self.page().ok_or("the canvas page isn't loaded")?;
         let shot = page
             .snapshot(SnapshotRegion::Visible)
             .await
             .map_err(|e| Failure(format!("couldn't take the picture: {e}")))?;
-        Ok(shot.png)
+        Ok((shot.png, pending))
+    }
+
+    /// `copperCanvas.settled(ms)`, bounded here as well (a page that never
+    /// answers costs at most `ms` + 2 s). `Some(note)` only when the page
+    /// said it had not settled.
+    async fn settle(self: &Rc<Self>, ms: u64) -> Option<String> {
+        let call = copper_pagejs::canvas::settled(ms);
+        let asked = Instant::now();
+        let answer = select2(
+            Box::pin(self.run(&call)),
+            glib::timeout_future(Duration::from_millis(ms + 2000)),
+        )
+        .await;
+        let waited = asked.elapsed().as_millis();
+        match answer {
+            Some(Ok(v)) => {
+                tracing::debug!(target: "copper_app::canvas", answer = %v, waited, "settled");
+                unsettled_note(&v)
+            }
+            Some(Err(e)) => {
+                tracing::debug!(target: "copper_app::canvas", error = %e, "settled");
+                None
+            }
+            None => {
+                tracing::debug!(target: "copper_app::canvas", waited, "settled: no answer");
+                None
+            }
+        }
     }
 
     pub async fn chat_send(self: &Rc<Self>, input: &str) -> Result<Value, Failure> {
@@ -1720,6 +1767,72 @@ impl CanvasHost {
             self.share_now();
         }
     }
+}
+
+/// A background canvas tab held backstage for one picture; let go when
+/// dropped, unless an agent's own hold was there first.
+struct PictureHold {
+    tab: TabId,
+    /// Taken here (not an agent's hold already in place).
+    ours: bool,
+    /// The page's visibility just changed: give WebKit a beat.
+    changed: bool,
+}
+
+impl PictureHold {
+    fn take(tab: &TabId) -> Option<PictureHold> {
+        let shell = super::shell()?;
+        let agents = crate::agents::agents()?;
+        if shell.active_id().as_ref() == Some(tab) {
+            return None;
+        }
+        let before = agents.stage.holds(tab);
+        let changed = agents.stage.prepare(&shell, tab);
+        Some(PictureHold {
+            tab: tab.clone(),
+            ours: !before && agents.stage.holds(tab),
+            changed,
+        })
+    }
+}
+
+impl Drop for PictureHold {
+    fn drop(&mut self) {
+        if !self.ours {
+            return;
+        }
+        if let (Some(shell), Some(agents)) = (super::shell(), crate::agents::agents()) {
+            agents.stage.release(&shell, &self.tab);
+        }
+    }
+}
+
+/// What a picture waits for what's on screen (contract §E: `settled(2500)`).
+pub const SETTLE_MS: u64 = 2500;
+
+/// What was still pending when `settled` timed out, in the Mac's words
+/// (`CanvasHost.pendingText`): "3 images, 1 web frame". `None` when the page
+/// settled, predates `settled` (`null`), or named nothing pending.
+pub fn unsettled_note(answer: &Value) -> Option<String> {
+    if answer.get("settled").and_then(Value::as_bool) != Some(false) {
+        return None;
+    }
+    let pending = answer.get("pending");
+    let count = |k: &str| {
+        pending
+            .and_then(|p| p.get(k))
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+    };
+    let parts: Vec<String> = [
+        (count("images"), "image", "images"),
+        (count("frames"), "web frame", "web frames"),
+    ]
+    .into_iter()
+    .filter(|(n, ..)| *n > 0)
+    .map(|(n, one, many)| format!("{n} {}", if n == 1 { one } else { many }))
+    .collect();
+    (!parts.is_empty()).then(|| parts.join(", "))
 }
 
 /// The page refused a read's options (an unknown frame, a bad region, a

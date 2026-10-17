@@ -282,6 +282,8 @@ scripts! {
     CanvasChatSend = "canvas/chat_send.js", AsyncCall, Page, None;
     /// A live frame's poster for the page (`copperCanvas.framePoster`).
     CanvasFramePoster = "canvas/frame_poster.js", AsyncCall, Page, None;
+    /// Wait (bounded) for what's on screen before a picture (`copperCanvas.settled`).
+    CanvasSettled = "canvas/settled.js", AsyncCall, Page, None;
 }
 
 impl Script {

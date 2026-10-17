@@ -344,10 +344,10 @@ async fn run(shell: &Shell, tool: &str, args: &Map<String, Value>) -> Result<Vec
         "canvas_screenshot" => {
             let e = resolve(shell, args, true)?;
             let h = open(shell, &e, false).await?;
-            let png = h.picture().await.map_err(fail)?;
+            let (png, pending) = h.picture().await.map_err(fail)?;
             Ok(vec![
                 json!({"type": "image", "data": glib::base64_encode(&png).to_string(), "mimeType": "image/png"}),
-                Value::String(format!("Canvas · {}", e.name)),
+                Value::String(picture_text(&e.name, pending.as_deref())),
             ])
         }
         "canvas_chat" => {
@@ -435,9 +435,42 @@ async fn share_token(remote: &str) -> Result<String, String> {
     Ok(made.token)
 }
 
+/// `canvas_screenshot`'s text line; `pending` when the page's `settled`
+/// timed out (contract §E; Mac `CanvasTools` "canvas_screenshot").
+fn picture_text(name: &str, pending: Option<&str>) -> String {
+    match pending {
+        Some(p) => format!("Canvas · {name} — still loading when taken: {p}"),
+        None => format!("Canvas · {name}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_picture_names_what_was_still_loading() {
+        use super::super::host::unsettled_note;
+        let late =
+            json!({"settled": false, "waitedMs": 2504, "pending": {"images": 3, "frames": 1}});
+        let note = unsettled_note(&late);
+        assert_eq!(note.as_deref(), Some("3 images, 1 web frame"));
+        assert_eq!(
+            picture_text("Big", note.as_deref()),
+            "Canvas · Big — still loading when taken: 3 images, 1 web frame"
+        );
+        let one =
+            json!({"settled": false, "waitedMs": 2500, "pending": {"images": 1, "frames": 0}});
+        assert_eq!(unsettled_note(&one).as_deref(), Some("1 image"));
+        let frames = json!({"settled": false, "pending": {"images": 0, "frames": 2}});
+        assert_eq!(unsettled_note(&frames).as_deref(), Some("2 web frames"));
+        // Timed out with nothing named, settled, or an older page (null): the plain line.
+        assert_eq!(unsettled_note(&json!({"settled": false})), None);
+        let done = json!({"settled": true, "waitedMs": 30, "pending": {"images": 0, "frames": 0}});
+        assert_eq!(unsettled_note(&done), None);
+        assert_eq!(unsettled_note(&Value::Null), None);
+        assert_eq!(picture_text("Big", None), "Canvas · Big");
+    }
 
     #[test]
     fn sorted_json_and_caller() {

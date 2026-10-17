@@ -76,6 +76,14 @@ pub fn frame_poster(name: &str, data_url: Option<&str>) -> Call<bool> {
     )
 }
 
+/// Before a picture (contract §E): `copperCanvas.settled(ms)` — resolves
+/// once the images and web frames on screen have decoded / loaded, or after
+/// `ms`. Answers `{settled, waitedMs, pending: {images, frames}}`, or `null`
+/// with a page that predates it.
+pub fn settled(ms: u64) -> Call<Value> {
+    Call::new(Script::CanvasSettled, json!({ "ms": ms }))
+}
+
 pub fn select(ids: &[String]) -> Call<Value> {
     Call::new(Script::CanvasSelect, json!({ "ids": ids }))
 }
