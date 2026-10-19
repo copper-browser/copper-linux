@@ -2,8 +2,10 @@
 //! `Shield.swift`, `Sleep.swift`, `Fork/Sections.swift`,
 //! `Fork/Cloud/CloudMerge.swift` `CloudSettingsKeys`).
 //!
-//! Linux has no `UserDefaults`, so the same keys live in one flat JSON object,
-//! `$XDG_CONFIG_HOME/copper/settings.json` ([`crate::store::DataFile::Settings`]).
+//! Linux and Windows have no `UserDefaults`, so the same keys live in one
+//! flat JSON object, `$XDG_CONFIG_HOME/copper/settings.json` (Windows:
+//! `%LOCALAPPDATA%\Copper\Data\settings.json`;
+//! [`crate::store::DataFile::Settings`]).
 //! Keys this build does not know survive untouched. Typed accessors apply
 //! the Mac's defaults; the cloud `settings` document carries the
 //! [`CLOUD_SETTINGS_KEYS`] subset as strings.

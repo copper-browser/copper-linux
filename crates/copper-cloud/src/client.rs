@@ -288,18 +288,69 @@ impl std::fmt::Debug for CloudClient {
     }
 }
 
+/// What this machine calls itself, for a fresh `cloud.json` `deviceName`
+/// (the Mac uses the computer name; the user can rename it later).
 fn default_device_name() -> String {
-    let host = std::fs::read_to_string("/proc/sys/kernel/hostname")
-        .or_else(|_| std::fs::read_to_string("/etc/hostname"))
-        .map(|s| s.trim().to_string())
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "Linux".to_string());
+    let host = host_name();
     // Two test worlds on one machine are two devices; say which is which.
     match std::env::var("COPPER_WORLD") {
         Ok(w) if !w.trim().is_empty() => format!("{host} ({})", w.trim()),
         _ => host,
     }
+}
+
+/// Linux: the kernel host name (`/proc/sys/kernel/hostname`, else
+/// `/etc/hostname`), else `Linux`.
+#[cfg(not(windows))]
+fn host_name() -> String {
+    std::fs::read_to_string("/proc/sys/kernel/hostname")
+        .or_else(|_| std::fs::read_to_string("/etc/hostname"))
+        .map(|s| s.trim().to_string())
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "Linux".to_string())
+}
+
+/// Windows: the computer name as the user typed it in Settings
+/// (`GetComputerNameExW(ComputerNamePhysicalDnsHostname)`, case kept), else
+/// `%COMPUTERNAME%` (the upper-case NetBIOS name), else `Windows`.
+#[cfg(windows)]
+fn host_name() -> String {
+    windows_dns_host_name()
+        .or_else(|| std::env::var("COMPUTERNAME").ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "Windows".to_string())
+}
+
+#[cfg(windows)]
+fn windows_dns_host_name() -> Option<String> {
+    use windows_sys::Win32::System::SystemInformation::{
+        ComputerNamePhysicalDnsHostname, GetComputerNameExW,
+    };
+    // First call: the required size (in UTF-16 units, terminator included).
+    let mut len: u32 = 0;
+    // SAFETY: a null buffer with size 0 is the documented size query.
+    unsafe {
+        GetComputerNameExW(
+            ComputerNamePhysicalDnsHostname,
+            std::ptr::null_mut(),
+            &mut len,
+        )
+    };
+    if len == 0 {
+        return None;
+    }
+    let mut buf = vec![0u16; len as usize];
+    // SAFETY: `buf` holds `len` writable u16s; on success `len` becomes the
+    // number written, terminator excluded.
+    let ok =
+        unsafe { GetComputerNameExW(ComputerNamePhysicalDnsHostname, buf.as_mut_ptr(), &mut len) };
+    if ok == 0 {
+        return None;
+    }
+    buf.truncate(len as usize);
+    String::from_utf16(&buf).ok()
 }
 
 /// `X-Copper-Instance`.
@@ -1699,11 +1750,17 @@ mod tests {
         assert_eq!(id, id.to_uppercase());
         assert!(!client.is_linked());
         let path = store.path(copper_core::DataFile::Cloud);
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(
-            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
+        assert!(path.is_file());
+        // Unix: 0600. Windows has no mode bits; the store relies on the
+        // per-user profile ACL there (copper_core::store::write_atomic).
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
         // A second open reads the same device.
         let again = CloudClient::open(store).unwrap();
         assert_eq!(again.device_id(), id);

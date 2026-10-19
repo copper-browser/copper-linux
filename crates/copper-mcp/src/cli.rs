@@ -397,7 +397,7 @@ pub fn make_request(command: &str, args: &[String]) -> Result<Spec, Early> {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0, |d| d.as_secs());
-                format!("/tmp/copper-{now}.{suffix}")
+                temp_image(&format!("copper-{now}.{suffix}"))
             });
             arguments.insert("filename".into(), json!(output));
             let mut spec = call("browser_take_screenshot", Value::Object(arguments));
@@ -610,13 +610,22 @@ pub fn run(args: &[String]) -> i32 {
         Some(e)
     };
     let launch = || -> io::Result<()> {
-        let exe = std::env::current_exe()?;
-        std::process::Command::new(exe)
+        let mut command = std::process::Command::new(browser_exe()?);
+        command
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .map(|_| ())
+            .stderr(std::process::Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            use windows_sys::Win32::System::Threading::{
+                CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS,
+            };
+            // No console of its own and out of the terminal's process group,
+            // so closing the terminal or Ctrl+C there leaves the browser up.
+            command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+        }
+        command.spawn().map(|_| ())
     };
     let stdout = io::stdout();
     let stderr = io::stderr();
@@ -630,6 +639,34 @@ pub fn run(args: &[String]) -> i32 {
         err: &mut err,
     };
     run_with(args, &mut env)
+}
+
+/// The browser a launch starts. Linux: this executable (the `copper` binary
+/// is the browser). Windows: this executable too when it is `copper.exe`
+/// (the CLI runs inside the browser binary); from any other host binary the
+/// per-user install, `%LOCALAPPDATA%\Programs\Copper\copper.exe`, when it
+/// exists.
+fn browser_exe() -> io::Result<std::path::PathBuf> {
+    let exe = std::env::current_exe()?;
+    #[cfg(windows)]
+    {
+        let is_copper = exe
+            .file_stem()
+            .is_some_and(|s| s.eq_ignore_ascii_case("copper"));
+        if !is_copper && let Some(installed) = installed_copper_exe().filter(|p| p.is_file()) {
+            return Ok(installed);
+        }
+    }
+    Ok(exe)
+}
+
+/// `%LOCALAPPDATA%\Programs\Copper\copper.exe`, the per-user install.
+#[cfg(windows)]
+fn installed_copper_exe() -> Option<std::path::PathBuf> {
+    let local = std::env::var_os("LOCALAPPDATA")
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_absolute())?;
+    Some(local.join("Programs").join("Copper").join("copper.exe"))
 }
 
 fn error(env: &mut Env<'_>, text: &str) {
@@ -827,14 +864,28 @@ fn image_path(spec: &Spec, mime: Option<&str>, index: usize) -> String {
     } else {
         format!("-{index}")
     };
-    format!("/tmp/copper-{now}{n}.{suffix}")
+    temp_image(&format!("copper-{now}{n}.{suffix}"))
+}
+
+/// A default screenshot path in the temp folder: `/tmp/<name>` on Linux (as
+/// always, whatever `TMPDIR` says), `std::env::temp_dir()` elsewhere
+/// (`%TEMP%` on Windows).
+fn temp_image(name: &str) -> String {
+    #[cfg(not(windows))]
+    {
+        format!("/tmp/{name}")
+    }
+    #[cfg(windows)]
+    {
+        std::env::temp_dir()
+            .join(name)
+            .to_string_lossy()
+            .into_owned()
+    }
 }
 
 fn expand(path: &str) -> std::path::PathBuf {
-    match (path.strip_prefix("~/"), std::env::var_os("HOME")) {
-        (Some(rest), Some(home)) => std::path::PathBuf::from(home).join(rest),
-        _ => std::path::PathBuf::from(path),
-    }
+    copper_core::platform::expand_tilde(path)
 }
 
 fn render(env: &mut Env<'_>, response: Value, spec: &Spec, json_out: bool) -> i32 {
@@ -1006,6 +1057,32 @@ mod tests {
         );
         assert!(
             matches!(parse(&s(&["frobnicate"]), false), Err(Early::Usage(t)) if t == "unknown command: frobnicate")
+        );
+    }
+
+    #[test]
+    fn default_shot_goes_to_the_temp_folder() {
+        let p = temp_image("copper-1.png");
+        #[cfg(not(windows))]
+        assert_eq!(p, "/tmp/copper-1.png");
+        #[cfg(windows)]
+        assert_eq!(
+            std::path::PathBuf::from(&p),
+            std::env::temp_dir().join("copper-1.png")
+        );
+    }
+
+    #[test]
+    fn launch_runs_this_executable_when_it_is_copper() {
+        // The test binary is not `copper`: Linux still runs this executable;
+        // Windows falls back to it when no per-user install exists.
+        let exe = browser_exe().unwrap();
+        #[cfg(not(windows))]
+        assert_eq!(exe, std::env::current_exe().unwrap());
+        #[cfg(windows)]
+        assert!(
+            exe == std::env::current_exe().unwrap()
+                || installed_copper_exe().is_some_and(|i| i == exe)
         );
     }
 }

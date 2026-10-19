@@ -366,7 +366,7 @@ pub mod environment {
     /// From the real environment.
     pub fn fields(client: &str, name: &str) -> Map<String, Value> {
         let cwd = std::env::current_dir().ok();
-        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+        let home = copper_core::platform::home_dir();
         fields_with(
             client,
             name,

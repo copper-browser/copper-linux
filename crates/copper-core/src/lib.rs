@@ -51,6 +51,7 @@ pub mod history;
 pub mod ids;
 pub mod intelligence;
 pub mod json;
+pub mod platform;
 pub mod saver;
 pub mod session;
 pub mod settings;

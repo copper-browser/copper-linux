@@ -318,6 +318,7 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+ "windows-sys 0.61.2",
  "yrs",
 ]
 
@@ -326,6 +327,7 @@ name = "copper-core"
 version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
+ "directories",
  "serde",
  "serde_json",
  "tempfile",
@@ -421,6 +423,7 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
