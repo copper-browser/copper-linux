@@ -1,6 +1,6 @@
 [package]
 name = "copper-import"
-description = "Chrome / Chromium / Brave profile import on Linux."
+description = "Moving in from Chromium-family browsers (Chrome, Edge, Brave, Vivaldi, Chromium, Arc) on Linux and Windows, and passwords CSV import."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
