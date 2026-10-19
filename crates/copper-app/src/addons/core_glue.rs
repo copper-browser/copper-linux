@@ -295,6 +295,13 @@ pub fn status() -> Status {
     }
 }
 
+/// When the sync last asked the cloud (Unix seconds), for the cloud
+/// self-test's "Check now" check.
+#[cfg(debug_assertions)]
+pub fn checked_at() -> Option<i64> {
+    sync_status().checked_at.map(|d| d.unix())
+}
+
 /// The developer folder in use, if any.
 pub fn dev_dir() -> Option<PathBuf> {
     active().filter(|a| a.dev).map(|a| a.dir).or_else(|| {

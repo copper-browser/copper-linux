@@ -139,6 +139,42 @@ The self-test (`COPPER_SELFTEST=addons`, a debug build) does the following:
 It takes screenshots in light and dark, prints `PASS`/`FAIL` lines, and exits 1
 on any failure.
 
+### Testing against a real Copper Cloud
+
+`addons-cloud-e2e.sh` runs the same path a person takes, against a running
+Copper Cloud instead of a staged bundle. It makes a throwaway test world, signs
+it in (a new device id, `POST /v1/auth/login`, then `cloud.json` at 0600), and
+runs `COPPER_SELFTEST=addons-cloud` on a private headless weston. The app's own
+sync must bring the addon the cloud hands that account. Settings › Updates ›
+Install must then put it in the Agent sidebar. The run checks `info` and
+`identity`, then shows Settings › Addons.
+
+```sh
+CLOUD_URL=http://127.0.0.1:8080 CLOUD_KEY=… \
+CLOUD_EMAIL=tester@example.com CLOUD_PASSWORD_FILE=~/tester-pass \
+EXPECT_ID=example.hello EXPECT_VERSION=1.0.0 \
+  crates/copper-app/qa/addons-cloud-e2e.sh   # PNGs and logs in /tmp/copper-addons-cloud-e2e
+```
+
+`LINK_CODE=copper-cloud://…` (from `copper-cloud link-code`) can stand in for
+`CLOUD_URL` and `CLOUD_KEY`. Plain http is for loopback only. Two options go
+further:
+
+- **`PANE_SCRIPT=file.js` drives the addon's own UI.** The body runs in the
+  addon's page inside an async function, with `shot(name)` and `sleep(ms)` in
+  scope. It returns `{ok, steps: ["…"]}`, and the steps are printed under
+  its `PASS`/`FAIL` line. A throw or `ok: false` fails the run.
+- **`UPDATE_TO=version` with `UPDATE_CMD='…'` tests an update.** Once the
+  first version is up, the lane asks the harness to run `UPDATE_CMD` (which
+  publishes the newer version). It then presses Check now and Install, and
+  checks that the same view reloads in place at the new version.
+  `UPDATE_PANE_SCRIPT` runs after that.
+
+The account must be the one the cloud gives `EXPECT_ID` for the Agent sidebar
+(the addon is on for them). The test world is wiped and its session signed out
+when the run ends, unless `KEEP_WORLD=1`. The password and session token are
+never printed, and the run fails if the token turns up in a log.
+
 ## How it is built
 
 The rules live in the shared core, `copper_core::addons` and
@@ -160,3 +196,4 @@ the core goes through one file, `core_glue.rs`.
 | `updates.rs` | Settings › Updates and the toast | `AddonUpdates.swift` |
 | `core_glue.rs` | the one door to the shared core | `CloudAddons.swift`, `AddonStore.swift` |
 | `selftest.rs` | `COPPER_SELFTEST=addons` | `AddonsBench.swift` |
+| `selftest_cloud.rs` | `COPPER_SELFTEST=addons-cloud` (a real cloud) | — |
