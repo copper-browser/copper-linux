@@ -2,6 +2,12 @@
 //! window. A second `copper example.com` hands its addresses to the running
 //! one. Scripted runs (`--screenshot`, `--selftest-ui`) and test worlds
 //! (`COPPER_WORLD`) never join a running Copper.
+//!
+//! `copper://cloud/join?code=…` (the instance's Open in Copper, the
+//! desktop's `x-scheme-handler/copper`) never opens as a tab: it opens
+//! Settings › Cloud with the code ([`crate::cloud::open_join`]), whether it
+//! came on this command line, from a second `copper`, or through
+//! `GApplication.Open`.
 
 use crate::control;
 use crate::options::Options;
@@ -28,7 +34,8 @@ pub fn set_exit(code: i32) {
 
 pub fn run(opts: Options) -> ExitCode {
     let world = std::env::var("COPPER_WORLD").is_ok_and(|w| !w.trim().is_empty());
-    let mut flags = gio::ApplicationFlags::HANDLES_COMMAND_LINE;
+    let mut flags =
+        gio::ApplicationFlags::HANDLES_COMMAND_LINE | gio::ApplicationFlags::HANDLES_OPEN;
     if opts.scripted() || world {
         flags |= gio::ApplicationFlags::NON_UNIQUE;
     }
@@ -47,6 +54,18 @@ pub fn run(opts: Options) -> ExitCode {
         let opts = Options::parse(args).unwrap_or_default();
         activate(app, opts);
         glib::ExitCode::SUCCESS
+    });
+    // `GApplication.Open` (a launcher that activates over D-Bus): the same
+    // as addresses on the command line.
+    app.connect_open(|app, files, _hint| {
+        let open: Vec<String> = files.iter().map(|f| f.uri().to_string()).collect();
+        activate(
+            app,
+            Options {
+                open,
+                ..Default::default()
+            },
+        );
     });
     app.connect_shutdown(|_| {
         SHELL.with(|s| {
@@ -83,22 +102,53 @@ fn activate(app: &adw::Application, opts: Options) {
             shell
         }
     };
-    for (i, address) in opts.open.iter().enumerate() {
+    let mut first = true;
+    let mut joined = false;
+    for address in &opts.open {
+        // Copper Cloud's own links before anything reads it as an address.
+        if copper_shell_core::cloud::join::is_cloud_link(address) {
+            join_when_shown(&shell, address.clone());
+            joined = true;
+            continue;
+        }
         if let Some(url) = command_line_url(address).or_else(|| shell.destination(address)) {
             shell.open(
                 &url,
                 OpenTab {
-                    foreground: i == 0,
+                    foreground: first,
                     ..Default::default()
                 },
             );
+            first = false;
         }
     }
-    if shell.active_id().is_some()
+    if !joined
+        && shell.active_id().is_some()
         && let Some(p) = shell.active_page()
     {
         crate::palette::p_focus(&p);
     }
+}
+
+/// [`crate::cloud::open_join`] once the window is on screen (a first launch
+/// with the link builds the window just now; Settings opens over it).
+fn join_when_shown(shell: &Shell, link: String) {
+    let window = shell.window().clone();
+    if window.is_mapped() {
+        crate::cloud::open_join(shell, &link);
+        return;
+    }
+    let weak = shell.downgrade();
+    let pending = std::rc::Rc::new(std::cell::Cell::new(Some(link)));
+    window.connect_map(move |_| {
+        let Some(link) = pending.take() else { return };
+        let weak = weak.clone();
+        glib::idle_add_local_once(move || {
+            if let Some(shell) = weak.upgrade() {
+                crate::cloud::open_join(&shell, &link);
+            }
+        });
+    });
 }
 
 // GLib's Unix signal source (glib-rs 0.22 moved its wrapper to the

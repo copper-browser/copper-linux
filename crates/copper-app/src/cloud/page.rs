@@ -1,7 +1,12 @@
 //! Settings › Cloud (Mac: `CloudSettings.swift`, docs/cloud.md).
 //!
 //! Three steps, in order — Connect, Account, Sync — or one, with a pairing
-//! code from a device already signed in. Once sync is on the page shows the
+//! code from a device already signed in, or a join link (`#sso=`: "Continue
+//! with Google", the company sign-in in the system browser). An instance
+//! linked any other way that offers single sign-on shows the same button on
+//! the Account step. The sign-in itself and what a `copper://cloud/join`
+//! link does are copper-shell-core's ([`copper_shell_core::cloud::sso`],
+//! [`copper_shell_core::cloud::join`]); this page draws their state. Once sync is on the page shows the
 //! status line with Sync now and Pause, the switches (each at once), the tabs
 //! open on the other devices, the account (rename this device, sign out),
 //! Pair another device, the instance with its fingerprint and Disconnect, and
@@ -17,7 +22,10 @@ use crate::shell::{OpenTab, Shell, WeakShell};
 use copper_cloud::client::MintedPairing;
 use copper_cloud::link::{is_bare_pairing_code, manual_link};
 use copper_cloud::sync::history::parse_stamp;
-use copper_cloud::{Code, Domain, parse_code};
+use copper_cloud::{Code, Domain, JoinCode, SsoLink, parse_join_code};
+use copper_shell_core::cloud::sso::{
+    SsoDone, SsoState, SsoTarget, domain_hint, same_instance, sign_in,
+};
 use gtk4 as gtk;
 use gtk4::prelude::*;
 use libadwaita as adw;
@@ -86,6 +94,21 @@ struct Widgets {
     hand_address: Option<adw::EntryRow>,
     hand_key: Option<adw::EntryRow>,
     hand_fp: Option<adw::EntryRow>,
+    // Single sign-on: the row it becomes while the browser is open, and the
+    // Account step's "Continue with …".
+    sso_wait: Option<adw::ActionRow>,
+    sso_spinner: Option<gtk::Spinner>,
+    sso_cancel: Option<gtk::Button>,
+    sso_area: Option<gtk::Box>,
+    sso_button: Option<gtk::Button>,
+    sso_error: Option<gtk::Label>,
+    password_more: Option<gtk::Button>,
+    // A join link for another instance; a word about a link.
+    notice: Option<adw::PreferencesGroup>,
+    notice_title: Option<gtk::Label>,
+    notice_body: Option<gtk::Label>,
+    notice_use: Option<gtk::Button>,
+    notice_dismiss: Option<gtk::Button>,
     // Account.
     email: Option<adw::EntryRow>,
     password: Option<adw::PasswordEntryRow>,
@@ -126,6 +149,25 @@ pub struct CloudPage {
     pairing: RefCell<Option<Pairing>>,
     /// Domains picked before "Turn on sync".
     picked: RefCell<BTreeSet<Domain>>,
+    /// What the page says once about a `copper://cloud/join` link ("Already
+    /// signed in to …"), until dismissed.
+    note: RefCell<Option<String>>,
+    /// The sign-in options the Account step was drawn with
+    /// ([`SsoState::discovered`]).
+    discovered: Cell<u64>,
+    /// The linked instance was asked for its sign-in options.
+    asked: Cell<bool>,
+    /// "Sign in with a password instead" pressed.
+    password_open: Cell<bool>,
+    /// "Disconnect and use it": the join link waiting is used once Connect
+    /// shows.
+    use_offer: Cell<bool>,
+    /// The single sign-on problem shown now (a password one is left alone).
+    sso_problem: RefCell<Option<String>>,
+    /// The last sign-in that was said (each new one gets a toast).
+    sso_done: RefCell<Option<SsoDone>>,
+    /// The pasted code's row says something (hidden while signing in).
+    said_shown: Cell<bool>,
 }
 
 /// Build the page (the Settings dialog calls this each time it opens).
@@ -147,6 +189,14 @@ pub fn build(shell: &Shell) -> adw::PreferencesPage {
         busy: Cell::new(false),
         pairing: RefCell::default(),
         picked: RefCell::new(picked),
+        note: RefCell::default(),
+        discovered: Cell::new(0),
+        asked: Cell::new(false),
+        password_open: Cell::new(false),
+        use_offer: Cell::new(false),
+        sso_problem: RefCell::default(),
+        sso_done: RefCell::new(sign_in().state().signed_in),
+        said_shown: Cell::new(false),
     });
     CURRENT.with(|c| *c.borrow_mut() = Rc::downgrade(&me));
     me.rebuild();
@@ -181,6 +231,14 @@ fn watch(me: &Rc<CloudPage>) {
         while sync.changed().await.is_ok() {
             let Some(me) = weak.upgrade() else { return };
             me.update();
+        }
+    });
+    let weak = Rc::downgrade(me);
+    let mut sso = sign_in().watch();
+    glib::spawn_future_local(async move {
+        while sso.changed().await.is_ok() {
+            let Some(me) = weak.upgrade() else { return };
+            me.draw_sso();
         }
     });
     let weak = Rc::downgrade(me);
@@ -280,6 +338,19 @@ fn short_fp(fp: &str, pairs: usize) -> String {
     }
 }
 
+/// How the linked instance is trusted, in one line: its pin, a publicly
+/// trusted certificate (no pin: the system's roots), or plain HTTP on
+/// loopback.
+fn certificate_line(cloud: &Cloud, status: &copper_cloud::CloudStatus) -> String {
+    match &status.fingerprint {
+        Some(fp) => format!("Pinned certificate — SHA-256 {}", short_fp(fp, 4)),
+        None if cloud.client.link().is_some_and(|l| l.endpoint.https) => {
+            "Publicly trusted certificate".into()
+        }
+        None => "Plain HTTP on this device (development)".into(),
+    }
+}
+
 /// `ab:cd:…` from 64 hex characters (or as given).
 fn pairs(hex: &str) -> String {
     if hex.contains(':') {
@@ -334,6 +405,13 @@ impl CloudPage {
             ),
         );
         self.add(intro);
+        self.build_notice();
+        if p != Phase::Linked {
+            self.asked.set(false);
+            self.password_open.set(false);
+        }
+        self.sso_problem.replace(None);
+        self.discovered.set(sign_in().state().discovered);
         match p {
             Phase::Off => {
                 let g = group(
@@ -344,6 +422,7 @@ impl CloudPage {
             }
             Phase::Unlinked => self.build_connect(),
             Phase::Linked => {
+                self.ask_sso();
                 self.build_connected();
                 self.build_account_form();
             }
@@ -364,6 +443,7 @@ impl CloudPage {
             }
         }
         self.refresh();
+        self.draw_sso();
     }
 
     /// The live parts.
@@ -419,18 +499,20 @@ impl CloudPage {
         let g = group(
             "Connect",
             Some(
-                "Paste the link code from your Copper Cloud administrator — or a pairing code from a device that is already signed in.",
+                "Paste the link code or join link from your Copper Cloud administrator — or a pairing code from a device that is already signed in.",
             ),
         );
         let list = gtk::ListBox::new();
         list.add_css_class("boxed-list");
         list.set_selection_mode(gtk::SelectionMode::None);
         let code = adw::EntryRow::new();
-        code.set_title("Link code or pairing code");
+        code.set_title("Link code, join link or pairing code");
         list.append(&code);
         let said = plain_row("", "");
         said.set_visible(false);
         list.append(&said);
+        let (wait, spinner, cancel) = self.waiting_row();
+        list.append(&wait);
         g.add(&list);
 
         let error = error_label();
@@ -446,7 +528,7 @@ impl CloudPage {
         inner.set_margin_start(14);
         inner.set_margin_end(14);
         inner.append(&label(
-            "This device doesn't trust the instance's certificate, and the code has no fingerprint to pin it by. Its certificate's fingerprint is:",
+            "This device doesn't trust the instance's certificate, and the code or link has no fingerprint to pin it by. Its certificate's fingerprint is:",
             &[],
         ));
         let fp = label("", &["monospace"]);
@@ -551,6 +633,9 @@ impl CloudPage {
         w.hand_address = Some(address);
         w.hand_key = Some(key);
         w.hand_fp = Some(hfp);
+        w.sso_wait = Some(wait);
+        w.sso_spinner = Some(spinner);
+        w.sso_cancel = Some(cancel);
     }
 
     /// Say what was pasted: which kind of code, the host, the pin.
@@ -564,20 +649,23 @@ impl CloudPage {
         }
         show_error(&w.connect_error, None);
         self.seen.replace(None);
+        self.sso_problem.replace(None);
+        sign_in().clear_problem();
         let text = code.text().to_string();
         let linked = get().and_then(|c| c.client.link());
-        let parsed = parse_code(&text, linked.as_ref());
+        let parsed = parse_join_code(&text, linked.as_ref());
         let describe = |https: bool, fp: Option<&str>| -> String {
             match (https, fp) {
                 (false, _) => "Plain HTTP — this device only, for development".into(),
                 (true, Some(fp)) => format!("Pinned to this certificate (SHA-256): {}", pairs(fp)),
                 (true, None) => {
-                    "No fingerprint in the code — you will be shown the certificate's to compare first".into()
+                    "No fingerprint in it — a publicly trusted certificate is checked as usual; any other is shown to you to compare first".into()
                 }
             }
         };
+        self.said_shown.set(parsed.is_some());
         match parsed {
-            Some(Code::Link(link)) => {
+            Some(JoinCode::Link(link)) => {
                 said.set_title("Link code — connects to the instance; you sign in next");
                 said.set_subtitle(&format!(
                     "{}\n{}",
@@ -588,7 +676,7 @@ impl CloudPage {
                 connect.set_label("Connect");
                 connect.set_sensitive(!self.busy.get());
             }
-            Some(Code::Pairing(p)) => {
+            Some(JoinCode::Pairing(p)) => {
                 said.set_title("Pairing code — links this device and signs you in");
                 said.set_subtitle(&format!(
                     "{}\n{}",
@@ -598,6 +686,26 @@ impl CloudPage {
                 said.set_visible(true);
                 connect.set_label("Pair this device");
                 connect.set_sensitive(!self.busy.get());
+            }
+            Some(JoinCode::Sso(link)) => {
+                let name = sign_in().provider_name(&link.endpoint, &link.provider);
+                said.set_title(&format!(
+                    "Join link — links this device and signs you in with {name} in your browser"
+                ));
+                said.set_subtitle(&format!(
+                    "{}\n{}",
+                    link.host(),
+                    describe(link.endpoint.https, link.fingerprint.as_deref())
+                ));
+                said.set_visible(true);
+                connect.set_label(&format!("Continue with {name}"));
+                connect.set_sensitive(!self.busy.get());
+                // The instance's own name for it, and the domain hint.
+                let endpoint = link.endpoint.clone();
+                let pin = link.fingerprint.clone();
+                spawn(async move {
+                    sign_in().discover(&endpoint, pin.as_deref(), false).await;
+                });
             }
             None => {
                 said.set_visible(false);
@@ -613,10 +721,19 @@ impl CloudPage {
                     Some(if is_bare_pairing_code(&raw) {
                         "That's the pairing code without its address — copy the whole code, from copper-cloud:// to the end"
                     } else {
-                        "That isn't a link code or a pairing code — both start copper-cloud://, a link code has #k= in it and a pairing code #p="
+                        "That isn't a link code, a join link or a pairing code — all start copper-cloud://, then #k=, #sso= or #p="
                     }),
                 );
             }
+        }
+    }
+
+    /// The join link in the Connect field, if that is what it holds.
+    fn field_sso(&self) -> Option<SsoLink> {
+        let text = self.w.borrow().code.as_ref()?.text().to_string();
+        match parse_join_code(&text, None)? {
+            JoinCode::Sso(link) => Some(link),
+            _ => None,
         }
     }
 
@@ -627,6 +744,7 @@ impl CloudPage {
             &w.connect,
             &w.trust_button,
             &w.account_button,
+            &w.sso_button,
             &w.turn_on,
             &w.pair_make,
         ]
@@ -637,13 +755,18 @@ impl CloudPage {
         }
     }
 
-    /// Connect (a link code) or pair (a pairing code). `trusting`: the
-    /// fingerprint a person compared and chose to trust.
+    /// Connect (a link code), pair (a pairing code) or sign in through the
+    /// browser (a join link). `trusting`: the fingerprint a person compared
+    /// and chose to trust.
     pub fn connect_code(self: &Rc<Self>, trusting: Option<String>) {
         let Some(cloud) = get() else { return };
         let Some(text) = self.w.borrow().code.as_ref().map(|c| c.text().to_string()) else {
             return;
         };
+        if let Some(link) = self.field_sso() {
+            self.start_sso(SsoTarget::Join(link), trusting);
+            return;
+        }
         self.set_busy(true);
         show_error(&self.w.borrow().connect_error, None);
         let client = cloud.client.clone();
@@ -684,6 +807,11 @@ impl CloudPage {
                             t.set_visible(true);
                         }
                     }
+                    // A join link: the browser, not this request.
+                    Err(f) if f.code == "sso_link" => match me.field_sso() {
+                        Some(link) => me.start_sso(SsoTarget::Join(link), None),
+                        None => show_error(&me.w.borrow().connect_error, Some(&f.message)),
+                    },
                     Err(f) => show_error(&me.w.borrow().connect_error, Some(&f.message)),
                 }
             },
@@ -691,16 +819,9 @@ impl CloudPage {
     }
 
     /// Paired: sync turns on for everything (the switches from before, if
-    /// this device was signed in once).
+    /// this device was signed in once) — as after single sign-on.
     fn after_pairing(&self, cloud: &'static Cloud) {
-        let before = cloud.sync.enabled();
-        let domains: Vec<Domain> = if before.is_empty() {
-            Domain::ALL.to_vec()
-        } else {
-            before.into_iter().collect()
-        };
-        let sync = cloud.sync.clone();
-        spawn(async move { sync.turn_on(&domains).await });
+        spawn(copper_shell_core::cloud::sync_after_sign_in(cloud));
     }
 
     fn connect_by_hand(self: &Rc<Self>) {
@@ -755,10 +876,7 @@ impl CloudPage {
             "Connected to {}",
             status.host.clone().unwrap_or_default()
         ));
-        row.set_subtitle(&match &status.fingerprint {
-            Some(fp) => format!("Pinned certificate — SHA-256 {}", short_fp(fp, 4)),
-            None => "Plain HTTP on this device (development)".into(),
-        });
+        row.set_subtitle(&certificate_line(cloud, &status));
         self.instance_rows(&row, &status);
         let list = gtk::ListBox::new();
         list.add_css_class("boxed-list");
@@ -812,10 +930,11 @@ impl CloudPage {
         dialog.set_close_response("cancel");
         let weak = Rc::downgrade(self);
         dialog.connect_response(None, move |_, r| {
-            if r == "disconnect"
-                && let Some(me) = weak.upgrade()
-            {
+            let Some(me) = weak.upgrade() else { return };
+            if r == "disconnect" {
                 me.disconnect();
+            } else {
+                me.use_offer.set(false);
             }
         });
         if let Some(p) = self.page() {
@@ -842,14 +961,444 @@ impl CloudPage {
         );
     }
 
+    // MARK: Single sign-on
+
+    /// The row a sign-in becomes while the browser is open: a spinner,
+    /// "Finish signing in in your browser…", Cancel. Hidden until then.
+    fn waiting_row(self: &Rc<Self>) -> (adw::ActionRow, gtk::Spinner, gtk::Button) {
+        let row = plain_row("Finish signing in in your browser…", "");
+        let spinner = gtk::Spinner::new();
+        spinner.set_valign(gtk::Align::Center);
+        row.add_prefix(&spinner);
+        let cancel = button("Cancel", &[]);
+        row.add_suffix(&cancel);
+        row.set_visible(false);
+        cancel.connect_clicked(|_| sign_in().cancel());
+        (row, spinner, cancel)
+    }
+
+    /// Sign in through `target`'s single sign-on, off the main thread; the
+    /// page follows it through [`SsoState`] ([`Self::draw_sso`]).
+    pub fn start_sso(self: &Rc<Self>, target: SsoTarget, trusting: Option<String>) {
+        let Some(cloud) = get() else { return };
+        {
+            let w = self.w.borrow();
+            show_error(&w.connect_error, None);
+            show_error(&w.sso_error, None);
+            if let Some(t) = &w.trust {
+                t.set_visible(false);
+            }
+        }
+        self.sso_problem.replace(None);
+        self.seen.replace(None);
+        // The outcome comes back through the state; nothing waits on it here.
+        drop(sign_in().start(cloud, target, trusting, super::opener()));
+    }
+
+    /// Ask the linked instance which sign-ins it offers (once a page), for
+    /// the Account step's "Continue with …".
+    fn ask_sso(self: &Rc<Self>) {
+        if self.asked.replace(true) {
+            return;
+        }
+        let Some(link) = get().and_then(|c| c.client.link()) else {
+            return;
+        };
+        spawn(async move {
+            sign_in()
+                .discover(&link.endpoint, link.fingerprint.as_deref(), true)
+                .await;
+        });
+    }
+
+    /// Draw single sign-on's state: the waiting row, the problem, the
+    /// certificate to compare, a join link's code, the notice.
+    fn draw_sso(self: &Rc<Self>) {
+        let st = sign_in().state();
+        match self.phase.get() {
+            Phase::Unlinked => {
+                self.apply_offer(&st);
+                self.draw_connect_sso(&sign_in().state());
+            }
+            Phase::Linked => {
+                if st.discovered != self.discovered.get() {
+                    // The instance said what it offers: redraw the step.
+                    self.rebuild_keeping_email();
+                    return;
+                }
+                self.draw_account_sso(&st);
+            }
+            _ => {}
+        }
+        self.draw_notice(&st);
+        let fresh = *self.sso_done.borrow() != st.signed_in;
+        if fresh {
+            if let (Some(done), Some(shell)) = (&st.signed_in, self.shell()) {
+                shell.toast(&done.text());
+            }
+            self.sso_done.replace(st.signed_in.clone());
+        }
+    }
+
+    fn rebuild_keeping_email(self: &Rc<Self>) {
+        let keep = self.w.borrow().email.as_ref().map(|e| e.text());
+        self.rebuild();
+        if let (Some(text), Some(e)) = (keep, self.w.borrow().email.as_ref()) {
+            e.set_text(&text);
+        }
+    }
+
+    /// The waiting row for `running` (a sign-in to `host` with `name`).
+    fn draw_waiting(&self, st: &SsoState, running: bool) {
+        let w = self.w.borrow();
+        if let Some(row) = &w.sso_wait {
+            row.set_visible(running);
+            if let Some(text) = st.phase.waiting_text() {
+                row.set_title(text);
+            }
+            if let Some(t) = &st.target {
+                let name = sign_in().provider_name(t.endpoint(), t.provider());
+                row.set_subtitle(&format!("Signing in with {name} to {}", t.host()));
+            }
+        }
+        if let Some(s) = &w.sso_spinner {
+            s.set_spinning(running);
+        }
+        if let Some(c) = &w.sso_cancel {
+            c.set_sensitive(running && st.phase.cancellable());
+        }
+    }
+
+    /// A single sign-on problem in `line` — only when it changed, so a
+    /// problem the page showed for something else stays.
+    fn show_sso_problem(&self, line: &Option<gtk::Label>, problem: Option<&str>) {
+        let mut last = self.sso_problem.borrow_mut();
+        if last.as_deref() == problem {
+            return;
+        }
+        match problem {
+            Some(p) => show_error(line, Some(p)),
+            None => {
+                if line
+                    .as_ref()
+                    .is_some_and(|l| Some(l.text().as_str()) == last.as_deref())
+                {
+                    show_error(line, None);
+                }
+            }
+        }
+        *last = problem.map(str::to_string);
+    }
+
+    /// Connect: a join link in the field (or one a `copper://cloud/join`
+    /// link started) becomes the waiting row while the browser is open.
+    fn draw_connect_sso(&self, st: &SsoState) {
+        let field = self.field_sso();
+        // Not linked, any sign-in under way is a join link's.
+        let running = st.phase.busy();
+        self.draw_waiting(st, running);
+        let w = self.w.borrow();
+        if let Some(said) = &w.said {
+            said.set_visible(!running && self.said_shown.get());
+        }
+        if let Some(c) = &w.connect {
+            c.set_visible(!running);
+            if let Some(link) = &field {
+                c.set_label(&format!(
+                    "Continue with {}",
+                    sign_in().provider_name(&link.endpoint, &link.provider)
+                ));
+            }
+        }
+        if let Some(c) = &w.code {
+            c.set_sensitive(!running);
+        }
+        let endpoint = field
+            .as_ref()
+            .map(|l| l.endpoint.clone())
+            .or_else(|| st.target.as_ref().map(|t| t.endpoint().clone()));
+        let Some(endpoint) = endpoint else { return };
+        let problem = st.problem_for(&endpoint).map(str::to_string);
+        drop(w);
+        self.show_sso_problem(&self.w.borrow().connect_error, problem.as_deref());
+        let w = self.w.borrow();
+        if let Some(seen) = st.seen_for(&endpoint) {
+            self.seen.replace(Some(seen.to_string()));
+            if let Some(l) = &w.trust_fp {
+                l.set_text(&pairs(seen));
+            }
+            if let Some(b) = &w.trust_button {
+                b.set_label("Trust and continue");
+            }
+            if let Some(t) = &w.trust {
+                t.set_visible(true);
+            }
+        }
+    }
+
+    /// Account: "Continue with …" becomes the waiting row while the browser
+    /// is open; its problem shows under it.
+    fn draw_account_sso(&self, st: &SsoState) {
+        let Some(link) = get().and_then(|c| c.client.link()) else {
+            return;
+        };
+        let running = st.running_for(&link.endpoint);
+        self.draw_waiting(st, running);
+        {
+            let w = self.w.borrow();
+            if let Some(a) = &w.sso_area {
+                a.set_visible(!running);
+            }
+            if let Some(list) = w.sso_wait.as_ref().and_then(|r| r.parent()) {
+                list.set_visible(running);
+            }
+            if let Some(b) = &w.account_button {
+                b.set_sensitive(!running && !self.busy.get());
+            }
+        }
+        let problem = st.problem_for(&link.endpoint).map(str::to_string);
+        let line = self.w.borrow().sso_error.clone();
+        self.show_sso_problem(&line, problem.as_deref());
+    }
+
+    /// Connect: the code a `copper://cloud/join` link brought goes into the
+    /// field (once); "Disconnect and use it" starts its sign-in.
+    fn apply_offer(self: &Rc<Self>, st: &SsoState) {
+        let Some(offer) = st.offer.clone() else {
+            return;
+        };
+        if self.w.borrow().code.is_none() {
+            return;
+        }
+        self.type_code(&offer.text);
+        let start = self.use_offer.replace(false);
+        sign_in().dismiss_offer();
+        if start
+            && let JoinCode::Sso(link) = &offer.code
+            && !sign_in().state().phase.busy()
+        {
+            self.start_sso(SsoTarget::Join(link.clone()), None);
+        }
+    }
+
+    /// A notice at the top: a join link for another instance than this
+    /// Copper's ("This link is for HOST" — Dismiss, or Disconnect and use
+    /// it), or a word about a link ("Already signed in to …").
+    fn build_notice(self: &Rc<Self>) {
+        let g = group("", None);
+        let card = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        card.add_css_class("card");
+        let inner = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        inner.set_margin_top(14);
+        inner.set_margin_bottom(14);
+        inner.set_margin_start(14);
+        inner.set_margin_end(14);
+        let title = label("", &["heading"]);
+        let body = label("", &["dim-label"]);
+        inner.append(&title);
+        inner.append(&body);
+        let dismiss = button("Dismiss", &[]);
+        let use_it = button("Disconnect and use it…", &["destructive-action"]);
+        let row = foot(&[&use_it, &dismiss]);
+        row.set_margin_top(6);
+        inner.append(&row);
+        card.append(&inner);
+        g.add(&card);
+        g.set_visible(false);
+        self.add(g.clone());
+        let weak = Rc::downgrade(self);
+        dismiss.connect_clicked(move |_| {
+            if let Some(me) = weak.upgrade() {
+                me.note.replace(None);
+                sign_in().dismiss_offer();
+                me.draw_notice(&sign_in().state());
+            }
+        });
+        let weak = Rc::downgrade(self);
+        use_it.connect_clicked(move |_| {
+            if let Some(me) = weak.upgrade() {
+                me.use_offer.set(true);
+                me.ask_disconnect();
+            }
+        });
+        let mut w = self.w.borrow_mut();
+        w.notice = Some(g);
+        w.notice_title = Some(title);
+        w.notice_body = Some(body);
+        w.notice_use = Some(use_it);
+        w.notice_dismiss = Some(dismiss);
+    }
+
+    fn draw_notice(&self, st: &SsoState) {
+        let linked = get().and_then(|c| c.client.link());
+        let other = st.offer.as_ref().and_then(|o| {
+            let l = linked.as_ref()?;
+            (!same_instance(&l.endpoint, o.endpoint())).then(|| (o.host(), l.host()))
+        });
+        let note = self.note.borrow().clone();
+        let w = self.w.borrow();
+        let (Some(g), Some(title), Some(body), Some(use_it)) =
+            (&w.notice, &w.notice_title, &w.notice_body, &w.notice_use)
+        else {
+            return;
+        };
+        match (other, note) {
+            (Some((host, mine)), _) => {
+                title.set_text(&format!("This link is for {host}"));
+                body.set_text(&format!(
+                    "Copper is connected to {mine}, and nothing changes unless you choose to. To use the link, disconnect from {mine} first — nothing is deleted."
+                ));
+                body.set_visible(true);
+                use_it.set_visible(true);
+                g.set_visible(true);
+            }
+            (None, Some(text)) => {
+                title.set_text(&text);
+                body.set_visible(false);
+                use_it.set_visible(false);
+                g.set_visible(true);
+            }
+            (None, None) => g.set_visible(false),
+        }
+    }
+
+    /// Say something once at the top of the page (a join link's "Already
+    /// signed in to …"), until dismissed.
+    pub fn say(&self, text: &str) {
+        self.note.replace(Some(text.to_string()));
+        self.draw_notice(&sign_in().state());
+    }
+
+    /// Put the cursor in the Connect field (when there is one).
+    pub fn focus_code(&self) {
+        if let Some(c) = &self.w.borrow().code {
+            c.grab_focus();
+        }
+    }
+
+    // MARK: Single sign-on, for QA
+
+    /// The waiting row's words, while it shows.
+    pub fn sso_waiting(&self) -> Option<String> {
+        let w = self.w.borrow();
+        let row = w.sso_wait.as_ref().filter(|r| r.is_visible())?;
+        Some(format!(
+            "{} — {}",
+            row.title(),
+            row.subtitle().map(|s| s.to_string()).unwrap_or_default()
+        ))
+    }
+
+    /// What the step's main button says: Connect's (a join link's "Continue
+    /// with …"), or the Account step's "Continue with …".
+    pub fn sso_button_label(&self) -> Option<String> {
+        let w = self.w.borrow();
+        w.sso_button
+            .as_ref()
+            .or(w.connect.as_ref())
+            .filter(|b| b.is_visible())
+            .and_then(|b| b.label())
+            .map(|l| l.to_string())
+    }
+
+    /// Press the Account step's "Continue with …" (or Connect's).
+    pub fn press_sso(&self) {
+        let b = {
+            let w = self.w.borrow();
+            w.sso_button.clone().or(w.connect.clone())
+        };
+        if let Some(b) = b {
+            b.emit_clicked();
+        }
+    }
+
+    /// Press the waiting row's Cancel.
+    pub fn press_cancel_sso(&self) {
+        let b = self.w.borrow().sso_cancel.clone();
+        if let Some(b) = b {
+            b.emit_clicked();
+        }
+    }
+
+    /// Whether the password form waits behind "Sign in with a password
+    /// instead".
+    pub fn password_folded(&self) -> bool {
+        self.phase.get() == Phase::Linked && self.w.borrow().email.is_none()
+    }
+
+    /// The notice at the top, while it shows.
+    pub fn notice_text(&self) -> Option<String> {
+        let w = self.w.borrow();
+        w.notice.as_ref().filter(|g| g.is_visible())?;
+        w.notice_title.as_ref().map(|l| l.text().to_string())
+    }
+
+    /// Press the notice's Dismiss.
+    pub fn press_dismiss(&self) {
+        let b = self.w.borrow().notice_dismiss.clone();
+        if let Some(b) = b {
+            b.emit_clicked();
+        }
+    }
+
+    /// Press "Sign in with a password instead".
+    pub fn press_password_instead(&self) {
+        let b = self.w.borrow().password_more.clone();
+        if let Some(b) = b {
+            b.emit_clicked();
+        }
+    }
+
+    /// What is in the Connect field.
+    pub fn code_field(&self) -> Option<String> {
+        self.w.borrow().code.as_ref().map(|c| c.text().to_string())
+    }
+
     // MARK: Account
 
     fn build_account_form(self: &Rc<Self>) {
         let creating = self.creating.get();
+        // What the instance offers besides a password, once it has said.
+        let info = get()
+            .and_then(|c| c.client.link())
+            .and_then(|l| sign_in().known(&l.endpoint));
+        let provider = info.as_ref().and_then(|i| i.offered().first().cloned());
+        let password_signin = info.as_ref().is_none_or(|i| i.password_signin);
+        if let Some(p) = &provider {
+            self.build_sso_button(p);
+            // Only admins sign in with a password there: it waits behind a
+            // button.
+            if !password_signin && !self.password_open.get() && !creating {
+                let g = group("", None);
+                let more = button("Sign in with a password instead", &["flat"]);
+                more.set_halign(gtk::Align::Center);
+                g.add(&more);
+                self.add(g);
+                let weak = Rc::downgrade(self);
+                more.connect_clicked(move |_| {
+                    if let Some(me) = weak.upgrade() {
+                        me.password_open.set(true);
+                        me.rebuild();
+                        let w = me.w.borrow();
+                        if let Some(e) = &w.email {
+                            e.grab_focus();
+                        }
+                    }
+                });
+                self.w.borrow_mut().password_more = Some(more);
+                return;
+            }
+        }
         let g = group(
-            "Account",
+            if provider.is_some() {
+                "Email and password"
+            } else {
+                "Account"
+            },
             Some(if creating {
                 "The first account on an instance is its admin."
+            } else if provider.is_some() {
+                "Or sign in with email and password."
             } else {
                 "Same email and password as on your other devices."
             }),
@@ -929,6 +1478,60 @@ impl CloudPage {
         w.name = Some(name);
         w.account_button = Some(go);
         w.account_error = Some(error);
+    }
+
+    /// The Account step's "Continue with …" (the first provider the linked
+    /// instance offers), the domain hint under it, and the row it becomes
+    /// while the browser is open.
+    fn build_sso_button(self: &Rc<Self>, provider: &copper_cloud::SsoProvider) {
+        let g = group(
+            "Account",
+            Some("Sign in with your company account, in your browser."),
+        );
+        let area = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        let go = button(&provider.button(), &["suggested-action", "pill"]);
+        go.set_halign(gtk::Align::Center);
+        area.append(&go);
+        if let Some(hint) = domain_hint(&provider.domains) {
+            let l = label(&hint, &["dim-label", "caption"]);
+            l.set_halign(gtk::Align::Center);
+            l.set_xalign(0.5);
+            area.append(&l);
+        }
+        g.add(&area);
+        let list = gtk::ListBox::new();
+        list.add_css_class("boxed-list");
+        list.set_selection_mode(gtk::SelectionMode::None);
+        let (wait, spinner, cancel) = self.waiting_row();
+        list.append(&wait);
+        // Only there while the browser is open (an empty list draws a line).
+        list.set_visible(false);
+        g.add(&list);
+        let error = error_label();
+        g.add(&error);
+        self.add(g);
+        let id = provider.id.clone();
+        let weak = Rc::downgrade(self);
+        go.connect_clicked(move |_| {
+            let (Some(me), Some(link)) = (weak.upgrade(), get().and_then(|c| c.client.link()))
+            else {
+                return;
+            };
+            me.start_sso(
+                SsoTarget::Linked {
+                    endpoint: link.endpoint,
+                    provider: id.clone(),
+                },
+                None,
+            );
+        });
+        let mut w = self.w.borrow_mut();
+        w.sso_area = Some(area);
+        w.sso_button = Some(go);
+        w.sso_wait = Some(wait);
+        w.sso_spinner = Some(spinner);
+        w.sso_cancel = Some(cancel);
+        w.sso_error = Some(error);
     }
 
     /// Choose Create account (`true`) or Sign in.
@@ -1355,10 +1958,7 @@ impl CloudPage {
         let g = group("Instance", None);
         let row = adw::ExpanderRow::new();
         row.set_title(&status.host.clone().unwrap_or_default());
-        row.set_subtitle(&match (&status.fingerprint, status.reachable) {
-            (Some(fp), _) => format!("Pinned certificate — SHA-256 {}", short_fp(fp, 4)),
-            (None, _) => "Plain HTTP on this device (development)".into(),
-        });
+        row.set_subtitle(&certificate_line(cloud, &status));
         self.instance_rows(&row, &status);
         let list = gtk::ListBox::new();
         list.add_css_class("boxed-list");
@@ -1594,11 +2194,16 @@ impl CloudPage {
     /// The problem the page shows, if any.
     pub fn error_text(&self) -> Option<String> {
         let w = self.w.borrow();
-        [&w.connect_error, &w.account_error, &w.sync_error]
-            .into_iter()
-            .flatten()
-            .find(|l| l.is_visible() && !l.text().is_empty())
-            .map(|l| l.text().to_string())
+        [
+            &w.connect_error,
+            &w.sso_error,
+            &w.account_error,
+            &w.sync_error,
+        ]
+        .into_iter()
+        .flatten()
+        .find(|l| l.is_visible() && !l.text().is_empty())
+        .map(|l| l.text().to_string())
     }
 
     fn ask_revoke(self: &Rc<Self>) {

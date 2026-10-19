@@ -20,9 +20,14 @@
 //!
 //! Other lanes: [`history_cleared`] and [`history_forgot`] tell the cloud
 //! that history was cleared / a page forgotten here.
+//!
+//! Single sign-on ("Continue with Google") and `copper://cloud/join` links
+//! are [`sso`] and [`join`]: toolkit-free, each shell only draws them.
 
 pub mod adapter;
+pub mod join;
 pub mod mcp;
+pub mod sso;
 
 use crate::Platform;
 use crate::main_loop::MainLoop;
@@ -176,6 +181,20 @@ pub fn start<P: Platform>(shell: &Shell<P>) -> Option<&'static Cloud> {
     mark_seen(shell);
     watch_local(shell);
     Some(cloud)
+}
+
+/// Sync on after a sign-in that came without a choice of switches — a
+/// pairing code, single sign-on: every switch, or the ones this device had
+/// before if it was signed in once. Through the window's own engine (the
+/// running app owns the profile).
+pub async fn sync_after_sign_in(cloud: &Cloud) {
+    let before = cloud.sync.enabled();
+    let domains: Vec<Domain> = if before.is_empty() {
+        Domain::ALL.to_vec()
+    } else {
+        before.into_iter().collect()
+    };
+    cloud.sync.turn_on(&domains).await;
 }
 
 /// "Sync now".

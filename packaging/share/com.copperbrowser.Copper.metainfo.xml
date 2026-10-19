@@ -51,6 +51,16 @@
   </requires>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.4.1" date="2026-10-19">
+      <description>
+        <p>Sign in to Copper Cloud with your company account from Settings, and open copper://cloud/join links there.</p>
+        <ul>
+          <li>Settings › Cloud signs in with your company account in the system browser (Continue with Google), for a sign-in link or an instance that offers it.</li>
+          <li>A copper://cloud/join link opens Settings › Cloud with the code, from the command line, a running Copper or the address field, and never switches to another instance without asking.</li>
+          <li>An instance with a publicly trusted certificate is no longer described as plain HTTP.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.4.0" date="2026-10-19">
       <description>
         <p>The Agent sidebar, filled by an addon from your Copper Cloud.</p>

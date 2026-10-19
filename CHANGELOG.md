@@ -3,6 +3,47 @@
 Copper for Linux. Versions follow the `.deb` and the Flatpak; dates are
 release dates.
 
+## 0.4.1 — 2026-10-19
+
+Company sign-in in Settings › Cloud, and `copper://cloud/join` links that
+open it.
+
+### Added
+
+- **Continue with Google in Settings › Cloud.** Paste a sign-in link
+  (`copper-cloud://HOST/#sso=google`) where a link code goes: the page shows
+  the host and the fingerprint, and a *Continue with …* button named the way
+  the instance names its provider. The browser opens; the row becomes a
+  spinner, *Finish signing in in your browser…* and **Cancel**. Signed in,
+  it is kept exactly like a pairing and sync turns on with the default
+  switches through the window's own sync. A self-signed instance with no
+  `fp=` gets the same compare-and-trust step as a pairing code. Refusals
+  are in words: *Use your @exowatt.com account*, *Nothing came back from the
+  browser in 5 minutes — try again*.
+- An instance connected with a link code that offers single sign-on shows
+  **Continue with Google** above the email and password form; when its admin
+  turned password sign-in off (`password_signin: false`), the form waits
+  behind **Sign in with a password instead**.
+- **`copper://cloud/join?code=…` opens Settings › Cloud** with the code
+  filled in — from the command line, from a second `copper` handing it to
+  the running one, from `GApplication.Open`, or typed into the address field
+  (which offers *Join Copper Cloud — HOST*, never a search). A sign-in link
+  starts the sign-in at once. A link for another instance than the one
+  Copper is connected to never switches it: the page says *This link is for
+  HOST* with Dismiss (and Disconnect and use it…, which asks first); one for
+  the instance it is signed in to says *Already signed in to HOST as EMAIL*.
+- The palette has **Join Copper Cloud — Link Code, Join Link or SSO
+  Sign-In…** while not signed in (Settings has no search on Linux).
+- The sign-in and the join-link decisions live in copper-shell-core
+  (`cloud::sso`, `cloud::join`), toolkit-free, for the Windows shell to draw
+  too.
+
+### Fixed
+
+- Settings › Cloud said *Plain HTTP on this device* for an instance with a
+  publicly trusted certificate and no pin; it says *Publicly trusted
+  certificate* now.
+
 ## 0.4.0 — 2026-10-19
 
 Addons: the Agent sidebar, filled by your Copper Cloud.
