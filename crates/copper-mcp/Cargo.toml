@@ -8,6 +8,9 @@ publish.workspace = true
 
 [dependencies]
 copper-core.workspace = true
+# `copper cloud pair|sso|status`: pairing with no window (copper-cloud has no
+# GTK and depends on copper-core alone).
+copper-cloud.workspace = true
 copper-engine.workspace = true
 copper-pagejs.workspace = true
 serde.workspace = true
@@ -23,6 +26,9 @@ uuid = { version = "1", features = ["v4"] }
 regex = "1"
 png = "0.17"
 jpeg-encoder = "0.6"
+
+[dev-dependencies]
+tempfile = "3"
 
 # Windows: process creation flags for `copper --launch`.
 [target.'cfg(windows)'.dependencies]

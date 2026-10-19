@@ -6,6 +6,12 @@
 //! provides (`cloud-intelligence.json`), field by field as
 //! `Intelligence.merge` does. Never log a key.
 //!
+//! A headless Copper (an agent's own browser, where the cloud's gateway is
+//! out of reach) can name its router in the environment instead:
+//! `COPPER_ROUTER_URL` and `COPPER_ROUTER_KEY` (both, or neither counts),
+//! and optionally `COPPER_ROUTER_MODEL` for every tier. They beat both
+//! files, and the sources say `env` ([`RouterOverride`]).
+//!
 //! Jev authenticates with `Authorization: Bearer <jevKey>` and a
 //! `copper/<version>` user agent, POSTing `{model, state, questions}` to
 //! `jevEndpoint` (default `https://api.typesafe.ai/v1/systemone`); the answer
@@ -357,6 +363,80 @@ pub fn read_files(store: &Store) -> IntelligenceSource {
     }
 }
 
+pub const ROUTER_URL_ENV: &str = "COPPER_ROUTER_URL";
+pub const ROUTER_KEY_ENV: &str = "COPPER_ROUTER_KEY";
+pub const ROUTER_MODEL_ENV: &str = "COPPER_ROUTER_MODEL";
+
+/// A router named by the environment: an OpenAI-compatible gateway that
+/// beats both `intelligence.json` and the cloud's (for a headless Copper
+/// whose cloud gateway is out of reach, such as a loopback shim).
+#[derive(Clone, PartialEq, Eq)]
+pub struct RouterOverride {
+    /// `http(s)://host[:port][/path]`; `/v1/chat/completions` is added.
+    pub url: String,
+    /// Never log this.
+    pub key: String,
+    /// Sent for every tier (and as the text writer), when set.
+    pub model: Option<String>,
+}
+
+impl std::fmt::Debug for RouterOverride {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RouterOverride")
+            .field("url", &self.url)
+            .field("model", &self.model)
+            .finish_non_exhaustive()
+    }
+}
+
+impl RouterOverride {
+    /// From `COPPER_ROUTER_URL`, `COPPER_ROUTER_KEY` and
+    /// `COPPER_ROUTER_MODEL`.
+    pub fn from_env() -> Option<RouterOverride> {
+        Self::from_vars(|name| std::env::var(name).ok())
+    }
+
+    /// From any lookup. Both the URL (an http or https address) and the key
+    /// must be there; with only one, or a URL that isn't one, nothing is
+    /// overridden.
+    pub fn from_vars(get: impl Fn(&str) -> Option<String>) -> Option<RouterOverride> {
+        let value = |name: &str| {
+            get(name)
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        };
+        let (url, key) = (value(ROUTER_URL_ENV), value(ROUTER_KEY_ENV));
+        let (Some(url), Some(key)) = (url, key) else {
+            return None;
+        };
+        let url = web(Some(&url))?;
+        Some(RouterOverride {
+            url,
+            key,
+            model: value(ROUTER_MODEL_ENV),
+        })
+    }
+
+    /// Put this router in `keys`, and say so in `sources`.
+    pub fn apply(&self, keys: &mut Keys, sources: &mut BTreeMap<String, String>) {
+        keys.router_url = self.url.clone();
+        keys.router_key = self.key.clone();
+        keys.lane = Lane::Key;
+        for name in ["routerURL", "routerKey", "lane"] {
+            sources.insert(name.into(), "env".into());
+        }
+        if let Some(model) = &self.model {
+            for tier in [Tier::Haiku, Tier::Sonnet, Tier::Opus] {
+                keys.router_models
+                    .insert(tier.name().to_string(), model.clone());
+            }
+            keys.router_model = model.clone();
+            keys.text_model = String::new();
+            sources.insert("routerModel".into(), "env".into());
+        }
+    }
+}
+
 /// The effective keys and readiness for one call.
 #[derive(Clone, Debug)]
 pub struct Effective {
@@ -367,9 +447,23 @@ pub struct Effective {
 }
 
 impl Effective {
+    /// The files merged, then the environment's router
+    /// ([`RouterOverride::from_env`]) on top.
     pub fn new(source: &IntelligenceSource, claude_ready: bool) -> Effective {
+        Self::with_router(source, claude_ready, RouterOverride::from_env().as_ref())
+    }
+
+    /// [`Effective::new`] with the override given rather than read.
+    pub fn with_router(
+        source: &IntelligenceSource,
+        claude_ready: bool,
+        router: Option<&RouterOverride>,
+    ) -> Effective {
         let local = Keys::from_file(&source.local);
-        let (keys, sources) = merge(&local, source.cloud.as_ref());
+        let (mut keys, mut sources) = merge(&local, source.cloud.as_ref());
+        if let Some(router) = router {
+            router.apply(&mut keys, &mut sources);
+        }
         Effective {
             keys,
             sources,
@@ -732,6 +826,75 @@ mod tests {
         let (_, s) = merge(&local, None);
         assert_eq!(s["routerURL"], "default");
         assert_eq!(s["jevKey"], "local");
+    }
+
+    #[test]
+    fn the_environment_beats_the_cloud_router() {
+        let cloud: CloudProvided = serde_json::from_str(r#"{"jev":{"key":"ts-cloud"},"router":{"key":"sk-cloud","url":"https://gw.cloud.example"}}"#).unwrap();
+        let source = IntelligenceSource {
+            local: serde_json::from_str(
+                r#"{"routerKey":"sk-mine","lane":"claude","textModel":"gpt-4o"}"#,
+            )
+            .unwrap(),
+            cloud: Some(cloud),
+        };
+        let vars = |pairs: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                pairs
+                    .iter()
+                    .find(|(k, _)| *k == name)
+                    .map(|(_, v)| v.to_string())
+            }
+        };
+        // Unset (or half set, or not an address): exactly as before.
+        let before = Effective::with_router(&source, false, None);
+        assert_eq!(before.keys.router_key, "sk-cloud");
+        assert_eq!(before.sources["routerKey"], "cloud");
+        for half in [
+            &[(ROUTER_URL_ENV, "http://127.0.0.1:8099")][..],
+            &[(ROUTER_KEY_ENV, "sk-shim")][..],
+            &[(ROUTER_URL_ENV, "not a url"), (ROUTER_KEY_ENV, "sk-shim")][..],
+            &[(ROUTER_URL_ENV, " "), (ROUTER_KEY_ENV, "sk-shim")][..],
+        ] {
+            assert_eq!(RouterOverride::from_vars(vars(half)), None, "{half:?}");
+        }
+        // Both: the environment wins the key, the address and the lane; the
+        // Jev key still comes from the cloud.
+        let env = RouterOverride::from_vars(vars(&[
+            (ROUTER_URL_ENV, " http://127.0.0.1:8099 "),
+            (ROUTER_KEY_ENV, "sk-shim"),
+        ]))
+        .unwrap();
+        assert!(
+            !format!("{env:?}").contains("sk-shim"),
+            "the key is never printed"
+        );
+        let e = Effective::with_router(&source, false, Some(&env));
+        assert_eq!(e.keys.router_url, "http://127.0.0.1:8099");
+        assert_eq!(e.keys.router_key, "sk-shim");
+        assert_eq!(e.keys.lane, Lane::Key);
+        assert_eq!(e.sources["routerKey"], "env");
+        assert_eq!(e.sources["routerURL"], "env");
+        assert_eq!(e.sources["lane"], "env");
+        assert!(!e.sources.contains_key("routerModel"));
+        assert_eq!(e.keys.jev_key, "ts-cloud");
+        assert_eq!(e.sources["jevKey"], "cloud");
+        assert_eq!(model(&e.keys, Some("opus")), "opus");
+        assert!(e.router_ready() && e.model_ready());
+        // A model for every tier, and for the text writer.
+        let env = RouterOverride::from_vars(vars(&[
+            (ROUTER_URL_ENV, "http://127.0.0.1:8099/"),
+            (ROUTER_KEY_ENV, "sk-shim"),
+            (ROUTER_MODEL_ENV, "us.anthropic.claude-sonnet-5"),
+        ]))
+        .unwrap();
+        let e = Effective::with_router(&source, false, Some(&env));
+        assert_eq!(e.sources["routerModel"], "env");
+        for tier in ["haiku", "sonnet", "opus"] {
+            assert_eq!(model(&e.keys, Some(tier)), "us.anthropic.claude-sonnet-5");
+        }
+        assert_eq!(model(&e.keys, None), "us.anthropic.claude-sonnet-5");
+        assert_eq!(e.keys.text_model, "");
     }
 
     #[test]

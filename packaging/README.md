@@ -28,7 +28,7 @@ packaging/
   build-deb.sh                   cargo build --release + cargo deb → target/debian/copper_<v>-1_<arch>.deb
   debian/copper.apparmor         /etc/apparmor.d/copper — lets WebKit's bwrap sandbox make a user namespace
   debian/maintainer-scripts/     postinst (alternatives + load profile), prerm, postrm
-  share/com.copperbrowser.Copper.desktop        desktop entry (http/https/text/html handler)
+  share/com.copperbrowser.Copper.desktop        desktop entry (http/https/copper/text/html handler)
   share/com.copperbrowser.Copper.metainfo.xml   AppStream
   icons/com.copperbrowser.Copper.svg            scalable icon (generated)
   icons/hicolor/{64,128,256,512}/apps/*.png     raster icons (generated)
@@ -64,7 +64,8 @@ What it installs:
 
 - `/usr/bin/copper`
 - `/usr/share/applications/com.copperbrowser.Copper.desktop` — `Categories=Network;WebBrowser;`,
-  `MimeType=text/html;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;`
+  `MimeType=text/html;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;x-scheme-handler/copper;`
+  (`copper://cloud/join?code=…` deep links from Copper Cloud)
 - `/usr/share/icons/hicolor/{64x64,128x128,256x256,512x512}/apps/com.copperbrowser.Copper.png`
   and `/usr/share/icons/hicolor/scalable/apps/com.copperbrowser.Copper.svg`
 - `/usr/share/metainfo/com.copperbrowser.Copper.metainfo.xml`
@@ -110,7 +111,9 @@ Measured on the devbox (Ubuntu 24.04, aarch64) with the WebKit spike
 (`spikes/hello --selftest`) installed as `/usr/bin/copper`: 9/9 pass with the
 profile loaded; with it unloaded, `bwrap: setting up uid map: Permission denied`
 and exit 133. The Flatpak does not need it (its sandbox goes through the
-Flatpak portal). Never use `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS` instead.
+Flatpak portal). Never use `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS` instead
+(the one exception, a disposable container that is itself the sandbox, is in
+[docs/headless.md](../docs/headless.md#the-webkit-sandbox)).
 The profile uses `abi <abi/4.0>`, so it needs AppArmor 4 (Ubuntu 24.04, Debian 13).
 
 ### Why a shim manifest

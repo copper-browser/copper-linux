@@ -51,6 +51,17 @@
   </requires>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.3.0" date="2026-10-19">
+      <description>
+        <p>Sign in to Copper Cloud with your company account, and run Copper with no display as an agent's own browser.</p>
+        <ul>
+          <li>copper cloud sso signs in with your company account in the system browser; copper cloud pair pairs a profile while Copper is not running; copper cloud status shows the link, the account and the sync switches.</li>
+          <li>Copper Cloud sign-in links and copper://cloud/join deep links are recognised, and Copper registers itself for copper:// links.</li>
+          <li>A Copper Cloud code without a certificate fingerprint is checked against the public certificate authorities.</li>
+          <li>COPPER_ROUTER_URL and COPPER_ROUTER_KEY name the model router for a headless Copper.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.2.0" date="2026-10-16">
       <description>
         <p>Big canvases are fast, agents can read them a page at a time, and tabs are easier to keep.</p>

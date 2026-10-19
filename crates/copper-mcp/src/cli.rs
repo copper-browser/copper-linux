@@ -80,6 +80,12 @@ pub const USAGE: &str = "Usage: copper [--json] [--launch] [--tab ID] <command> 
                                             delete your history on Copper Cloud (every computer's); this
                                             one's stays. A site matches its subdomains; nothing chosen needs --all
   call TOOL [JSON-ARGS]                     call any MCP tool
+  cloud pair CODE [--sync none|all|LIST] [--name NAME]
+                                            pair this profile with Copper Cloud while Copper is
+                                            not running (a headless Copper, before it starts)
+  cloud sso [CODE]                          sign in with your company account in the browser
+  cloud status                              the cloud link, account and sync switches
+                                            (copper cloud help for the options)
   help                                      show this help
 
 Every page command works on your tab: the one you opened or chose with use,
@@ -92,7 +98,7 @@ to opt into starting Copper when it is down. (Hidden: --dry-run prints the decis
 ";
 
 /// Commands the Mac has that this build does not (yet).
-const ELSEWHERE: [&str; 9] = [
+pub(crate) const ELSEWHERE: [&str; 9] = [
     "setup",
     "session",
     "link",
@@ -539,6 +545,8 @@ pub fn make_request(command: &str, args: &[String]) -> Result<Spec, Early> {
             }
             Ok(call("cloud_history_delete", Value::Object(arguments)))
         }
+        // Answered without a window, before this parser (crate::cloud_cli).
+        "cloud" => bad("cloud runs on its own: copper cloud pair|sso|status (copper cloud help)"),
         c if ELSEWHERE.contains(&c) => bad(format!("{c} is not available in this build yet")),
         other => bad(format!("unknown command: {other}")),
     }
@@ -1058,6 +1066,12 @@ mod tests {
         assert!(
             matches!(parse(&s(&["frobnicate"]), false), Err(Early::Usage(t)) if t == "unknown command: frobnicate")
         );
+        // `cloud` never reaches the running Copper: it pairs with no window.
+        assert!(
+            matches!(parse(&s(&["--cli", "cloud", "status"])[1..], false), Err(Early::Usage(t)) if t.contains("copper cloud pair|sso|status"))
+        );
+        assert!(USAGE.contains("cloud pair CODE [--sync none|all|LIST] [--name NAME]"));
+        assert!(USAGE.contains("cloud status"));
     }
 
     #[test]
