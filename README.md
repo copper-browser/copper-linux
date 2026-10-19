@@ -128,7 +128,7 @@ to bookmark, Alt+← to go back, F5 to reload), Copper uses that key.
 | `Ctrl+L` (or `Alt+D`, `F6`) address · `Ctrl+K` tabs and commands · `Ctrl+T` new tab · `Ctrl+W` close (a Saved tab sleeps) · `Ctrl+Shift+T` reopen | `Alt+←` `Alt+→` (or `Ctrl+[` `Ctrl+]`) back, forward · `Ctrl+Tab` `Ctrl+Shift+Tab` next, previous tab · `Ctrl+1`–`Ctrl+9` jump |
 | `Ctrl+Shift+N` private tab · `Ctrl+Shift+D` pin · `Ctrl+Shift+S` tabs in a column or a row | `Ctrl+R` reload · `Ctrl+Shift+R` hard reload · `Ctrl+Shift+I` (or `F12`) inspector |
 | `Ctrl+F` find · `Ctrl+G` `Ctrl+Shift+G` next, previous match · `Ctrl+=` `Ctrl+-` `Ctrl+0` zoom | `Ctrl+Alt+R` reading mode · `Ctrl+Shift+H` hide something |
-| `Ctrl+D` bookmark · `Ctrl+Shift+O` bookmarks · `Ctrl+Y` history · `Ctrl+Shift+Y` downloads | `Ctrl+Alt+←` `Ctrl+Alt+→` previous, next space · `Ctrl+Shift+E` new canvas · `Ctrl+,` settings · `Ctrl+Q` quit |
+| `Ctrl+D` bookmark · `Ctrl+Shift+O` bookmarks · `Ctrl+Y` history · `Ctrl+Shift+Y` downloads | `Ctrl+Alt+←` `Ctrl+Alt+→` previous, next space · `Ctrl+Shift+E` new canvas · `Ctrl+E` Agent sidebar · `Ctrl+,` settings · `Ctrl+Q` quit |
 
 ## Known gaps
 
@@ -145,9 +145,10 @@ These work on the Mac but not here:
 - **Voice** and the Listen transcript.
 - **Picture-in-picture above other apps.** Wayland doesn't let an app keep
   a window on top.
-- **The agent pane and agent links.** The Mac's ⌘E chat, its driver
-  timeline, and links to an agents app aren't here yet. The MCP server and
-  Jev are.
+- **The Mac's own agent chat and agent links.** Ctrl+E opens the Agent
+  sidebar, which shows the addon your Copper Cloud hands out
+  ([docs/addons.md](docs/addons.md)); the Mac's built-in chat, its driver
+  timeline, and links to an agents app aren't here. The MCP server and Jev are.
 - **Importing from Arc, Safari or Dia.**
 - **Self-updating.** Copper tells you when a newer version is out. To update,
   run the install line again, which upgrades in place; apt or Flatpak own the
