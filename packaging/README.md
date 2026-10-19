@@ -37,15 +37,18 @@ packaging/
   flatpak/vendor.sh              Cargo.lock → cargo-sources.json (flatpak-cargo-generator, pinned)
   flatpak/build.sh               vendor + flatpak-builder + build-bundle
   version-manifest.py            writes copper-version.json for a release
-  sync-canvas-bundle.sh          copies the shared canvas page from a macOS checkout (below)
+  sync-canvas-bundle.sh          copies the shared canvas page from canvas-app (or a macOS checkout) (below)
   capture-mac-mcp.py             re-captures fixtures/mac/{tools-list,mcp-initialize}.json from a macOS probe
 ```
 
-The canvas board page is built in the macOS repo (`Canvas/` → bun →
-`Sources/Search/Fork/Canvas/Resources/canvas.html`) and shipped here as the
-same bytes (`crates/copper-app/src/canvas/resources/`). Re-sync with
-`packaging/sync-canvas-bundle.sh <mac-checkout> [<git-ref>]` (e.g.
-`origin/fork`); `--check` only compares. Then build and run the canvas checks.
+The canvas board page lives in [copper-browser/canvas-app](https://github.com/copper-browser/canvas-app),
+the one source for Copper on every platform; its embed build `dist/canvas.html` is shipped here as
+the same bytes (`crates/copper-app/src/canvas/resources/canvas.html`, the commit in
+`CANVAS_APP_REF` beside it). Re-sync with `packaging/sync-canvas-bundle.sh --canvas-app <ref>`
+(a canvas-app commit, tag or branch, pinned as a commit). The "Switching from Chrome" guide still
+comes from the macOS repo: `packaging/sync-canvas-bundle.sh <mac-checkout> [<git-ref>]` (e.g.
+`origin/fork`) copies it with the page. `--check` only compares. Then build and run the canvas
+checks.
 
 ## The `.deb`
 
