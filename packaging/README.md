@@ -50,6 +50,11 @@ comes from the macOS repo: `packaging/sync-canvas-bundle.sh <mac-checkout> [<git
 `origin/fork`) copies it with the page. `--check` only compares. Then build and run the canvas
 checks.
 
+Nobody edits the page here. Every hour, `.github/workflows/canvas.yml` checks canvas-app `main`.
+When it has moved, the workflow pushes the pinned branch `canvas/take-canvas-app` and keeps one
+issue, "Canvas: canvas-app moved on", open with a link that opens the PR. Pull requests that touch
+the vendored page must match its pin.
+
 ## The `.deb`
 
 ```sh
