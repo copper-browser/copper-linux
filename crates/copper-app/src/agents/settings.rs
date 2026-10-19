@@ -3,7 +3,7 @@
 //! port, Jev mode, the two "Copy config" rows (HTTP and stdio), and the
 //! bearer token with Copy and Rotate.
 
-use super::{Agents, agents};
+use super::{Agents, Server, agents};
 use crate::shell::Shell;
 use gtk4 as gtk;
 use gtk4::prelude::*;
@@ -203,7 +203,7 @@ pub fn page(shell: &Shell) -> adw::PreferencesPage {
 }
 
 /// Bring every row in line with the state.
-fn sync(rows: &Rows, a: &Agents, shell: &Shell) {
+fn sync(rows: &Rows, a: &Server, shell: &Shell) {
     rows.syncing.set(true);
     rows.enabled.set_active(a.enabled());
     rows.announces.set_active(a.announces());

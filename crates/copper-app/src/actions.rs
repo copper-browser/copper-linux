@@ -21,6 +21,7 @@
 //! Nothing here needs editing to add a lane except [`register_lanes`].
 
 use crate::palette::Mode;
+use crate::shell::GtkShell;
 use crate::shell::Shell;
 use copper_core::TabId;
 use copper_core::settings::{Look, TabsPosition};

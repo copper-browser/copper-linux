@@ -181,7 +181,7 @@ jobs:
         run: >-
           cargo clippy --locked
           -p copper-core -p copper-engine -p copper-pagejs -p copper-shield
-          -p copper-creds -p copper-import -p copper-cloud -p copper-mcp
+          -p copper-creds -p copper-import -p copper-cloud -p copper-mcp -p copper-shell-core
           --all-targets -- -D warnings
 
       # --no-fail-fast: one failing test binary must not hide the others.
@@ -189,7 +189,7 @@ jobs:
         run: >-
           cargo test --locked --no-fail-fast
           -p copper-core -p copper-engine -p copper-pagejs -p copper-shield
-          -p copper-creds -p copper-import -p copper-cloud -p copper-mcp
+          -p copper-creds -p copper-import -p copper-cloud -p copper-mcp -p copper-shell-core
 
   packaging-lint:
     runs-on: ubuntu-24.04

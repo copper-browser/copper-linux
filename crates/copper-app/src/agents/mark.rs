@@ -9,9 +9,11 @@
 //! the pointer has left the space it took.
 //!
 //! The model is `copper_mcp::drive::DriveEvent`s; the one thing that goes
-//! back is Stop ([`super::Agents::stop_hand`]): a Jev run stops before its
-//! next action, any other agent has its next calls refused for 30 s.
+//! back is Stop ([`copper_shell_core::agents::Agents::stop_hand`]): a Jev
+//! run stops before its next action, any other agent has its next calls
+//! refused for 30 s.
 
+use crate::shell::GtkShell;
 use crate::shell::{Shell, WeakShell};
 use copper_core::TabId;
 use copper_mcp::Who;

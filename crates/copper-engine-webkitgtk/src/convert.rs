@@ -4,7 +4,9 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use copper_engine::{Cookie, EngineError, Image, JsonValue, Result, SameSite, WebsiteDataKinds};
+use copper_engine::{
+    Bitmap, Cookie, EngineError, Image, JsonValue, Result, SameSite, WebsiteDataKinds,
+};
 use gdk4::prelude::*;
 use webkit6::{WebsiteDataTypes, javascriptcore, soup};
 
@@ -18,6 +20,20 @@ pub(crate) fn texture_to_image(tex: &gdk4::Texture) -> Image {
         png: tex.save_to_png_bytes().to_vec(),
         width: tex.width().max(0) as u32,
         height: tex.height().max(0) as u32,
+    }
+}
+
+/// The texture's pixels as straight-alpha RGBA8 (GDK converts whatever
+/// format WebKit painted in).
+pub(crate) fn texture_to_bitmap(tex: &gdk4::Texture) -> Bitmap {
+    let mut down = gdk4::TextureDownloader::new(tex);
+    down.set_format(gdk4::MemoryFormat::R8g8b8a8);
+    let (bytes, stride) = down.download_bytes();
+    Bitmap {
+        width: tex.width().max(0) as u32,
+        height: tex.height().max(0) as u32,
+        stride,
+        rgba: bytes.to_vec(),
     }
 }
 

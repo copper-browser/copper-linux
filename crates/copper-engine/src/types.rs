@@ -114,6 +114,80 @@ impl fmt::Debug for Image {
     }
 }
 
+/// Raw pixels: 8-bit RGBA with straight (not premultiplied) alpha, top row
+/// first, rows `stride` bytes apart (`stride >= width * 4`).
+///
+/// What [`crate::PageView::snapshot_bitmap`] hands back for callers that
+/// crop, scale or encode on a worker thread (canvas frame posters), so the
+/// UI thread never PNG-encodes a whole window.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Bitmap {
+    pub width: u32,
+    pub height: u32,
+    /// Bytes from one row to the next.
+    pub stride: usize,
+    /// `stride * height` bytes.
+    pub rgba: Vec<u8>,
+}
+
+impl Bitmap {
+    /// The bytes of row `y` (`width * 4` of them), if it exists.
+    pub fn row(&self, y: u32) -> Option<&[u8]> {
+        if y >= self.height {
+            return None;
+        }
+        let start = self.stride.checked_mul(y as usize)?;
+        let len = (self.width as usize).checked_mul(4)?;
+        self.rgba.get(start..start.checked_add(len)?)
+    }
+}
+
+impl fmt::Debug for Bitmap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Bitmap({}x{}, stride {}, {} bytes)",
+            self.width,
+            self.height,
+            self.stride,
+            self.rgba.len()
+        )
+    }
+}
+
+/// A request for a URL of a scheme registered with
+/// [`crate::Engine::register_scheme`] (`copper://canvas/<id>`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SchemeRequest {
+    /// The full URL asked for.
+    pub uri: String,
+    /// The page that asked, when it is one this engine made (`None` for an
+    /// engine-internal view such as the inspector).
+    pub page: Option<PageId>,
+}
+
+/// A successful answer to a [`SchemeRequest`].
+#[derive(Clone, PartialEq, Eq)]
+pub struct SchemeBody {
+    pub data: Vec<u8>,
+    /// The content type (`text/html; charset=utf-8`).
+    pub mime: String,
+}
+
+impl fmt::Debug for SchemeBody {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "SchemeBody({}, {} bytes)", self.mime, self.data.len())
+    }
+}
+
+/// What a scheme handler answers: the body, or why there is none (the page
+/// sees a failed load with that text).
+pub type SchemeResponse = std::result::Result<SchemeBody, String>;
+
+/// Answers requests for one custom scheme, synchronously, on the main
+/// thread.
+pub type SchemeHandler = Box<dyn Fn(&SchemeRequest) -> SchemeResponse>;
+
 /// When a user script runs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -262,6 +336,13 @@ id_type!(
 id_type!(
     /// Id of a pending permission request; answer it with `PageView::answer_permission`.
     PermissionId
+);
+id_type!(
+    /// Process-unique identity of a page: the same for every clone of one
+    /// page, never reused for another, never 0. Lets the shell tell "the
+    /// tab's page now" from "the page it had before a crash or a sleep"
+    /// without holding the page.
+    PageId
 );
 
 /// Options for in-page find.

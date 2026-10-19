@@ -10,6 +10,7 @@ members = [
     "crates/copper-import",
     "crates/copper-cloud",
     "crates/copper-mcp",
+    "crates/copper-shell-core",
     "crates/copper-app",
     "spikes/hello",
     "spikes/backstage",
@@ -57,6 +58,7 @@ copper-creds = { path = "crates/copper-creds" }
 copper-import = { path = "crates/copper-import" }
 copper-cloud = { path = "crates/copper-cloud" }
 copper-mcp = { path = "crates/copper-mcp" }
+copper-shell-core = { path = "crates/copper-shell-core" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

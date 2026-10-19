@@ -14,9 +14,10 @@
 //! Nothing typed leaves the machine before Return: rows come from memory
 //! and the disk (history, open tabs, bookmarks, cached icons).
 
-pub mod complete;
+pub use copper_shell_core::palette::complete;
 
 use crate::actions;
+use crate::shell::GtkShell;
 use crate::shell::Shell;
 use complete::{Action, Inputs, Kind, Offers, OpenRow, Purpose, Row};
 use gtk4 as gtk;

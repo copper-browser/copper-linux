@@ -6,6 +6,7 @@
 
 use super::{button, confirm, group, line, switch};
 use crate::features::{curtain, shield};
+use crate::platform::Gtk;
 use crate::shell::Shell;
 use crate::shell::pages::profile_id;
 use copper_engine::{Engine, Profile, WebsiteDataKinds};
@@ -17,7 +18,7 @@ pub fn page(shell: &Shell) -> adw::PreferencesPage {
     let page = adw::PreferencesPage::new();
 
     let blocker = group(Some("Ad blocker"));
-    let trouble = shield::trouble();
+    let trouble = shield::trouble::<Gtk>();
     blocker.add(&switch(
         shell,
         "Block ads and trackers",

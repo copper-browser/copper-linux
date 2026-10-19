@@ -7,6 +7,7 @@
 //! live tab wait behind a "+N" that opens the tab list (`Ctrl+K`).
 
 use super::{Nav, tabs};
+use crate::shell::GtkShell;
 use crate::shell::{Shell, TabView};
 use crate::spaces::colour::Tint;
 use copper_core::TabId;

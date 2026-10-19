@@ -9,6 +9,7 @@
 
 use super::{Forms, rt};
 use crate::app::set_exit;
+use crate::shell::GtkShell;
 use crate::shell::{OpenTab, Shell};
 use copper_core::TabId;
 use copper_core::settings::Look;
@@ -272,13 +273,7 @@ async fn save_offer(run: &Rc<Run>) {
     );
     run.shots("02-save-offer").await;
 
-    let pressed = run
-        .forms
-        .tabs
-        .borrow()
-        .get(&tab)
-        .and_then(|t| t.offer.as_ref().map(|o| o.press_save()))
-        .is_some();
+    let pressed = run.forms.with_offer(&tab, |o| o.press_save()).is_some();
     let v = run.forms.vault.clone();
     let mut kept = false;
     for _ in 0..40 {
@@ -340,13 +335,7 @@ async fn fill(run: &Rc<Run>) {
         run.click(&tab, "#password").await;
         run.until(5, || run.forms.picker_rows(&tab).is_some()).await;
     }
-    let pressed = run
-        .forms
-        .tabs
-        .borrow()
-        .get(&tab)
-        .and_then(|t| t.picker.as_ref().map(|p| p.press(0)))
-        .is_some();
+    let pressed = run.forms.with_picker(&tab, |p| p.press(0)).is_some();
     let mut ok = false;
     for _ in 0..50 {
         let v = run
@@ -598,11 +587,7 @@ async fn bitwarden_otp_and_agents(run: &Rc<Run>) {
         format!("{:?}", run.forms.picker_rows(&tab)),
     );
     run.shot("08-otp-picker-light");
-    run.forms
-        .tabs
-        .borrow()
-        .get(&tab)
-        .and_then(|t| t.picker.as_ref().map(|p| p.press(0)));
+    run.forms.with_picker(&tab, |p| p.press(0));
     let mut code = Value::Null;
     for _ in 0..50 {
         code = run.js(&tab, "document.getElementById('otp').value").await;
@@ -624,7 +609,12 @@ async fn bitwarden_otp_and_agents(run: &Rc<Run>) {
 
     // Agents: nothing shared → refused; shared → filled, no secret returned.
     let tab = run.open("login.html").await;
-    let refused = super::mcp::sign_in(run.shell.clone(), tab.clone(), serde_json::Map::new()).await;
+    let refused = super::mcp::sign_in::<super::GtkForms>(
+        run.shell.clone(),
+        tab.clone(),
+        serde_json::Map::new(),
+    )
+    .await;
     run.check(
         "mcp sign_in: refused while nothing is shared",
         refused.as_ref().is_err_and(|e| e.contains("not shared")),
@@ -635,7 +625,7 @@ async fn bitwarden_otp_and_agents(run: &Rc<Run>) {
     let mut args = serde_json::Map::new();
     args.insert("account".into(), json!(USER));
     args.insert("submit".into(), json!(false));
-    let r = super::mcp::sign_in(run.shell.clone(), tab.clone(), args).await;
+    let r = super::mcp::sign_in::<super::GtkForms>(run.shell.clone(), tab.clone(), args).await;
     let text = format!("{r:?}");
     let filled = run
         .js(&tab, &format!("document.getElementById('password').value.length > 0 && document.getElementById('username').value === {}", json!(USER)))
@@ -652,7 +642,7 @@ async fn bitwarden_otp_and_agents(run: &Rc<Run>) {
     args.insert("account".into(), json!("dev"));
     args.insert("what".into(), json!("otp"));
     args.insert("submit".into(), json!(false));
-    let r = super::mcp::sign_in(run.shell.clone(), tab.clone(), args).await;
+    let r = super::mcp::sign_in::<super::GtkForms>(run.shell.clone(), tab.clone(), args).await;
     let code = run.js(&tab, "document.getElementById('otp').value").await;
     run.check(
         "mcp sign_in what=otp: fills the code, returns none",

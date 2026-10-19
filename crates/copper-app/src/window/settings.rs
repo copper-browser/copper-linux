@@ -1,6 +1,7 @@
 //! Settings: the shell's own page (appearance, tabs, search), then every
 //! page a lane registered ([`crate::actions::register_settings_page`]).
 
+use crate::shell::GtkShell;
 use crate::shell::Shell;
 use copper_core::address::ENGINES;
 use copper_core::settings::{Glyph, Look, TabsPosition, keys};

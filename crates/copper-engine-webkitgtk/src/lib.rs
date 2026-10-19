@@ -30,13 +30,14 @@ use std::rc::{Rc, Weak};
 
 use copper_engine::{
     Capabilities, ContentFilter, Engine, EngineError, EnginePaths, LocalFuture, PageOptions,
-    ProfileId, Result, ScriptId, UserScript,
+    ProfileId, Result, SchemeHandler, SchemeRequest, ScriptId, UserScript,
 };
 use webkit6::{UserContentFilter, UserContentFilterError, UserContentFilterStore};
 
 pub use backstage::WebKitBackstage;
-pub use hands::TrustedInput;
-pub use page::WebKitPage;
+/// What `PageView::input` delivers trusted (moved to `copper-engine`).
+pub use copper_engine::TrustedInput;
+pub use page::{WeakWebKitPage, WebKitPage};
 pub use profile::WebKitProfile;
 
 /// Re-export so callers can name the engine-neutral API through this crate.
@@ -54,6 +55,8 @@ struct EngineInner {
     filters: RefCell<Option<UserContentFilterStore>>,
     backstage: WebKitBackstage,
     page_scripts: Rc<page::PageScripts>,
+    /// Handlers for `Engine::register_scheme`, by lower-case scheme.
+    schemes: RefCell<HashMap<String, Rc<SchemeHandler>>>,
 }
 
 impl WebKitEngine {
@@ -72,6 +75,7 @@ impl WebKitEngine {
                 filters: RefCell::default(),
                 backstage: WebKitBackstage::new(),
                 page_scripts: Rc::default(),
+                schemes: RefCell::default(),
             }),
         }
     }
@@ -186,6 +190,95 @@ impl Engine for WebKitEngine {
 
     fn remove_page_script(&self, id: ScriptId) -> bool {
         self.inner.page_scripts.remove(id)
+    }
+
+    fn set_preferred_languages(&self, languages: &[String]) {
+        set_preferred_languages(languages);
+    }
+
+    /// On WebKit's default web context (every page's), marked secure. WebKit
+    /// keeps the first handler a context was given for a scheme, so a second
+    /// registration swaps the handler behind the one WebKit calls.
+    fn register_scheme(&self, scheme: &str, handler: SchemeHandler) -> Result<()> {
+        let scheme = scheme.to_ascii_lowercase();
+        if scheme.is_empty()
+            || !scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+        {
+            return Err(EngineError::InvalidArgument(format!(
+                "not a URL scheme: {scheme:?}"
+            )));
+        }
+        let fresh = self
+            .inner
+            .schemes
+            .borrow_mut()
+            .insert(scheme.clone(), Rc::new(handler))
+            .is_none();
+        if !fresh {
+            return Ok(());
+        }
+        let context = webkit6::WebContext::default()
+            .ok_or_else(|| EngineError::Other("no default WebKit web context".into()))?;
+        if let Some(security) = context.security_manager() {
+            security.register_uri_scheme_as_secure(&scheme);
+        }
+        let engine = Rc::downgrade(&self.inner);
+        let name = scheme.clone();
+        context.register_uri_scheme(&scheme, move |request| {
+            let answer = match engine.upgrade() {
+                Some(inner) => inner.answer_scheme(&name, request),
+                None => Err("the engine has shut down".to_owned()),
+            };
+            finish_scheme_request(request, answer);
+        });
+        tracing::info!("{scheme}: scheme registered");
+        Ok(())
+    }
+}
+
+impl EngineInner {
+    /// Ask the handler registered for `scheme` about `request`.
+    fn answer_scheme(
+        &self,
+        scheme: &str,
+        request: &webkit6::URISchemeRequest,
+    ) -> copper_engine::SchemeResponse {
+        let handler = self
+            .schemes
+            .borrow()
+            .get(scheme)
+            .cloned()
+            .ok_or_else(|| format!("nothing serves {scheme}:"))?;
+        let ask = SchemeRequest {
+            uri: request.uri().map(|u| u.to_string()).unwrap_or_default(),
+            page: request
+                .web_view()
+                .and_then(|view| self.page_scripts.page_of_view(&view)),
+        };
+        handler(&ask)
+    }
+}
+
+/// Answer a custom-scheme request exactly once: the body, or a not-found
+/// error with the handler's text.
+fn finish_scheme_request(
+    request: &webkit6::URISchemeRequest,
+    answer: copper_engine::SchemeResponse,
+) {
+    match answer {
+        Ok(body) => {
+            let len = body.data.len() as i64;
+            let bytes = glib::Bytes::from_owned(body.data);
+            let stream = gio::MemoryInputStream::from_bytes(&bytes);
+            request.finish(&stream, len, Some(&body.mime));
+        }
+        Err(text) => {
+            tracing::debug!(%text, "custom scheme request refused");
+            let mut error = glib::Error::new(gio::IOErrorEnum::NotFound, &text);
+            request.finish_error(&mut error);
+        }
     }
 }
 

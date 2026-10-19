@@ -43,7 +43,7 @@ packaging/
 
 The canvas board page lives in [copper-browser/canvas-app](https://github.com/copper-browser/canvas-app),
 the one source for Copper on every platform; its embed build `dist/canvas.html` is shipped here as
-the same bytes (`crates/copper-app/src/canvas/resources/canvas.html`, the commit in
+the same bytes (`crates/copper-shell-core/src/canvas/resources/canvas.html`, the commit in
 `CANVAS_APP_REF` beside it). Re-sync with `packaging/sync-canvas-bundle.sh --canvas-app <ref>`
 (a canvas-app commit, tag or branch, pinned as a commit). The "Switching from Chrome" guide still
 comes from the macOS repo: `packaging/sync-canvas-bundle.sh <mac-checkout> [<git-ref>]` (e.g.

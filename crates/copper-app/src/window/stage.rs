@@ -1,6 +1,7 @@
 //! The stage: the selected tab's page, the progress line over it, the link
 //! under the pointer, the find bar, and the side panel later lanes fill.
 
+use crate::shell::GtkShell;
 use crate::shell::Shell;
 use crate::shell::pages::PageSlot;
 use copper_core::TabId;
@@ -126,13 +127,13 @@ impl Stage {
 
     pub fn add_page(&self, slot: &PageSlot) {
         if slot.frame.parent().is_none() {
-            self.stack.add_named(&slot.frame, Some(&slot.id.0));
+            self.stack.add_named(slot.frame.overlay(), Some(&slot.id.0));
         }
     }
 
     pub fn remove_page(&self, slot: &PageSlot) {
         if slot.frame.parent().as_ref() == Some(self.stack.upcast_ref()) {
-            self.stack.remove(&slot.frame);
+            self.stack.remove(slot.frame.overlay());
         }
     }
 
@@ -142,7 +143,7 @@ impl Stage {
         match id.and_then(|i| shell.slot(i)) {
             Some(slot) => {
                 self.add_page(&slot);
-                self.stack.set_visible_child(&slot.frame);
+                self.stack.set_visible_child(slot.frame.overlay());
                 self.set_progress(slot.loading.get(), slot.progress.get());
             }
             None => {

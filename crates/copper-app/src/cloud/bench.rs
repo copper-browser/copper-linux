@@ -20,6 +20,8 @@
 
 use super::page::{Phase, current};
 use super::{get, shell};
+use crate::platform::Gtk;
+use crate::shell::GtkShell;
 use crate::shell::{OpenTab, Shell};
 use copper_cloud::Domain;
 use gtk4::prelude::*;
@@ -212,7 +214,7 @@ async fn run(req: Value) -> Result<Value, String> {
             Ok(json!({"text": text}))
         }
         "canvas-eval" => {
-            let h = crate::canvas::host::hosts_of(s(&req, "id"))
+            let h = crate::canvas::host::hosts_of::<Gtk>(s(&req, "id"))
                 .into_iter()
                 .next()
                 .ok_or("no host for that canvas")?;
@@ -220,7 +222,7 @@ async fn run(req: Value) -> Result<Value, String> {
             Ok(json!({"value": v}))
         }
         "canvas-hosts" => Ok(json!(
-            crate::canvas::host::all()
+            crate::canvas::host::all::<Gtk>()
                 .iter()
                 .map(|h| h.describe())
                 .collect::<Vec<_>>()

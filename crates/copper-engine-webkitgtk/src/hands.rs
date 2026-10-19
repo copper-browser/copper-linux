@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use copper_engine::{
     EngineError, InputEvent, JsonMap, JsonValue, Modifiers, MouseButton, PageView, Result, Trust,
-    World,
+    TrustedInput, World,
 };
 use glib::prelude::*;
 use gtk4::prelude::*;
@@ -45,25 +45,6 @@ pub(crate) const INPUT_WORLD: &str = "copper-input";
 /// How long to wait for the last trusted event of a click / a move.
 const CLICK_SETTLE_MS: u64 = 1000;
 const MOVE_SETTLE_MS: u64 = 300;
-
-/// What `PageView::input` delivers through WebKit itself on one page.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TrustedInput {
-    /// Pointer moves and left clicks go through WebKit's event controllers.
-    pub pointer: bool,
-    /// Typing and editing keys go through WebKit editing commands.
-    pub editing: bool,
-    /// The page can be given focus without GTK focus (backstage page focus).
-    pub page_focus: bool,
-}
-
-impl TrustedInput {
-    pub(crate) const NONE: TrustedInput = TrustedInput {
-        pointer: false,
-        editing: false,
-        page_focus: false,
-    };
-}
 
 /// WebKit's own GTK event controllers on one view.
 #[derive(Default)]

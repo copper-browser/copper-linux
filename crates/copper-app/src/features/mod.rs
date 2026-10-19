@@ -14,12 +14,12 @@ pub mod settings;
 pub mod shield;
 pub mod updates;
 
-mod format;
+pub(crate) use copper_shell_core::{format, util};
 mod selftest;
 mod ui;
-mod util;
 
 use crate::actions::{Command, register_action, register_command, register_menu_item};
+use crate::platform::Gtk;
 use crate::shell::Shell;
 use copper_core::TabId;
 use copper_engine::{LoadState, PageEvent, PageView};
@@ -29,14 +29,16 @@ use glib::object::ObjectExt;
 /// Called once from `actions::register_lanes`.
 pub fn register(shell: &Shell) {
     ui::install_css();
-    shield::start(shell);
-    curtain::start(shell);
+    shield::register(shell);
+    curtain::register(shell);
     panels::register(shell);
     settings::register(shell);
-    updates::start(shell);
+    updates::register(shell);
     page_actions(shell);
-    // Pages that exist already (none in practice: the session's first page
-    // is made after the lanes register).
+    // Every page made from now on; then the pages that exist already (none
+    // in practice: the session's first page is made after the lanes
+    // register).
+    shell.on_page_created(page_created);
     let pages: Vec<(TabId, WebKitPage)> = shell
         .pages_map()
         .borrow()
@@ -69,6 +71,7 @@ pub fn page_created(shell: &Shell, id: &TabId, page: &WebKitPage) {
     let tab = id.clone();
     // Weak: holding the view would keep a closed tab's page alive.
     let mine = page.widget().downgrade();
+    let page_id = page.page_id();
     glib::spawn_future_local(async move {
         while let Some(ev) = events.next().await {
             let Some(shell) = weak.upgrade() else { break };
@@ -92,7 +95,7 @@ pub fn page_created(shell: &Shell, id: &TabId, page: &WebKitPage) {
             }
         }
         // The page went (closed, slept, crashed and replaced).
-        curtain::page_gone(&mine);
+        curtain::page_gone::<Gtk>(page_id);
         if let Some(shell) = weak.upgrade()
             && shell.slot(&tab).is_none()
         {

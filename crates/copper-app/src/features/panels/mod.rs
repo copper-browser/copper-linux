@@ -7,6 +7,7 @@ pub mod downloads;
 pub mod history;
 
 use crate::actions::{Command, Panel, register_action, register_command, register_panel};
+use crate::shell::GtkShell;
 use crate::shell::Shell;
 use copper_core::TabId;
 use gtk4 as gtk;

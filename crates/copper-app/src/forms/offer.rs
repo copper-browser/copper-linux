@@ -2,23 +2,17 @@
 //! field, after a sign-in took (Mac `App.swift` `keepAsking`). Offered once,
 //! answered once; the password is never shown back.
 
-use super::{Forms, rt, source_title};
+use super::{Forms, OfferData, rt, source_title};
 use crate::shell::Shell;
 use crate::shell::pages::PageSlot;
 use copper_core::TabId;
 use copper_creds::credential::Source;
 use copper_creds::offer::Sent;
+use copper_shell_core::forms::OfferView;
 use gtk4 as gtk;
 use gtk4::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
-
-/// What is offered.
-pub struct OfferData {
-    pub sent: Sent,
-    pub target: Source,
-    pub changed: bool,
-}
 
 /// The capsule on a page.
 pub struct Offer {
@@ -28,13 +22,15 @@ pub struct Offer {
     later: gtk::Button,
 }
 
-impl Offer {
-    pub fn remove(&self) {
+impl OfferView for Offer {
+    fn remove(&self) {
         if let Some(f) = self.frame.upgrade() {
             f.remove_overlay(&self.root);
         }
     }
+}
 
+impl Offer {
     /// Press Save (self-test), on the next turn of the loop.
     pub fn press_save(&self) {
         let b = self.save.clone();
@@ -182,7 +178,7 @@ pub fn show(
     }
 
     let frame = glib::WeakRef::new();
-    frame.set(Some(&slot.frame));
+    frame.set(Some(slot.frame.overlay()));
     Offer {
         root,
         frame,

@@ -1,5 +1,5 @@
 # The canvas page lives in copper-browser/canvas-app; Linux vendors its build
-# (crates/copper-app/src/canvas/resources/canvas.html, pinned in CANVAS_APP_REF; packaging/README.md).
+# (crates/copper-shell-core/src/canvas/resources/canvas.html, pinned in CANVAS_APP_REF; packaging/README.md).
 # - pull requests touching the vendored page: it must be the pinned canvas-app build;
 # - hourly (or by hand): when canvas-app main has moved, push the pinned branch canvas/take-canvas-app
 #   and open or update one issue with its commit list and a link that opens the PR (the org does not
@@ -7,7 +7,7 @@
 name: Canvas
 on:
   pull_request:
-    paths: [crates/copper-app/src/canvas/resources/**]
+    paths: [crates/copper-shell-core/src/canvas/resources/**]
   schedule:
     - cron: "23 * * * *"
   workflow_dispatch:
@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: packaging/sync-canvas-bundle.sh --check --canvas-app "$(cat crates/copper-app/src/canvas/resources/CANVAS_APP_REF)"
+      - run: packaging/sync-canvas-bundle.sh --check --canvas-app "$(cat crates/copper-shell-core/src/canvas/resources/CANVAS_APP_REF)"
   bump:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
@@ -33,14 +33,14 @@ jobs:
       - name: Pin canvas-app main
         id: pin
         run: |
-          ref=crates/copper-app/src/canvas/resources/CANVAS_APP_REF
+          ref=crates/copper-shell-core/src/canvas/resources/CANVAS_APP_REF
           old=$(cat "$ref")
           packaging/sync-canvas-bundle.sh --canvas-app main
           new=$(cat "$ref")
           echo "old=$old" >> "$GITHUB_OUTPUT"
           echo "new=$new" >> "$GITHUB_OUTPUT"
           # Only the page counts: a canvas-app commit that leaves dist/canvas.html as it was keeps the pin.
-          if git diff --quiet -- crates/copper-app/src/canvas/resources/canvas.html; then
+          if git diff --quiet -- crates/copper-shell-core/src/canvas/resources/canvas.html; then
             git checkout -- "$ref"
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
@@ -70,5 +70,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           for num in $(gh issue list --state open --search 'in:title "Canvas: canvas-app moved on"' --json number --jq '.[].number'); do
-            gh issue close "$num" --comment "Linux pins canvas-app $(cut -c1-7 crates/copper-app/src/canvas/resources/CANVAS_APP_REF), its main."
+            gh issue close "$num" --comment "Linux pins canvas-app $(cut -c1-7 crates/copper-shell-core/src/canvas/resources/CANVAS_APP_REF), its main."
           done

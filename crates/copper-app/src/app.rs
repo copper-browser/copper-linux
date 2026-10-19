@@ -5,6 +5,7 @@
 
 use crate::control;
 use crate::options::Options;
+use crate::shell::GtkShell;
 use crate::shell::{OpenTab, Shell};
 use gtk4::prelude::*;
 use libadwaita as adw;
@@ -75,7 +76,7 @@ fn activate(app: &adw::Application, opts: Options) {
             s
         }
         None => {
-            let shell = Shell::new(app, opts.clone());
+            let shell = crate::shell::build(app, opts.clone());
             control::install(&shell);
             SHELL.with(|s| *s.borrow_mut() = Some(shell.clone()));
             hooks(&shell, &opts);

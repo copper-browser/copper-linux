@@ -7,6 +7,7 @@ pub mod general;
 pub mod privacy;
 
 use crate::actions::{SettingsPage, register_settings_page};
+use crate::shell::GtkShell;
 use crate::shell::Shell;
 use copper_core::settings::{Glyph, Look, TabSwitching, TabsPosition, keys};
 use gtk4 as gtk;
