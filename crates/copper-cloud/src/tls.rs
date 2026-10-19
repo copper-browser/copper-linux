@@ -1,13 +1,18 @@
 //! Certificate pinning (Mac: `CloudTrust`).
 //!
-//! An instance is trusted if and only if the SHA-256 of its leaf
-//! certificate's DER is the link's fingerprint. The system's trust store is
-//! never consulted — not as a fallback, not for a code without a fingerprint
-//! — which is what lets a self-signed instance work and what stops anything
-//! else from standing in for it. The handshake signature is still verified
-//! against the pinned certificate's key, so the server must hold that key.
+//! A pinned instance is trusted if and only if the SHA-256 of its leaf
+//! certificate's DER is the link's fingerprint. The public roots are never
+//! consulted for it — not as a fallback — which is what lets a self-signed
+//! instance work and what stops anything else from standing in for it. The
+//! handshake signature is still verified against the pinned certificate's
+//! key, so the server must hold that key.
 //!
-//! A verifier with no pin refuses every certificate but remembers the
+//! A link with no pin (an instance on a public certificate, such as an ACME
+//! one: the sign-in links and agent pairing codes such an instance makes
+//! carry no `fp=`) is checked the ordinary way, against the public
+//! certificate authorities (Mozilla's list, built in, so it is the same on
+//! every system), for the host it names — what the Mac's default handling
+//! does. A self-signed certificate fails that, and the verifier remembers the
 //! fingerprint it was shown ([`Trust::seen`]), so a person can compare it
 //! (`copper-cloud doctor` on the server) and pin it on first use.
 
@@ -57,7 +62,7 @@ impl std::fmt::Debug for Trust {
 
 impl Trust {
     /// A trust that accepts exactly `pin` (lowercase hex SHA-256), or — with
-    /// none — nothing at all.
+    /// none — a certificate the public authorities vouch for.
     pub fn new(pin: Option<&str>) -> Self {
         let pin = pin.map(str::to_ascii_lowercase);
         let state = Arc::new(Mutex::new(TrustState::default()));
@@ -66,6 +71,7 @@ impl Trust {
             pin: pin.clone(),
             state: state.clone(),
             provider: provider.clone(),
+            public: public_verifier(&provider),
         });
         let mut config = ClientConfig::builder_with_provider(provider)
             .with_safe_default_protocol_versions()
@@ -189,22 +195,42 @@ impl Trust {
     }
 }
 
+/// The public authorities' verifier, for a link without a pin. `None` only
+/// if the built-in roots could not be read, which then trusts nothing.
+fn public_verifier(
+    provider: &Arc<CryptoProvider>,
+) -> Option<Arc<rustls::client::WebPkiServerVerifier>> {
+    static ROOTS: std::sync::OnceLock<Arc<rustls::RootCertStore>> = std::sync::OnceLock::new();
+    let roots = ROOTS
+        .get_or_init(|| {
+            Arc::new(rustls::RootCertStore {
+                roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+            })
+        })
+        .clone();
+    rustls::client::WebPkiServerVerifier::builder_with_provider(roots, provider.clone())
+        .build()
+        .map_err(|e| tracing::error!(error = %e, "no public certificate roots"))
+        .ok()
+}
+
 /// The verifier behind [`Trust`].
 #[derive(Debug)]
 pub struct PinVerifier {
     pin: Option<String>,
     state: Arc<Mutex<TrustState>>,
     provider: Arc<CryptoProvider>,
+    public: Option<Arc<rustls::client::WebPkiServerVerifier>>,
 }
 
 impl ServerCertVerifier for PinVerifier {
     fn verify_server_cert(
         &self,
         end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: UnixTime,
+        intermediates: &[CertificateDer<'_>],
+        server_name: &ServerName<'_>,
+        ocsp_response: &[u8],
+        now: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
         let shown = fingerprint(end_entity.as_ref());
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -217,9 +243,21 @@ impl ServerCertVerifier for PinVerifier {
                     CertificateError::ApplicationVerificationFailure,
                 ))
             }
-            None => Err(rustls::Error::InvalidCertificate(
-                CertificateError::UnknownIssuer,
-            )),
+            None => match &self.public {
+                Some(public) => {
+                    drop(state);
+                    public.verify_server_cert(
+                        end_entity,
+                        intermediates,
+                        server_name,
+                        ocsp_response,
+                        now,
+                    )
+                }
+                None => Err(rustls::Error::InvalidCertificate(
+                    CertificateError::UnknownIssuer,
+                )),
+            },
         }
     }
 
@@ -281,6 +319,7 @@ mod tests {
             pin: good.pin.clone(),
             state: good.state.clone(),
             provider: provider(),
+            public: public_verifier(&provider()),
         };
         assert!(v.verify_server_cert(&der, &[], &name, &[], now).is_ok());
         assert_eq!(good.seen().as_deref(), Some(fp.as_str()));
@@ -291,18 +330,22 @@ mod tests {
             pin: bad.pin.clone(),
             state: bad.state.clone(),
             provider: provider(),
+            public: public_verifier(&provider()),
         };
         assert!(v.verify_server_cert(&der, &[], &name, &[], now).is_err());
         assert!(bad.mismatched());
         assert_eq!(bad.seen().as_deref(), Some(fp.as_str()));
 
-        // No pin: nothing is trusted, but what was shown is remembered.
+        // No pin: only what the public authorities vouch for (not this),
+        // and what was shown is remembered.
         let none = Trust::new(None);
         let v = PinVerifier {
             pin: None,
             state: none.state.clone(),
             provider: provider(),
+            public: public_verifier(&provider()),
         };
+        assert!(v.public.is_some(), "the built-in roots load");
         assert!(v.verify_server_cert(&der, &[], &name, &[], now).is_err());
         assert!(!none.mismatched());
         assert_eq!(none.seen().as_deref(), Some(fp.as_str()));

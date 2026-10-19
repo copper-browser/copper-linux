@@ -78,6 +78,71 @@ shown. A used, revoked or expired code is refused; make a new one.
 Pairing works in both directions: a Mac can pair a Linux computer, and a
 Linux computer can pair a Mac.
 
+### From the command line, with no window
+
+`copper cloud pair` does the same with Copper **not** running, for a headless
+Copper (an agent's own browser) or a computer you reach over SSH:
+
+```sh
+copper cloud pair 'copper-cloud://HOST:PORT/#p=cp_…&fp=…' --sync tabs --name "Build box"
+copper cloud status
+```
+
+It links, signs in, adopts the device id the server answers with, and writes
+`cloud.json` and the sync switches for the current profile (`COPPER_WORLD`),
+so Copper syncs as soon as it starts. `--sync` takes `none`, `all`, or a list
+of `spaces,settings,bookmarks,tabs,history,canvas`; without it, the switches
+this profile had before, else all of them. `--json` prints one object:
+`{"ok":true,"email","device_id","device_name","host","sync":[…],"provided":[…]}`,
+or `{"ok":false,"error","message"}`. Neither form ever prints the session
+token or a key.
+
+It refuses while a Copper window has the profile open (that window keeps its
+own copy of `cloud.json` and would write over the pairing): quit Copper
+first, or pair in Settings › Cloud. Exit codes: 0 done, 1 the cloud refused or
+couldn't be reached, 2 a usage error or a running Copper.
+
+A deep link `copper://cloud/join?code=<the code, percent-encoded>` carries
+any of these codes. Copper registers itself for `copper://` links; on Linux
+0.3.0 the command line reads them (`copper cloud pair 'copper://cloud/join?code=…'`),
+and Settings › Cloud opening for them comes in a later release.
+
+## Signing in with your company account
+
+An instance can let people sign in with their company account (Google
+Workspace, say) instead of a password. Its admin hands out a **sign-in link**
+instead of a link code:
+
+```text
+copper-cloud://HOST:PORT/#sso=google
+copper-cloud://HOST:PORT/#sso=google&fp=<sha256 of the certificate>
+```
+
+It has no key in it: anyone may have it. Signing in is what proves who you
+are, and the instance makes the account the first time (if its admin lets
+it). On Linux 0.3.0 this runs from the command line; the *Continue with
+Google* button in Settings › Cloud comes in a later release:
+
+```sh
+copper cloud sso 'copper-cloud://HOST:PORT/#sso=google'
+copper cloud sso            # the instance this Copper is connected to already
+```
+
+Copper opens your browser at the company's sign-in page and waits up to
+**5 minutes** (Ctrl+C gives up). It listens for the answer on a loopback port
+of its own (`127.0.0.1`, a fresh port each time), checks that the answer is
+for the request it made, and finishes the sign-in with the instance using a
+PKCE code verifier that never left this computer. The browser tab then says
+*You're signed in — return to Copper*. If the browser doesn't open, the
+address is printed; open it yourself on this computer.
+
+After that it is exactly as if you had paired: the link, the account and the
+session token in one write, the device id the server chose, and sync on with
+the same `--sync` choice as `copper cloud pair`.
+
+Copper asks the instance which sign-ins it offers (`GET /v1/auth/sso`); an
+instance from before single sign-on answers 404, and Copper says so.
+
 ## What syncs
 
 | Switch | What | Notes |
@@ -133,13 +198,19 @@ is not touched, and other devices keep what they already pulled.
 
 - **Pinning.** A link code's `fp=` is the SHA-256 of the server's
   certificate. Copper accepts the server only if its certificate has exactly
-  that fingerprint, whoever signed it. A code without `fp=` uses the
-  system's normal certificate checks.
+  that fingerprint, whoever signed it. A code without `fp=` (a server with a
+  certificate from a public authority, such as Let's Encrypt) is checked
+  against the public certificate authorities Copper has built in (Mozilla's
+  list), with the host name. A self-signed server without `fp=` is refused,
+  and Copper shows its fingerprint so you can compare it and pin it on
+  purpose (`--trust FP` on the command line).
 - **Plain HTTP** is accepted only for a loopback host (a development server
   on `127.0.0.1`).
 - **Your cloud password** goes to the server only to sign up or sign in, over
   the pinned connection. It is not kept.
-- **Pairing codes** are never written to disk or logged.
+- **Pairing codes** are never written to disk or logged. Nor are the
+  one-time codes and verifiers of a company sign-in; the loopback port that
+  waits for it accepts only this computer, and only the request it made.
 - The session token never goes into the system keyring, `settings.json`, the
   log, or any agent or CLI output.
 
@@ -154,6 +225,18 @@ is not touched, and other devices keep what they already pulled.
   the key was rotated or revoked. Get the link code again.
 - **"That pairing code doesn't work any more."** It was used, revoked, or is
   past its ten minutes. Make a new one.
+- **"That's a sign-in link for HOST."** It was pasted where a link or pairing
+  code goes. Run `copper cloud sso` with it.
+- **"Use your @example.com account."** The instance takes accounts only from
+  that domain: sign in again and pick your company account.
+- **"This instance doesn't offer single sign-on."** It is older than
+  copper-cloud's single sign-on, or its admin turned it off. Use a link code
+  and a password, or a pairing code.
+- **"Nothing came back from the browser in 5 minutes."** Run
+  `copper cloud sso` again, and finish in the browser it opens.
+- **"Copper is running on this profile."** `copper cloud pair` and
+  `copper cloud sso` need the profile to themselves. Quit Copper, or use
+  Settings › Cloud.
 - **The status stays "Can't reach the cloud."** Sync retries on its own once
   the connection is back; **Sync now** tries at once. The log at the foot of
   the page has the details.

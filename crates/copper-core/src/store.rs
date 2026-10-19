@@ -200,23 +200,32 @@ impl Paths {
         }
         #[cfg(not(windows))]
         {
-            let home = std::env::var_os("HOME")
+            Self::from_vars(|name| std::env::var_os(name))
+        }
+    }
+
+    /// The Linux layout of [`Paths::from_env`] over any environment (another
+    /// process's, say): `get` answers `HOME`, `XDG_DATA_HOME`,
+    /// `XDG_CONFIG_HOME` and `COPPER_WORLD`.
+    #[cfg(not(windows))]
+    pub fn from_vars(get: impl Fn(&str) -> Option<std::ffi::OsString>) -> Self {
+        let home = get("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/"));
+        let xdg = |var: &str, fallback: &str| -> PathBuf {
+            get(var)
                 .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("/"));
-            let xdg = |var: &str, fallback: &str| -> PathBuf {
-                std::env::var_os(var)
-                    .map(PathBuf::from)
-                    .filter(|p| p.is_absolute())
-                    .unwrap_or_else(|| home.join(fallback))
-            };
-            let name = match crate::platform::world() {
-                Some(w) => format!("copper-{w}"),
-                None => "copper".to_string(),
-            };
-            Paths {
-                data: xdg("XDG_DATA_HOME", ".local/share").join(&name),
-                config: xdg("XDG_CONFIG_HOME", ".config").join(&name),
-            }
+                .filter(|p| p.is_absolute())
+                .unwrap_or_else(|| home.join(fallback))
+        };
+        let world = get("COPPER_WORLD").and_then(|w| w.into_string().ok());
+        let name = match crate::platform::world_from(world.as_deref()) {
+            Some(w) => format!("copper-{w}"),
+            None => "copper".to_string(),
+        };
+        Paths {
+            data: xdg("XDG_DATA_HOME", ".local/share").join(&name),
+            config: xdg("XDG_CONFIG_HOME", ".config").join(&name),
         }
     }
 
@@ -597,5 +606,36 @@ fn replace(tmp: &Path, path: &Path) -> std::io::Result<()> {
             }
             Err(e) => return Err(e),
         }
+    }
+}
+
+#[cfg(all(test, not(windows)))]
+mod paths_tests {
+    use super::*;
+    use std::ffi::OsString;
+
+    #[test]
+    fn paths_from_any_environment() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                pairs
+                    .iter()
+                    .find(|(k, _)| *k == name)
+                    .map(|(_, v)| OsString::from(v))
+            }
+        };
+        let p = Paths::from_vars(env(&[("HOME", "/home/a")]));
+        assert_eq!(p.data, PathBuf::from("/home/a/.local/share/copper"));
+        assert_eq!(p.config, PathBuf::from("/home/a/.config/copper"));
+        let p = Paths::from_vars(env(&[
+            ("HOME", "/home/a"),
+            ("XDG_DATA_HOME", "/srv/data"),
+            ("XDG_CONFIG_HOME", "relative/ignored"),
+            ("COPPER_WORLD", "Bot_1a2b"),
+        ]));
+        assert_eq!(p.data, PathBuf::from("/srv/data/copper-bot1a2b"));
+        assert_eq!(p.config, PathBuf::from("/home/a/.config/copper-bot1a2b"));
+        let p = Paths::from_vars(env(&[("HOME", "/h"), ("COPPER_WORLD", "__")]));
+        assert_eq!(p.data, PathBuf::from("/h/.local/share/copper-test"));
     }
 }

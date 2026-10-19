@@ -8,6 +8,15 @@
 //!   by a Copper already signed in and links *and* signs in another one
 //!   (`POST /v1/auth/pair`). A bare `cp_…` reads only against the instance
 //!   this Copper is already linked to.
+//! * A **sign-in link** — `copper-cloud://HOST:PORT/#sso=google&fp=HEX` — is
+//!   an instance's onboarding link for company single sign-on: no secret in
+//!   it, the identity provider's domain check is the gate. It links *and*
+//!   signs in through the system browser ([`crate::sso`]). [`parse_code`]
+//!   never returns one (its two kinds stay as they are); [`parse_join_code`]
+//!   reads all three.
+//! * A **deep link** — `copper://cloud/join?code=<percent-encoded code>` — is
+//!   how a web page (the instance's `/start`) hands any of them to Copper.
+//!   Every parser here unwraps it first.
 //!
 //! Spaces and line breaks a paste picked up are ignored; colons in the
 //! fingerprint are allowed. `http://` (or `tls=off` in the fragment) is only
@@ -181,6 +190,166 @@ pub enum Code {
     Pairing(PairingCode),
 }
 
+/// A sign-in link (`#sso=<provider>`): where the instance is, which of its
+/// identity providers to use, and the pin. Holds no secret.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SsoLink {
+    pub endpoint: Endpoint,
+    /// The provider's id on the instance (`google`), lowercase.
+    pub provider: String,
+    /// As in a link code.
+    pub fingerprint: Option<String>,
+}
+
+impl SsoLink {
+    /// `host:port` as people read it.
+    pub fn host(&self) -> String {
+        self.endpoint.host_text()
+    }
+
+    /// The whole link, as the instance prints it.
+    pub fn link(&self) -> String {
+        code_text(
+            &self.endpoint,
+            &format!("sso={}", self.provider),
+            self.fingerprint.as_deref(),
+        )
+    }
+}
+
+/// Anything that joins this Copper to an instance: a link code, a pairing
+/// code or a sign-in link (Settings › Cloud's field, `copper cloud pair`, a
+/// `copper://cloud/join` deep link).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum JoinCode {
+    /// `#k=`: connects; signing in comes next.
+    Link(Link),
+    /// `#p=`: connects and signs in, in one step.
+    Pairing(PairingCode),
+    /// `#sso=`: connects and signs in through the system browser.
+    Sso(SsoLink),
+}
+
+impl From<Code> for JoinCode {
+    fn from(code: Code) -> Self {
+        match code {
+            Code::Link(l) => JoinCode::Link(l),
+            Code::Pairing(p) => JoinCode::Pairing(p),
+        }
+    }
+}
+
+/// A link code, a pairing code or a sign-in link, whichever was pasted (or
+/// carried by a `copper://cloud/join` deep link). A bare `cp_…` reads only
+/// with `linked_to`, as in [`parse_code`].
+pub fn parse_join_code(text: &str, linked_to: Option<&Link>) -> Option<JoinCode> {
+    if let Some(code) = parse_code(text, linked_to) {
+        return Some(code.into());
+    }
+    parse_sso_link(text).map(JoinCode::Sso)
+}
+
+/// A sign-in link: `copper-cloud://HOST:PORT/#sso=<provider>[&fp=HEX]` (or
+/// loopback `http://…/#sso=…`, or wrapped in a `copper://cloud/join` deep
+/// link). The provider id is letters, digits, `-` and `_`, at most 64.
+pub fn parse_sso_link(text: &str) -> Option<SsoLink> {
+    let raw = unwrap_deep_link(text);
+    let (address, fields) = split_code(&raw)?;
+    if fields.get("k").is_some_and(|k| !k.is_empty())
+        || fields.get("p").is_some_and(|p| !p.is_empty())
+    {
+        return None;
+    }
+    let provider = fields.get("sso")?.trim().to_ascii_lowercase();
+    if provider.is_empty()
+        || provider.len() > 64
+        || !provider
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return None;
+    }
+    let (endpoint, pin) = endpoint(&address, fields.get("fp").map(String::as_str))?;
+    Some(SsoLink {
+        endpoint,
+        provider,
+        fingerprint: pin,
+    })
+}
+
+/// The code a `copper://cloud/join?code=<percent-encoded code>` deep link
+/// carries (`copper:cloud/join?…` and `copper:///cloud/join?…` too). `None`
+/// for anything else, including a `copper://` address that isn't a join.
+pub fn deep_link_code(text: &str) -> Option<String> {
+    let raw = text.trim();
+    let rest = strip_prefix_ignore_case(raw, "copper:")?;
+    let rest = rest.trim_start_matches('/');
+    let (path, query) = rest.split_once('?')?;
+    if !path
+        .trim_end_matches('/')
+        .eq_ignore_ascii_case("cloud/join")
+    {
+        return None;
+    }
+    // Everything after `code=` is the code: a code that wasn't encoded
+    // (`…/#p=…&fp=…` pasted as is) still reads whole, and a field after an
+    // encoded one only adds a field the code's parser ignores.
+    let at = query
+        .split('&')
+        .scan(0usize, |offset, part| {
+            let here = *offset;
+            *offset += part.len() + 1;
+            Some((here, part))
+        })
+        .find(|(_, part)| part.len() >= 5 && part[..5].eq_ignore_ascii_case("code="))
+        .map(|(at, _)| at)?;
+    let value = &query[at + 5..];
+    let value = value.replace('+', "%20");
+    let code = percent_decode(&value).unwrap_or(value);
+    let code: String = code.chars().filter(|c| !c.is_whitespace()).collect();
+    (!code.is_empty()).then_some(code)
+}
+
+/// `text` itself, or the code inside it when it is a deep link.
+fn unwrap_deep_link(text: &str) -> String {
+    deep_link_code(text).unwrap_or_else(|| text.to_string())
+}
+
+fn strip_prefix_ignore_case<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
+    (text.len() >= prefix.len() && text[..prefix.len()].eq_ignore_ascii_case(prefix))
+        .then(|| &text[prefix.len()..])
+}
+
+/// The address part (`copper-cloud://` rewritten to `https://`, or `http://`
+/// with `tls=off`) and the fragment's fields, keys lowercased, values
+/// percent-decoded, the last of a repeated key winning. Spaces and line
+/// breaks are dropped first.
+fn split_code(text: &str) -> Option<(String, std::collections::BTreeMap<String, String>)> {
+    let raw: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    let (head, fragment) = raw.split_once('#')?;
+    let mut fields = std::collections::BTreeMap::new();
+    for pair in fragment.split('&').filter(|p| !p.is_empty()) {
+        let Some((k, v)) = pair.split_once('=') else {
+            continue;
+        };
+        let value = percent_decode(v).unwrap_or_else(|| v.to_string());
+        fields.insert(k.to_lowercase(), value);
+    }
+    let plain = matches!(
+        fields.get("tls").map(|t| t.to_lowercase()).as_deref(),
+        Some("off" | "none" | "plain" | "http")
+    );
+    let mut address = head.to_string();
+    if address.len() >= 15 && address[..15].eq_ignore_ascii_case("copper-cloud://") {
+        address = format!(
+            "{}{}",
+            if plain { "http://" } else { "https://" },
+            &address[15..]
+        );
+    }
+    Some((address, fields))
+}
+
 /// A link code (`#k=`), never a pairing code.
 pub fn parse_link_code(text: &str) -> Option<Link> {
     match parse_code(text, None) {
@@ -191,8 +360,11 @@ pub fn parse_link_code(text: &str) -> Option<Link> {
 
 /// A link code (`#k=`) or a pairing code (`#p=`), whichever was pasted. A
 /// bare `cp_…` pairing code reads only with `linked_to`, the instance this
-/// Copper already knows.
+/// Copper already knows. A `copper://cloud/join` deep link reads as the
+/// code it carries. A sign-in link (`#sso=`) is neither: see
+/// [`parse_join_code`].
 pub fn parse_code(text: &str, linked_to: Option<&Link>) -> Option<Code> {
+    let text = unwrap_deep_link(text);
     let raw: String = text.chars().filter(|c| !c.is_whitespace()).collect();
     if let Some(current) = linked_to
         && is_bare_pairing_code(&raw)
@@ -556,5 +728,113 @@ mod tests {
     fn percent_encoded_fields() {
         let link = parse_link_code(&format!("copper-cloud://h:1/#k=ck%5Fabc&fp={FP}")).unwrap();
         assert_eq!(link.key, "ck_abc");
+    }
+
+    #[test]
+    fn sso_links() {
+        let text = format!("copper-cloud://cloud.example.com:8443/#sso=google&fp={FP}");
+        let sso = parse_sso_link(&text).expect("sso link");
+        assert_eq!(sso.endpoint.base(), "https://cloud.example.com:8443");
+        assert_eq!(sso.provider, "google");
+        assert_eq!(sso.fingerprint.as_deref(), Some(FP));
+        assert_eq!(sso.link(), text);
+        assert_eq!(sso.host(), "cloud.example.com:8443");
+        // Not a link code or a pairing code: the old parser stays as it was.
+        assert!(parse_code(&text, None).is_none());
+        assert!(parse_link_code(&text).is_none());
+        assert_eq!(parse_join_code(&text, None), Some(JoinCode::Sso(sso)));
+        // ACME: no pin. Paste noise, case, colons in the pin.
+        let sso = parse_sso_link("  Copper-Cloud://copper.example.com/\n#SSO=Google ").unwrap();
+        assert_eq!(sso.provider, "google");
+        assert_eq!(sso.fingerprint, None);
+        assert_eq!(sso.link(), "copper-cloud://copper.example.com/#sso=google");
+        let sso = parse_sso_link(&format!(
+            "copper-cloud://h:1/#sso=corp-okta_2&fp={}",
+            pairs(FP).to_uppercase()
+        ))
+        .unwrap();
+        assert_eq!(sso.provider, "corp-okta_2");
+        assert_eq!(sso.fingerprint.as_deref(), Some(FP));
+        // Loopback development server, never pinned.
+        let sso = parse_sso_link(&format!("http://127.0.0.1:8080/#sso=google&fp={FP}")).unwrap();
+        assert!(!sso.endpoint.https);
+        assert_eq!(sso.fingerprint, None);
+        assert_eq!(sso.link(), "http://127.0.0.1:8080/#sso=google");
+    }
+
+    #[test]
+    fn bad_sso_links() {
+        for text in [
+            "copper-cloud://h:1/#sso=".to_string(),
+            "copper-cloud://h:1/#sso=goo/gle".to_string(),
+            "copper-cloud://h:1/#sso=google&fp=abc".to_string(),
+            format!("copper-cloud://h:1/#sso={}", "a".repeat(65)),
+            "copper-cloud://10.0.0.1:1/#sso=google&tls=off".to_string(),
+            "copper-cloud://h:0/#sso=google".to_string(),
+            "copper-cloud://h:1/sso=google".to_string(),
+        ] {
+            assert!(parse_sso_link(&text).is_none(), "{text}");
+        }
+        // A key or a pairing code beside it: that code wins.
+        let both = format!("copper-cloud://h:1/#k={KEY}&sso=google");
+        assert!(parse_sso_link(&both).is_none());
+        assert!(matches!(
+            parse_join_code(&both, None),
+            Some(JoinCode::Link(_))
+        ));
+        assert!(matches!(
+            parse_join_code("copper-cloud://h:1/#p=cp_abc&sso=google", None),
+            Some(JoinCode::Pairing(_))
+        ));
+    }
+
+    #[test]
+    fn deep_links() {
+        let sso = format!("copper-cloud://cloud.example.com:8443/#sso=google&fp={FP}");
+        let encoded = sso
+            .replace(':', "%3A")
+            .replace('/', "%2F")
+            .replace('#', "%23")
+            .replace('=', "%3D")
+            .replace('&', "%26");
+        let deep = format!("copper://cloud/join?code={encoded}");
+        assert_eq!(deep_link_code(&deep).as_deref(), Some(sso.as_str()));
+        assert!(matches!(
+            parse_join_code(&deep, None),
+            Some(JoinCode::Sso(s)) if s.provider == "google" && s.fingerprint.as_deref() == Some(FP)
+        ));
+        // Other spellings of the same thing; a code that wasn't encoded.
+        for form in [
+            format!("COPPER://cloud/join/?code={encoded}"),
+            format!("copper:cloud/join?code={encoded}"),
+            format!("copper:///cloud/join?from=start&code={encoded}"),
+            format!("copper://cloud/join?code={sso}"),
+        ] {
+            assert_eq!(
+                deep_link_code(&form).as_deref(),
+                Some(sso.as_str()),
+                "{form}"
+            );
+        }
+        // Pairing and link codes come through the same door.
+        let pairing = format!("copper-cloud://h:9/#p=cp_Q2bxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx&fp={FP}");
+        let deep = format!(
+            "copper://cloud/join?code={}",
+            pairing.replace('#', "%23").replace('&', "%26")
+        );
+        assert!(matches!(parse_code(&deep, None), Some(Code::Pairing(_))));
+        let link = format!("copper-cloud://h:9/#k={KEY}&fp={FP}");
+        let deep = format!("copper://cloud/join?code={}", link.replace('#', "%23"));
+        assert_eq!(parse_link_code(&deep).map(|l| l.key), Some(KEY.to_string()));
+        // Not joins.
+        for text in [
+            "copper://canvas/personal",
+            "copper://cloud/join",
+            "copper://cloud/join?code=",
+            "copper://cloud/settings?code=x",
+            "https://cloud/join?code=x",
+        ] {
+            assert_eq!(deep_link_code(text), None, "{text}");
+        }
     }
 }
