@@ -91,12 +91,14 @@ mod tests {
             for file in std::fs::read_dir(&dir).unwrap() {
                 let file = file.unwrap().path();
                 if file.extension().is_some_and(|e| e == "js") {
-                    on_disk.push(
-                        file.strip_prefix(root)
-                            .unwrap()
-                            .to_string_lossy()
-                            .into_owned(),
-                    );
+                    // Table entries use `/` whatever the host separator.
+                    let rel: Vec<String> = file
+                        .strip_prefix(root)
+                        .unwrap()
+                        .components()
+                        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                        .collect();
+                    on_disk.push(rel.join("/"));
                 }
             }
         }

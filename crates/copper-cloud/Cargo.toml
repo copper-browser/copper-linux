@@ -28,6 +28,10 @@ fastrand = "2"
 # The canvas document (Yjs, lib0 v1) and the y-sync protocol, as the server uses.
 yrs = { version = "0.28", features = ["sync"] }
 
+# Windows: GetComputerNameExW for the default device name.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_SystemInformation"] }
+
 [dev-dependencies]
 tempfile = "3"
 tokio = { workspace = true, features = ["process"] }

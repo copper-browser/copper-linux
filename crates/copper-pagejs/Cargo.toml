@@ -10,7 +10,9 @@ publish.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
-[dev-dependencies]
+# The WebKitGTK harness (tests/webview.rs) is Linux-only; elsewhere the target
+# only prints SKIPPED, so these never build on Windows.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
 gtk4.workspace = true
 glib.workspace = true
 webkit6.workspace = true

@@ -1,0 +1,10 @@
+# Same bytes on every checkout: page scripts are embedded with include_str!
+# and compared against the Mac build's golden output, so Windows (core.autocrlf)
+# must not turn them into CRLF.
+* text=auto eol=lf
+*.png binary
+*.ico binary
+*.sqlite binary
+# cmd.exe misparses LF-only batch files.
+*.cmd text eol=crlf
+*.bat text eol=crlf

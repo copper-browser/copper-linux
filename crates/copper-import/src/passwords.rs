@@ -12,6 +12,10 @@
 //!
 //! The file is copied before it is read. Secrets are held in
 //! [`ImportedLogin`] only, whose `Debug` never prints the password.
+//!
+//! Linux only: on Windows Copper never opens another browser's
+//! `Login Data`; passwords come over through the browser's own CSV export
+//! ([`crate::passwords_csv`]).
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -19,6 +23,7 @@ use std::path::{Path, PathBuf};
 use aes::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
 use rusqlite::{Connection, OpenFlags};
 
+pub use crate::login::ImportedLogin;
 use crate::{Browser, Copied, ImportError, chromium_to_unix};
 
 type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
@@ -155,27 +160,6 @@ pub fn wrap(plain: &[u8], key: &Key, tag: &str) -> Vec<u8> {
     let mut out = tag.as_bytes().to_vec();
     out.extend(sealed);
     out
-}
-
-/// One saved sign-in, decrypted.
-#[derive(Clone, PartialEq)]
-pub struct ImportedLogin {
-    /// The site (lowercased, no `www.`), as Copper keys passwords.
-    pub host: String,
-    pub user: String,
-    pub password: String,
-    /// Last used, Unix seconds.
-    pub used: Option<f64>,
-}
-
-impl std::fmt::Debug for ImportedLogin {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ImportedLogin")
-            .field("host", &self.host)
-            .field("user", &self.user)
-            .field("used", &self.used)
-            .finish_non_exhaustive()
-    }
 }
 
 /// What a read found.

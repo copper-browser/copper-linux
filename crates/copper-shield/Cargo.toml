@@ -14,7 +14,9 @@ serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"
 
-[dev-dependencies]
+# The WebKitGTK test (tests/webkit.rs) is Linux-only; elsewhere the target
+# only prints SKIPPED, so these never build on Windows.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
 copper-engine-webkitgtk.workspace = true
 gtk4.workspace = true
 glib.workspace = true

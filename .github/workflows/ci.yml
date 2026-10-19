@@ -2,7 +2,8 @@ name: ci
 
 # Every push to main and every pull request: rustfmt, clippy -D warnings and
 # the whole test suite on Ubuntu 24.04, x86_64 and aarch64 (native runners,
-# no containers). GUI and WebKit tests run on a headless weston (pixman
+# no containers), plus clippy and tests of the shared toolkit-free crates on
+# windows-latest. GUI and WebKit tests run on a headless weston (pixman
 # renderer, 1440x900) with a private session D-Bus — the same setup bin/dbx
 # gives the devbox. Packaging files are linted here too; the .deb and the
 # Flatpak themselves are built by release.yml.
@@ -155,6 +156,40 @@ jobs:
       - name: weston log
         if: failure()
         run: cat "$RUNNER_TEMP/xdg/weston.log" || true
+
+  # The toolkit-free crates shared with copper-windows, on Windows itself.
+  # GTK/WebKit crates are left out (they are Linux-only); the WebKitGTK test
+  # targets in copper-pagejs and copper-shield print SKIPPED off Linux. The
+  # copper-cloud live test skips without COPPER_CLOUD_BIN (no server or
+  # PostgreSQL here) and the dev-instance test skips when the instance is
+  # unreachable; neither sets a REQUIRE flag on this job.
+  windows:
+    name: clippy + test (windows-latest, shared crates)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Clippy
+        run: >-
+          cargo clippy --locked
+          -p copper-core -p copper-engine -p copper-pagejs -p copper-shield
+          -p copper-creds -p copper-import -p copper-cloud -p copper-mcp
+          --all-targets -- -D warnings
+
+      # --no-fail-fast: one failing test binary must not hide the others.
+      - name: Test
+        run: >-
+          cargo test --locked --no-fail-fast
+          -p copper-core -p copper-engine -p copper-pagejs -p copper-shield
+          -p copper-creds -p copper-import -p copper-cloud -p copper-mcp
 
   packaging-lint:
     runs-on: ubuntu-24.04

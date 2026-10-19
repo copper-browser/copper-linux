@@ -28,7 +28,6 @@ use copper_core::session::Space;
 use copper_core::{DataFile, Paths, Store};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
@@ -71,10 +70,30 @@ fn server_bin() -> Option<PathBuf> {
     let path = std::env::var_os("COPPER_CLOUD_BIN")
         .map(PathBuf::from)
         .or_else(|| {
-            std::env::var_os("HOME")
-                .map(|h| PathBuf::from(h).join("src/copper-cloud-ref/target/debug/copper-cloud"))
+            copper_core::platform::home_dir().map(|h| {
+                h.join(format!(
+                    "src/copper-cloud-ref/target/debug/copper-cloud{}",
+                    std::env::consts::EXE_SUFFIX
+                ))
+            })
         })?;
     path.is_file().then_some(path)
+}
+
+/// A secret file is 0600 on Unix. Windows has no mode bits: the store relies
+/// on the per-user profile ACL there, so only existence is checked.
+fn assert_private(path: &Path) {
+    assert!(path.is_file(), "{} missing", path.display());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o600,
+            "{}",
+            path.display()
+        );
+    }
 }
 
 fn free_port() -> u16 {
@@ -617,10 +636,7 @@ async fn scenario(server: &Server) {
     assert_eq!(account.email, email);
     assert!(a.is_signed_in());
     let cloud_json = a_store.path(DataFile::Cloud);
-    assert_eq!(
-        std::fs::metadata(&cloud_json).unwrap().permissions().mode() & 0o777,
-        0o600
-    );
+    assert_private(&cloud_json);
     let saved: Value = serde_json::from_slice(&std::fs::read(&cloud_json).unwrap()).unwrap();
     assert!(saved["token"].as_str().is_some_and(|t| !t.is_empty()));
     assert_eq!(saved["link"]["fingerprint"], real_fp.as_str());
@@ -996,10 +1012,7 @@ async fn scenario(server: &Server) {
     );
     assert_eq!(provided.agent_max_turns(), Some(42));
     let cache = a_store.path(DataFile::CloudIntelligence);
-    assert_eq!(
-        std::fs::metadata(&cache).unwrap().permissions().mode() & 0o777,
-        0o600
-    );
+    assert_private(&cache);
     assert_eq!(
         CloudIntelligence::new(a.clone())
             .provided()

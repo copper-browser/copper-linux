@@ -2,11 +2,13 @@
 //!
 //! * [`Paths`] — `$XDG_DATA_HOME/copper` (default `~/.local/share/copper`)
 //!   for data, `$XDG_CONFIG_HOME/copper` (default `~/.config/copper`) for
-//!   `settings.json`. `COPPER_WORLD=<name>` puts a test run in
+//!   `settings.json`; on Windows both are `%LOCALAPPDATA%\Copper\Data`
+//!   ([`crate::platform`]). `COPPER_WORLD=<name>` puts a test run in
 //!   `copper-<name>` folders so it never touches the real ones (the Mac's
 //!   `SEARCH_PROBE` worlds).
 //! * [`DataFile`] — every file, its relative path, its permissions (0600 for
-//!   anything holding a secret) and its layout.
+//!   anything holding a secret on Unix; the per-user profile ACL on Windows)
+//!   and its layout.
 //! * [`Store`] — typed load/save. A save writes a sibling temporary, fsyncs,
 //!   renames over the file and fsyncs the folder; the previous good version
 //!   is kept as `<file>.bak`. A load that finds the file corrupt sets it aside
@@ -179,40 +181,42 @@ impl Paths {
         }
     }
 
-    /// From the environment: `XDG_DATA_HOME`/`XDG_CONFIG_HOME` (absolute
-    /// only, per the XDG spec), else `~/.local/share` / `~/.config`; folder
-    /// `copper`, or `copper-<world>` with `COPPER_WORLD` set.
+    /// From the environment, per OS (see [`crate::platform`]).
+    ///
+    /// Linux: `XDG_DATA_HOME`/`XDG_CONFIG_HOME` (absolute only, per the XDG
+    /// spec), else `~/.local/share` / `~/.config`; folder `copper`, or
+    /// `copper-<world>` with `COPPER_WORLD` set.
+    ///
+    /// Windows: `%LOCALAPPDATA%\Copper\Data` for both (`Copper-<world>` with
+    /// `COPPER_WORLD`); same file names and formats as Linux and the Mac.
     pub fn from_env() -> Self {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("/"));
-        let xdg = |var: &str, fallback: &str| -> PathBuf {
-            std::env::var_os(var)
-                .map(PathBuf::from)
-                .filter(|p| p.is_absolute())
-                .unwrap_or_else(|| home.join(fallback))
-        };
-        let name = match std::env::var("COPPER_WORLD") {
-            Ok(w) if !w.trim().is_empty() => {
-                let clean: String = w
-                    .to_lowercase()
-                    .chars()
-                    .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
-                    .collect();
-                format!(
-                    "copper-{}",
-                    if clean.is_empty() {
-                        "test".into()
-                    } else {
-                        clean
-                    }
-                )
+        #[cfg(windows)]
+        {
+            let data = crate::platform::WindowsLayout::from_env().data();
+            Paths {
+                config: data.clone(),
+                data,
             }
-            _ => "copper".to_string(),
-        };
-        Paths {
-            data: xdg("XDG_DATA_HOME", ".local/share").join(&name),
-            config: xdg("XDG_CONFIG_HOME", ".config").join(&name),
+        }
+        #[cfg(not(windows))]
+        {
+            let home = std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("/"));
+            let xdg = |var: &str, fallback: &str| -> PathBuf {
+                std::env::var_os(var)
+                    .map(PathBuf::from)
+                    .filter(|p| p.is_absolute())
+                    .unwrap_or_else(|| home.join(fallback))
+            };
+            let name = match crate::platform::world() {
+                Some(w) => format!("copper-{w}"),
+                None => "copper".to_string(),
+            };
+            Paths {
+                data: xdg("XDG_DATA_HOME", ".local/share").join(&name),
+                config: xdg("XDG_CONFIG_HOME", ".config").join(&name),
+            }
         }
     }
 
@@ -537,7 +541,16 @@ fn write_file(path: &Path, bytes: &[u8], secret: bool) -> Result<(), StoreError>
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
         }
-        fs::rename(&tmp, path)?;
+        // Windows has no mode bits. The store lives under the user's
+        // `%LOCALAPPDATA%`, whose inherited ACL already grants only the user,
+        // SYSTEM and Administrators — the same reach as 0600 under a 0700
+        // home — so secret files rely on that ACL and get no extra DACL.
+        #[cfg(windows)]
+        let _ = secret;
+        replace(&tmp, path)?;
+        // Linux fsyncs the folder so the rename is durable. Windows cannot
+        // open a folder this way (it needs FILE_FLAG_BACKUP_SEMANTICS), and
+        // NTFS journals the rename itself, so the failed open is ignored.
         if let Ok(d) = File::open(dir) {
             let _ = d.sync_all();
         }
@@ -548,4 +561,41 @@ fn write_file(path: &Path, bytes: &[u8], secret: bool) -> Result<(), StoreError>
         return Err(StoreError::io(path, e));
     }
     Ok(())
+}
+
+/// Rename `tmp` over `path`.
+#[cfg(not(windows))]
+fn replace(tmp: &Path, path: &Path) -> std::io::Result<()> {
+    fs::rename(tmp, path)
+}
+
+/// Rename `tmp` over `path` (std's rename replaces an existing file on
+/// Windows too). Windows refuses the replace while another process holds
+/// `path` open without `FILE_SHARE_DELETE` — typically an antivirus scan or
+/// the search indexer, for a few milliseconds — with `ERROR_ACCESS_DENIED` or
+/// `ERROR_SHARING_VIOLATION`. Retry those with a growing pause, about two
+/// seconds in all; any other error, or one that outlasts the retries, is
+/// returned.
+#[cfg(windows)]
+fn replace(tmp: &Path, path: &Path) -> std::io::Result<()> {
+    const ERROR_ACCESS_DENIED: i32 = 5;
+    const ERROR_SHARING_VIOLATION: i32 = 32;
+    const ATTEMPTS: u32 = 20;
+    let mut attempt = 0;
+    loop {
+        match fs::rename(tmp, path) {
+            Ok(()) => return Ok(()),
+            Err(e)
+                if attempt + 1 < ATTEMPTS
+                    && matches!(
+                        e.raw_os_error(),
+                        Some(ERROR_ACCESS_DENIED | ERROR_SHARING_VIOLATION)
+                    ) =>
+            {
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(10 * u64::from(attempt)));
+            }
+            Err(e) => return Err(e),
+        }
+    }
 }

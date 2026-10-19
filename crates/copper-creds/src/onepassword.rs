@@ -8,8 +8,10 @@
 //! through the environment or stdin, never argv; items are read into memory
 //! only and wiped on lock. Tokens kept across launches sit in 0600 files.
 //!
-//! Where `op` is: `COPPER_OP_PATH` (`none` = absent), `~/.local/bin/op`,
-//! then `$PATH`.
+//! Where `op` is: `COPPER_OP_PATH` (`none` = absent), then on Linux
+//! `~/.local/bin/op` and `$PATH`, on Windows `%PATH%` (`op.exe`) and the
+//! usual install folders (winget, `%ProgramFiles%\1Password CLI`…; see
+//! `process::find_tool`).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -179,7 +181,9 @@ impl OpConfig {
     }
 }
 
-/// Where `op` lives.
+/// Where `op` lives: `override_path` (`COPPER_OP_PATH`, `~` expanded;
+/// `none` = treat as absent), then where users install it (see the module
+/// docs).
 pub fn locate(
     override_path: Option<&str>,
     home: Option<&Path>,
@@ -189,23 +193,16 @@ pub fn locate(
         if raw == "none" {
             return None;
         }
-        let path = process::expand_tilde(raw, home);
-        if process::is_executable(&path) {
+        if let Some(path) = process::resolve(&process::expand_tilde(raw, home)) {
             return Some(path);
         }
     }
-    if let Some(home) = home {
-        let local = home.join(".local/bin/op");
-        if process::is_executable(&local) {
-            return Some(local);
-        }
-    }
-    process::in_path("op", path_var)
+    process::find_tool("op", home, path_var)
 }
 
 /// `locate` with this process's environment.
 pub fn executable() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let home = process::home_dir();
     locate(
         std::env::var("COPPER_OP_PATH").ok().as_deref(),
         home.as_deref(),

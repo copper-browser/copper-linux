@@ -3,8 +3,13 @@
 //! The replay keeps windows, tabs, navigation entries, pins, groups and
 //! last-active times. `Tabs_*` is the recently-closed list, whose ids
 //! restart every launch: it is never replayed as open tabs.
+//!
+//! A running browser keeps its session file open. When it won't share it
+//! (Windows) and nothing else could be read, the read is
+//! [`ImportError::InUse`]: close the browser and try again.
 
 use std::collections::HashMap;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use copper_core::groups::TabGroup;
@@ -69,7 +74,7 @@ pub fn read(root: &Path, source: &str) -> Result<Vec<ImportedSpace>, ImportError
         return Err(ImportError::Unreadable(format!("{source}'s session files")));
     }
     let mut spaces = Vec::new();
-    let (mut read_any, mut any_files) = (false, false);
+    let (mut read_any, mut any_files, mut in_use) = (false, false, false);
     for profile in &profiles {
         let profile_root = root.join(profile);
         let sessions = profile_root.join("Sessions");
@@ -79,13 +84,15 @@ pub fn read(root: &Path, source: &str) -> Result<Vec<ImportedSpace>, ImportError
             profile_root.clone()
         };
         any_files |= has_session_files(&folder);
-        if let Some((found, any)) = parse(&folder, &profile_root, Some(profile), source) {
+        if let Some((found, any)) =
+            parse(&folder, &profile_root, Some(profile), source, &mut in_use)
+        {
             read_any |= any;
             spaces.extend(found);
         }
     }
     if !read_any && any_files {
-        return Err(ImportError::Unreadable(format!("{source}'s session files")));
+        return Err(unreadable(format!("{source}'s session files"), in_use));
     }
     Ok(spaces)
 }
@@ -102,10 +109,33 @@ pub fn read_profile(profile_dir: &Path, source: &str) -> Result<Vec<ImportedSpac
     } else {
         profile_dir.to_path_buf()
     };
-    match parse(&folder, profile_dir, profile.as_deref(), source) {
+    let mut in_use = false;
+    match parse(
+        &folder,
+        profile_dir,
+        profile.as_deref(),
+        source,
+        &mut in_use,
+    ) {
         Some((spaces, true)) => Ok(spaces),
-        _ => Err(ImportError::Unreadable("session files".into())),
+        _ => Err(unreadable("session files".into(), in_use)),
     }
+}
+
+/// Nothing could be read: because the browser holds the files, or not.
+fn unreadable(what: String, in_use: bool) -> ImportError {
+    if in_use {
+        ImportError::InUse(what)
+    } else {
+        ImportError::Unreadable(what)
+    }
+}
+
+/// A session file's bytes from a copy, noting when the browser holds it.
+fn read_noting(file: &Path, in_use: &mut bool) -> Option<Vec<u8>> {
+    copy_read(file)
+        .map_err(|e: io::Error| *in_use |= crate::copy::is_in_use(&e))
+        .ok()
 }
 
 fn candidates(folder: &Path, prefix: &str, legacy: &str) -> Vec<PathBuf> {
@@ -179,6 +209,7 @@ fn parse(
     profile_root: &Path,
     profile: Option<&str>,
     source: &str,
+    in_use: &mut bool,
 ) -> Option<(Vec<ImportedSpace>, bool)> {
     let sessions = candidates(folder, SESSION_PREFIX, "Current Session");
     let closed = candidates(folder, TABS_PREFIX, "Current Tabs");
@@ -187,9 +218,8 @@ fn parse(
     }
     let mut commands = None;
     for file in &sessions {
-        if let Some(parsed) = copy_read(file)
-            .ok()
-            .and_then(|d| parse_commands(&d, Kind::Session))
+        if let Some(parsed) =
+            read_noting(file, in_use).and_then(|d| parse_commands(&d, Kind::Session))
         {
             commands = Some(parsed);
             break;
@@ -199,7 +229,7 @@ fn parse(
         // Readable, but only a closed-tabs list: nothing open to bring.
         let readable = closed
             .first()
-            .and_then(|f| copy_read(f).ok())
+            .and_then(|f| read_noting(f, in_use))
             .and_then(|d| parse_commands(&d, Kind::Tabs))
             .is_some();
         return Some((Vec::new(), readable));

@@ -686,8 +686,5 @@ pub(crate) fn sorted_pretty(value: &Value) -> String {
 }
 
 fn expand_tilde(path: &str) -> std::path::PathBuf {
-    match (path.strip_prefix("~/"), std::env::var_os("HOME")) {
-        (Some(rest), Some(home)) => std::path::PathBuf::from(home).join(rest),
-        _ => std::path::PathBuf::from(path),
-    }
+    copper_core::platform::expand_tilde(path)
 }
