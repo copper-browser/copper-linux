@@ -218,15 +218,15 @@ pub struct SyncCursor {
     pub history_seq: i64,
 }
 
-/// What a sign-up, sign-in or pairing answers.
+/// What a sign-up, sign-in, pairing or single sign-on answers.
 #[derive(Deserialize)]
-struct Signed {
-    token: String,
-    user: MeUser,
+pub(crate) struct Signed {
+    pub(crate) token: String,
+    pub(crate) user: MeUser,
     #[serde(default)]
-    device: Option<MeDevice>,
+    pub(crate) device: Option<MeDevice>,
     #[serde(default)]
-    gate_key: Option<String>,
+    pub(crate) gate_key: Option<String>,
 }
 
 /// An answer: its status and body.
@@ -559,7 +559,7 @@ impl CloudClient {
 
     // MARK: linking
 
-    fn pin_for(
+    pub(crate) fn pin_for(
         endpoint: &Endpoint,
         fingerprint: Option<&str>,
         trusting: Option<&str>,
@@ -586,7 +586,7 @@ impl CloudClient {
             let mut f = Failure::new(
                 0,
                 "untrusted",
-                "This code has no fingerprint to pin the instance's certificate by, and Copper never falls back to the system's trust. Compare the fingerprint below with `copper-cloud doctor` on the server before trusting it.",
+                "This code has no fingerprint to pin the instance's certificate by, and no public certificate authority vouches for it. Compare the fingerprint below with `copper-cloud doctor` on the server before trusting it.",
             );
             f.seen = Some(seen);
             return f;
@@ -594,7 +594,11 @@ impl CloudClient {
         probe.explain(error)
     }
 
-    async fn healthz(http: &reqwest::Client, probe: &Trust, endpoint: &Endpoint) -> Result<()> {
+    pub(crate) async fn healthz(
+        http: &reqwest::Client,
+        probe: &Trust,
+        endpoint: &Endpoint,
+    ) -> Result<()> {
         let resp = http
             .get(endpoint.url("healthz"))
             .timeout(REQUEST_TIMEOUT)
@@ -640,6 +644,17 @@ impl CloudClient {
     pub async fn connect_code(&self, text: &str, trusting: Option<&str>) -> Result<Code> {
         let current = self.link();
         let code = parse_code(text, current.as_ref()).ok_or_else(|| {
+            if let Some(sso) = crate::link::parse_sso_link(text) {
+                return Failure::new(
+                    0,
+                    "sso_link",
+                    format!(
+                        "That's a sign-in link for {} — sign in with your company account (Continue with {})",
+                        sso.host(),
+                        crate::sso::provider_title(&sso.provider)
+                    ),
+                );
+            }
             Failure::new(
                 0,
                 "code",
@@ -728,7 +743,7 @@ impl CloudClient {
         let probe = Trust::new(pin.as_deref());
         let http = probe.http_client();
         Self::healthz(&http, &probe, &code.endpoint).await?;
-        let device = json!({"id": wire_id(&self.device_id()), "name": self.device_name()});
+        let device = self.device_body();
         let resp = http
             .post(code.endpoint.url("v1/auth/pair"))
             .header("Accept", "application/json")
@@ -744,16 +759,34 @@ impl CloudClient {
         }
         let answer: Signed = serde_json::from_slice(&body)
             .map_err(|e| Failure::decode(status, "the pairing code", e))?;
+        self.keep_signed_in(&code.endpoint, pin, &probe, answer)
+            .await
+            .map(|_| ())
+    }
+
+    /// What pairing and single sign-on share once the server said yes: the
+    /// link (the address, the answer's `gate_key` as the key, the pin), the
+    /// account and the token are kept in one write, and the device id (and
+    /// name) the server answered with are adopted — a code an integration
+    /// minted for a device decides which device this is. The session this
+    /// Copper had before is ended; the event stream starts.
+    pub(crate) async fn keep_signed_in(
+        &self,
+        endpoint: &Endpoint,
+        pin: Option<String>,
+        probe: &Trust,
+        answer: Signed,
+    ) -> Result<Account> {
         let key = answer.gate_key.unwrap_or_default().trim().to_string();
         if key.is_empty() || key.chars().any(char::is_whitespace) {
             return Err(Failure::new(
                 0,
                 "decode",
-                "The server paired this Copper but sent no instance credential",
+                "The server signed this Copper in but sent no instance credential",
             ));
         }
         let link = Link {
-            endpoint: code.endpoint.clone(),
+            endpoint: endpoint.clone(),
             key,
             fingerprint: pin,
         };
@@ -779,6 +812,16 @@ impl CloudClient {
             s.file.link = Some(link.to_saved());
             s.file.account = Some(account.clone());
             s.file.token = Some(answer.token.clone());
+            if let Some(device) = &answer.device {
+                if !device.id.trim().is_empty() {
+                    s.file.device_id = device.id.trim().to_ascii_uppercase();
+                }
+                if let Some(name) = device.name.as_deref().map(str::trim)
+                    && !name.is_empty()
+                {
+                    s.file.device_name = name.to_string();
+                }
+            }
             s.trust = probe.fresh();
             s.http = s.trust.http_client();
             s.reachable = true;
@@ -790,13 +833,13 @@ impl CloudClient {
         }
         self.start_events();
         self.publish();
-        tracing::info!(host = %link.host(), "paired and signed in");
+        tracing::info!(host = %link.host(), "linked and signed in");
         let me = self.clone();
         tokio::spawn(async move {
             me.load_info(true).await;
         });
         let _ = self.me().await;
-        Ok(())
+        Ok(self.account().unwrap_or(account))
     }
 
     fn account_from(&self, user: &MeUser, device: Option<&MeDevice>) -> Account {
@@ -986,7 +1029,7 @@ impl CloudClient {
         Ok(email.to_string())
     }
 
-    fn device_body(&self) -> Value {
+    pub(crate) fn device_body(&self) -> Value {
         json!({"id": wire_id(&self.device_id()), "name": self.device_name()})
     }
 

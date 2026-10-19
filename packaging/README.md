@@ -28,7 +28,7 @@ packaging/
   build-deb.sh                   cargo build --release + cargo deb → target/debian/copper_<v>-1_<arch>.deb
   debian/copper.apparmor         /etc/apparmor.d/copper — lets WebKit's bwrap sandbox make a user namespace
   debian/maintainer-scripts/     postinst (alternatives + load profile), prerm, postrm
-  share/com.copperbrowser.Copper.desktop        desktop entry (http/https/text/html handler)
+  share/com.copperbrowser.Copper.desktop        desktop entry (http/https/copper/text/html handler)
   share/com.copperbrowser.Copper.metainfo.xml   AppStream
   icons/com.copperbrowser.Copper.svg            scalable icon (generated)
   icons/hicolor/{64,128,256,512}/apps/*.png     raster icons (generated)
@@ -43,12 +43,17 @@ packaging/
 
 The canvas board page lives in [copper-browser/canvas-app](https://github.com/copper-browser/canvas-app),
 the one source for Copper on every platform; its embed build `dist/canvas.html` is shipped here as
-the same bytes (`crates/copper-app/src/canvas/resources/canvas.html`, the commit in
+the same bytes (`crates/copper-shell-core/src/canvas/resources/canvas.html`, the commit in
 `CANVAS_APP_REF` beside it). Re-sync with `packaging/sync-canvas-bundle.sh --canvas-app <ref>`
 (a canvas-app commit, tag or branch, pinned as a commit). The "Switching from Chrome" guide still
 comes from the macOS repo: `packaging/sync-canvas-bundle.sh <mac-checkout> [<git-ref>]` (e.g.
 `origin/fork`) copies it with the page. `--check` only compares. Then build and run the canvas
 checks.
+
+Nobody edits the page here. Every hour, `.github/workflows/canvas.yml` checks canvas-app `main`.
+When it has moved, the workflow pushes the pinned branch `canvas/take-canvas-app` and keeps one
+issue, "Canvas: canvas-app moved on", open with a link that opens the PR. Pull requests that touch
+the vendored page must match its pin.
 
 ## The `.deb`
 
@@ -64,7 +69,8 @@ What it installs:
 
 - `/usr/bin/copper`
 - `/usr/share/applications/com.copperbrowser.Copper.desktop` — `Categories=Network;WebBrowser;`,
-  `MimeType=text/html;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;`
+  `MimeType=text/html;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;x-scheme-handler/copper;`
+  (`copper://cloud/join?code=…` deep links from Copper Cloud)
 - `/usr/share/icons/hicolor/{64x64,128x128,256x256,512x512}/apps/com.copperbrowser.Copper.png`
   and `/usr/share/icons/hicolor/scalable/apps/com.copperbrowser.Copper.svg`
 - `/usr/share/metainfo/com.copperbrowser.Copper.metainfo.xml`
@@ -110,7 +116,9 @@ Measured on the devbox (Ubuntu 24.04, aarch64) with the WebKit spike
 (`spikes/hello --selftest`) installed as `/usr/bin/copper`: 9/9 pass with the
 profile loaded; with it unloaded, `bwrap: setting up uid map: Permission denied`
 and exit 133. The Flatpak does not need it (its sandbox goes through the
-Flatpak portal). Never use `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS` instead.
+Flatpak portal). Never use `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS` instead
+(the one exception, a disposable container that is itself the sandbox, is in
+[docs/headless.md](../docs/headless.md#the-webkit-sandbox)).
 The profile uses `abi <abi/4.0>`, so it needs AppArmor 4 (Ubuntu 24.04, Debian 13).
 
 ### Why a shim manifest

@@ -112,7 +112,11 @@ The `copper` command also talks to the running window: `copper tabs`,
 `copper run "…"`, `copper snapshot` and so on. Run `copper help` for the
 list.
 
-Details: [docs/agents.md](docs/agents.md).
+Copper also runs with no display, as an agent's own browser: a headless
+compositor, a pre-written `agent.json`, and `copper cloud pair` to sign the
+profile in to Copper Cloud before it starts.
+
+Details: [docs/agents.md](docs/agents.md), [docs/headless.md](docs/headless.md).
 
 ## Keyboard
 
@@ -238,7 +242,7 @@ Packaging, releases and CI are described in
 | `crates/copper-mcp` | MCP server, tools and the `copper` CLI |
 | `crates/copper-app` | the GTK shell; binary `copper` |
 | `packaging/` | `.deb`, Flatpak, desktop entry, icons, AppArmor profile |
-| `docs/` | agents, Copper Cloud, the engine |
+| `docs/` | agents, headless use, Copper Cloud, the engine |
 | `bin/dbx` | run a command on the Linux build host |
 
 ## License

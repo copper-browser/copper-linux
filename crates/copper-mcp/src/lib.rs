@@ -11,7 +11,8 @@
 //!   UI thread (GTK's main loop): [`Mcp::serve`] is a `!Send` future the app
 //!   spawns there; tools reach the browser only through [`host::Host`].
 //! * [`bridge`] — `copper --mcp-stdio`: stdin/stdout JSON-RPC proxied to the
-//!   running instance. [`cli`] — the `copper` command-line verbs.
+//!   running instance. [`cli`] — the `copper` command-line verbs;
+//!   [`cloud_cli`] — `copper cloud pair|sso|status`, with no window.
 //!
 //! Formats follow macOS Copper (`Fork/MCP/*.swift`) byte for byte where an
 //! agent can see them: tool names, descriptions and schemas come straight
@@ -22,6 +23,7 @@ pub mod bridge;
 pub mod catalogue;
 pub mod cli;
 pub mod client;
+pub mod cloud_cli;
 pub mod config;
 pub mod drive;
 pub mod host;

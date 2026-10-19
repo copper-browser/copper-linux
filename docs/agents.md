@@ -157,7 +157,9 @@ the server's instructions tell the agent to reach for them first:
 Jev needs a Jev key (`ts-…`). It comes from `intelligence.json` in Copper's
 data folder (the same file the Mac uses), or from your Copper Cloud if it
 provides one. Typing and `jev_extract` also need a text model, configured in
-the same file. DONE is the model's own claim, so check the page.
+the same file (or, for a headless Copper, with `COPPER_ROUTER_URL` and
+`COPPER_ROUTER_KEY`: [headless.md](headless.md#model-keys)). DONE is the
+model's own claim, so check the page.
 
 ## The command line
 
@@ -178,6 +180,10 @@ copper call browser_navigate '{"url":"https://example.com"}'
 `copper help` lists everything. `--json` prints the raw result, and
 `--tab ID` works in another tab for one call. With the Flatpak, the same
 commands are `flatpak run com.copperbrowser.Copper tabs` and so on.
+
+To run Copper with no display, as an agent's own browser (a container or a
+microVM, a pre-written `agent.json`, `copper cloud pair` before the first
+start), see [headless.md](headless.md).
 
 ## Not on Linux yet
 

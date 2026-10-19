@@ -50,6 +50,8 @@ pub mod client;
 pub mod error;
 pub mod intelligence;
 pub mod link;
+pub mod offline;
+pub mod sso;
 pub mod sync;
 pub mod tls;
 pub mod ws;
@@ -58,5 +60,9 @@ pub use canvas::CanvasApi;
 pub use client::{Account, CloudClient, CloudEvent, CloudStatus, Feature, ServerInfo};
 pub use error::{Failure, Result};
 pub use intelligence::CloudIntelligence;
-pub use link::{Code, Endpoint, Link, PairingCode, parse_code, parse_link_code};
+pub use link::{
+    Code, Endpoint, JoinCode, Link, PairingCode, SsoLink, deep_link_code, parse_code,
+    parse_join_code, parse_link_code, parse_sso_link,
+};
+pub use sso::{SsoCancel, SsoInfo, SsoOutcome, SsoProvider};
 pub use sync::{BrowserState, Domain, SyncEngine, SyncStatus};

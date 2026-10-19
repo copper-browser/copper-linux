@@ -593,7 +593,8 @@ async fn scenario(server: &Server) {
     let err = refused.connect(wrong_link.clone(), None).await.unwrap_err();
     assert_eq!(err.code, "fingerprint", "{err:?}");
     assert!(!refused.is_linked(), "a refused link is not kept");
-    // A code without a fingerprint: never system trust; the fingerprint shown is offered.
+    // A code without a fingerprint: no authority vouches for a self-signed
+    // certificate; the fingerprint shown is offered.
     let mut bare = link.clone();
     bare.fingerprint = None;
     let err = refused.connect(bare.clone(), None).await.unwrap_err();
@@ -682,6 +683,8 @@ async fn scenario(server: &Server) {
     let b_account = b.account().unwrap();
     assert_eq!(b_account.user_id, a.account().unwrap().user_id);
     assert_ne!(b_account.device_id, a.account().unwrap().device_id);
+    // The answer's device id is adopted (a code bound to a device decides it).
+    assert_eq!(b.device_id(), b_account.device_id);
     // Used once: it doesn't work again.
     let c = CloudClient::open(store(tmp.path(), "c")).unwrap();
     let err = c.connect_code(&minted.link, None).await.unwrap_err();
@@ -693,6 +696,46 @@ async fn scenario(server: &Server) {
     assert_eq!(err.code, "fingerprint");
     a.revoke_pairing_code(&other.id).await.unwrap();
     assert!(a.pairing_codes().await.unwrap().is_empty());
+
+    // --- Device D: `copper cloud pair` with no window — only the files.
+    let for_d = a.mint_pairing_code(None).await.unwrap();
+    let d_store = store(tmp.path(), "d");
+    let joined = copper_cloud::offline::pair(
+        d_store.clone(),
+        &for_d.link,
+        &copper_cloud::offline::JoinOptions {
+            sync: copper_cloud::offline::SyncChoice::parse("tabs").unwrap(),
+            name: Some("Headless D".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("offline pairing");
+    assert_eq!(joined.email, a.account().unwrap().email);
+    assert_eq!(joined.sync, vec!["tabs"]);
+    assert_eq!(joined.device_name, "Headless D");
+    let d_saved = std::fs::read_to_string(d_store.path(DataFile::Cloud)).unwrap();
+    let d_token = serde_json::from_str::<Value>(&d_saved).unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let shown = serde_json::to_string(&joined).unwrap();
+    assert!(!shown.contains(&d_token), "never the token");
+    let st = copper_cloud::offline::status(&d_store);
+    assert!(st.signed_in && st.pinned && st.sync.on && st.sync.tabs && !st.sync.history);
+    assert_eq!(st.device_id, joined.device_id);
+    let listed = a.devices().await.unwrap();
+    assert!(
+        listed
+            .iter()
+            .any(|d| d.name.as_deref() == Some("Headless D")),
+        "{listed:?}"
+    );
+    // A window opening that profile is signed in and syncs only tabs.
+    let d = CloudClient::open(d_store.clone()).unwrap();
+    assert!(d.is_signed_in());
+    d.me().await.unwrap();
+    a.remove_device(&joined.device_id).await.unwrap();
 
     // --- Sync: two devices with different starting states.
     let now = copper_core::date::now_unix();

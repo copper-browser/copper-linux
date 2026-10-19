@@ -754,6 +754,8 @@ impl<P: Platform> CanvasHost<P> {
             "state": snapshot.as_deref().map(b64),
             "online": remote.is_some(),
             "readOnly": false,
+            // The title pill's "On this Mac" is Copper for macOS's; say ours (canvas-app init.place).
+            "place": "on this computer",
         });
         let ups: Vec<String> = updates.iter().map(|u| b64(u)).collect();
         let theme = current::<P>()

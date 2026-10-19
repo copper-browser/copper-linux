@@ -117,7 +117,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "backstage"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "gdk4",
  "gio",
@@ -270,7 +270,7 @@ dependencies = [
 
 [[package]]
 name = "copper-app"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "copper-cloud",
@@ -299,7 +299,7 @@ dependencies = [
 
 [[package]]
 name = "copper-cloud"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "copper-core",
@@ -318,13 +318,14 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+ "webpki-roots",
  "windows-sys 0.61.2",
  "yrs",
 ]
 
 [[package]]
 name = "copper-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "directories",
@@ -339,7 +340,7 @@ dependencies = [
 
 [[package]]
 name = "copper-creds"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "hmac",
  "oo7",
@@ -358,7 +359,7 @@ dependencies = [
 
 [[package]]
 name = "copper-engine"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "directories",
  "futures-channel",
@@ -370,7 +371,7 @@ dependencies = [
 
 [[package]]
 name = "copper-engine-webkitgtk"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "copper-engine",
  "futures-channel",
@@ -385,7 +386,7 @@ dependencies = [
 
 [[package]]
 name = "copper-import"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "aes",
  "cbc",
@@ -405,10 +406,11 @@ dependencies = [
 
 [[package]]
 name = "copper-mcp"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "copper-cloud",
  "copper-core",
  "copper-engine",
  "copper-pagejs",
@@ -419,6 +421,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "url",
@@ -428,7 +431,7 @@ dependencies = [
 
 [[package]]
 name = "copper-pagejs"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "glib",
  "gtk4",
@@ -459,7 +462,7 @@ dependencies = [
 
 [[package]]
 name = "copper-shield"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "copper-core",
  "copper-engine",
@@ -1154,7 +1157,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "hello"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "gdk4",
  "gio",

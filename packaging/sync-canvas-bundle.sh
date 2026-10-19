@@ -8,7 +8,7 @@
 #
 # The board page lives in copper-browser/canvas-app, the one source for Copper on every
 # platform; its embed build is `dist/canvas.html`. Linux ships those bytes as
-# `crates/copper-app/src/canvas/resources/canvas.html` (include_str!), and records the
+# `crates/copper-shell-core/src/canvas/resources/canvas.html` (include_str!), and records the
 # canvas-app commit in `CANVAS_APP_REF` beside it. --canvas-app fetches that build (a ref is
 # resolved to a commit) and pins it. The macOS form also copies the "Switching from Chrome"
 # guide, which still lives in the Mac app (`Sources/Search/Fork/Canvas/Resources/`); nothing
@@ -24,7 +24,7 @@ fi
 if [[ ${1:-} == --canvas-app ]]; then
   [[ $# -eq 2 ]] || { sed -n '2,16p' "$0" >&2; exit 2; }
   root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-  dest="$root/crates/copper-app/src/canvas/resources"
+  dest="$root/crates/copper-shell-core/src/canvas/resources"
   repo=copper-browser/canvas-app
   sha=$(git ls-remote "https://github.com/$repo.git" "$2" | head -1 | cut -f1)
   [[ $2 =~ ^[0-9a-f]{40}$ ]] && sha=$2
@@ -54,7 +54,7 @@ fi
 mac=$1
 ref=${2:-}
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-dest="$root/crates/copper-app/src/canvas/resources"
+dest="$root/crates/copper-shell-core/src/canvas/resources"
 files=(canvas.html switching-from-chrome.json)
 src_dir=Sources/Search/Fork/Canvas/Resources
 
