@@ -1,0 +1,20 @@
+{
+  "schema": "copper-addon/1",
+  "id": "example.hello",
+  "name": "Hello addon",
+  "version": "1.0.0",
+  "slot": "agent-sidebar",
+  "entry": "index.html",
+  "description": "Calls every bridge method and prints what came back. Copper's own test fixture.",
+  "author": "Copper",
+  "bridge": 1,
+  "permissions": {
+    "hosts": ["example.com", "127.0.0.1:8765"],
+    "capabilities": ["identity", "storage", "fetch", "oauth", "open-url", "page", "agent"]
+  },
+  "settings": {
+    "greeting": { "type": "string", "default": "Hello from the addon’s settings", "title": "Greeting" },
+    "accent": { "type": "string", "default": "#b4532a", "title": "Accent colour" }
+  },
+  "platforms": ["mac", "linux", "windows"]
+}

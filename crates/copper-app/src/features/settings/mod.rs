@@ -42,7 +42,7 @@ pub fn register(shell: &Shell) {
     page(
         shell,
         "extensions",
-        "Extensions",
+        "Addons", // Addons: the page is Settings › Addons (its id stays `extensions`)
         "application-x-addon-symbolic",
         extensions,
     );
@@ -307,17 +307,6 @@ fn appearance(shell: &Shell) -> adw::PreferencesPage {
     page
 }
 
-fn extensions(_shell: &Shell) -> adw::PreferencesPage {
-    let page = adw::PreferencesPage::new();
-    let g = group(None);
-    let status = adw::StatusPage::new();
-    status.set_icon_name(Some("application-x-addon-symbolic"));
-    status.set_title("Extensions");
-    status.set_description(Some(
-        "Extensions aren’t available on Linux: WebKitGTK, the engine Copper runs on here, has no support for web extensions.",
-    ));
-    status.add_css_class("compact");
-    g.add(&status);
-    page.add(&g);
-    page
+fn extensions(shell: &Shell) -> adw::PreferencesPage {
+    crate::addons::settings::page(shell) // Addons: Settings › Addons (the web-extensions note is its foot)
 }

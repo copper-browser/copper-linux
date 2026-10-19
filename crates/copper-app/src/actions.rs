@@ -194,6 +194,7 @@ pub fn register_lanes(shell: &Shell) {
     crate::cloud::register(shell);
     crate::canvas::register(shell);
     crate::agents::register(shell);
+    crate::addons::register(shell); // Addons: sync, settings, updates, COPPER_SELFTEST=addons
 }
 
 fn with_active(s: &Shell, f: impl FnOnce(&Shell, &TabId)) {

@@ -45,6 +45,7 @@
 //! `COPPER_CLOUD_BIN` or `~/src/copper-cloud-ref/target/debug/copper-cloud`,
 //! and `COPPER_CLOUD_TEST_DATABASE_URL`, whose `public` schema it resets).
 
+pub mod addons;
 pub mod canvas;
 pub mod client;
 pub mod error;
@@ -56,6 +57,7 @@ pub mod sync;
 pub mod tls;
 pub mod ws;
 
+pub use addons::{AddonSync, SyncStatus as AddonSyncStatus};
 pub use canvas::CanvasApi;
 pub use client::{Account, CloudClient, CloudEvent, CloudStatus, Feature, ServerInfo};
 pub use error::{Failure, Result};

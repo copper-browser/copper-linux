@@ -108,6 +108,7 @@ impl Stage {
         widget.set_vexpand(true);
         widget.append(&overlay);
         widget.append(&panel);
+        crate::addons::mount(shell, &widget); // Addons: the Agent sidebar, right of the side panels
 
         Rc::new(Stage {
             widget,

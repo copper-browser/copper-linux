@@ -1,0 +1,50 @@
+:root {
+  color-scheme: light dark;
+  --ink: #1d1b19;
+  --muted: rgba(29, 27, 25, .6);
+  --ground: #f6f4f1;
+  --card: rgba(29, 27, 25, .045);
+  --line: rgba(29, 27, 25, .1);
+  --accent: #b4532a;
+  --ok: #2c7a4b;
+  --bad: #b3261e;
+}
+:root.dark {
+  --ink: #ecebe9;
+  --muted: rgba(236, 235, 233, .6);
+  --ground: #232120;
+  --card: rgba(236, 235, 233, .06);
+  --line: rgba(236, 235, 233, .12);
+  --ok: #7fcf9c;
+  --bad: #f2a29b;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--ground); color: var(--ink); }
+body { font: 13.5px/1.45 system-ui, "Cantarell", "Inter", sans-serif; }
+header {
+  position: sticky; top: 0; display: flex; align-items: center; gap: 8px;
+  min-height: 46px; padding: 6px 8px 6px 16px; background: var(--ground);
+  border-bottom: 1px solid var(--line);
+}
+.titles { flex: 1; min-width: 0; }
+h1 { margin: 0; font-size: 15px; font-weight: 600; }
+.sub { margin: 0; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+main { padding: 4px 12px 24px; }
+h2 { margin: 16px 4px 6px; font-size: 12px; font-weight: 600; color: var(--muted); }
+ol { list-style: none; margin: 0; padding: 4px; border-radius: 12px; background: var(--card); }
+li { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 2px 8px; padding: 6px 8px; border-radius: 9px; }
+li + li { margin-top: 1px; }
+li .mark { grid-row: span 2; font-weight: 700; }
+li.ok .mark { color: var(--ok); }
+li.bad .mark { color: var(--bad); }
+li .name { font-weight: 500; }
+li .value { grid-column: 2; font: 11.5px/1.4 ui-monospace, "Source Code Pro", monospace; color: var(--muted); word-break: break-all; }
+.actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 4px; }
+button {
+  font: inherit; font-size: 12.5px; font-weight: 500; min-height: 28px; padding: 0 12px;
+  border: 0; border-radius: 99px; background: var(--card); color: var(--ink); cursor: pointer;
+}
+button:hover { background: var(--line); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+button.icon { width: 28px; padding: 0; font-size: 18px; line-height: 1; background: transparent; color: var(--muted); }
+code { font: 12px ui-monospace, monospace; }
