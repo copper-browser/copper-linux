@@ -7,8 +7,9 @@
 //! never through an argument (items to save go through stdin). With
 //! *stay unlocked* the session key is kept in a 0600 file beside `bw`'s data.
 //!
-//! Where `bw` is, first match wins: `COPPER_BW_PATH`, `~/.local/bin/bw`,
-//! then `$PATH`.
+//! Where `bw` is, first match wins: `COPPER_BW_PATH`, then on Linux
+//! `~/.local/bin/bw` and `$PATH`, on Windows `%PATH%` (`bw.exe`, or npm's
+//! `bw.cmd`) and the usual install folders (see `process::find_tool`).
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -78,31 +79,26 @@ struct Secret {
     hidden: HashMap<String, String>,
 }
 
-/// Where `bw` lives: `override_path` (`COPPER_BW_PATH`, `~` expanded), then
-/// `~/.local/bin/bw`, then `$PATH`.
+/// Where `bw` lives: `override_path` (`COPPER_BW_PATH`, `~` expanded; on
+/// Windows `C:\tools\bw` also finds `bw.exe`/`bw.cmd`), then where users
+/// install it — Linux: `~/.local/bin/bw`, then `$PATH`; Windows: `%PATH%`,
+/// then the install folders.
 pub fn locate(
     override_path: Option<&str>,
     home: Option<&Path>,
     path_var: Option<&str>,
 ) -> Option<PathBuf> {
-    if let Some(raw) = override_path.map(str::trim).filter(|r| !r.is_empty()) {
-        let path = process::expand_tilde(raw, home);
-        if process::is_executable(&path) {
-            return Some(path);
-        }
+    if let Some(raw) = override_path.map(str::trim).filter(|r| !r.is_empty())
+        && let Some(path) = process::resolve(&process::expand_tilde(raw, home))
+    {
+        return Some(path);
     }
-    if let Some(home) = home {
-        let local = home.join(".local/bin/bw");
-        if process::is_executable(&local) {
-            return Some(local);
-        }
-    }
-    process::in_path("bw", path_var)
+    process::find_tool("bw", home, path_var)
 }
 
 /// `locate` with this process's environment.
 pub fn executable() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let home = process::home_dir();
     locate(
         std::env::var("COPPER_BW_PATH").ok().as_deref(),
         home.as_deref(),
@@ -299,13 +295,7 @@ impl Bitwarden {
         if self.session.is_some() && !matches!(args.first(), Some(&"status") | Some(&"--version")) {
             self.last_activity = Instant::now();
         }
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            let _ = std::fs::DirBuilder::new()
-                .recursive(true)
-                .mode(0o700)
-                .create(&self.cfg.app_data);
-        }
+        let _ = process::private_dir(&self.cfg.app_data);
         tracing::debug!(command = args.first().copied().unwrap_or(""), "bw");
         let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
         let out = match process::execute(&exe, &args, &env, stdin, timeout).await {
@@ -1123,6 +1113,7 @@ fn credential(item: &BwItem, folders: &HashMap<String, String>) -> Credential {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn lookup_order() {
         let dir = std::env::temp_dir().join(format!("bw-locate-{}", std::process::id()));
@@ -1156,6 +1147,41 @@ mod tests {
             Some(bin.join("bw"))
         );
         assert_eq!(locate(None, None, None), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn lookup_order_on_windows() {
+        let dir = std::env::temp_dir().join(format!("bw-locate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let npm = dir.join("npm");
+        let custom = dir.join("custom");
+        for d in [&npm, &custom] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        // npm's layout: `bw` (a sh script for Git Bash), `bw.cmd`, `bw.ps1`.
+        for f in ["bw", "bw.cmd", "bw.ps1"] {
+            std::fs::write(npm.join(f), "@echo off\r\n").unwrap();
+        }
+        std::fs::write(custom.join("bw.exe"), "MZ").unwrap();
+        let path_var = npm.to_string_lossy().into_owned();
+        // An override without an extension finds bw.exe.
+        let c = custom.join("bw").to_string_lossy().into_owned();
+        assert_eq!(
+            locate(Some(&c), None, Some(&path_var)),
+            Some(custom.join("bw.exe"))
+        );
+        // PATH wins over the install folders, and the .cmd over the script.
+        assert_eq!(
+            locate(None, None, Some(&path_var)),
+            Some(npm.join("bw.cmd"))
+        );
+        // An override that isn't there falls through.
+        assert_eq!(
+            locate(Some("C:\\nope\\bw.exe"), None, Some(&path_var)),
+            Some(npm.join("bw.cmd"))
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

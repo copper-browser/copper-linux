@@ -1,5 +1,8 @@
 //! Bitwarden and 1Password through their CLIs, against the mocks in
 //! tests/fixtures (op-mock is copper-ref's docs/fixtures/op-mock/op).
+//! Unix only: the mocks are shell/Python scripts run through their shebang,
+//! and the tests check 0600/0700 modes.
+#![cfg(unix)]
 
 use std::path::PathBuf;
 

@@ -1,9 +1,13 @@
-//! The Secret Service store against a real gnome-keyring on a private bus.
-//! `harness = false`: the bus address goes in the environment before any
-//! thread exists.
+//! The password store against the real thing: on Linux a gnome-keyring on
+//! a private bus (`harness = false`: the bus address goes in the environment
+//! before any thread exists); on Windows the user's Credential Manager, with
+//! a tag of this run's own, emptied before and after.
 
+#[cfg(target_os = "linux")]
 use copper_creds::sandbox::PrivateSecretService;
-use copper_creds::store::{self, SecretStore};
+#[cfg(target_os = "linux")]
+use copper_creds::store;
+use copper_creds::store::SecretStore;
 
 type Res = Result<String, String>;
 
@@ -81,6 +85,7 @@ async fn crud(s: &SecretStore) -> Res {
 /// Items carry app/origin/username as attributes another Secret Service
 /// client can see (`secret-tool search`), and the test tag keeps its items
 /// apart from Copper's real ones.
+#[cfg(target_os = "linux")]
 async fn attributes(s: &SecretStore, svc: &PrivateSecretService) -> Res {
     let real = SecretStore::open().await.map_err(e)?;
     real.save("tagged.example", "zed", "real-pw", None)
@@ -120,6 +125,7 @@ async fn attributes(s: &SecretStore, svc: &PrivateSecretService) -> Res {
 }
 
 /// Another application's key, the way Chrome keeps "Chrome Safe Storage".
+#[cfg(target_os = "linux")]
 async fn raw_items() -> Res {
     store::store_raw(
         "Chrome Safe Storage",
@@ -148,6 +154,7 @@ async fn raw_items() -> Res {
     Ok("store_raw / lookup".into())
 }
 
+#[cfg(target_os = "linux")]
 fn main() {
     if std::env::args().any(|a| a == "--list") {
         println!("secret_service: test");
@@ -183,4 +190,54 @@ fn main() {
     drop(rt);
     drop(svc);
     std::process::exit(if fails == 0 { 0 } else { 1 });
+}
+
+/// Every login of `s` gone (a crashed earlier run may have left some).
+#[cfg(windows)]
+async fn empty(s: &SecretStore) {
+    let hosts: std::collections::BTreeSet<String> = s
+        .all()
+        .await
+        .expect("list")
+        .into_iter()
+        .map(|l| l.host)
+        .collect();
+    for host in hosts {
+        s.forget_origin(&host).await.expect("forget");
+    }
+}
+
+#[cfg(windows)]
+fn main() {
+    if std::env::args().any(|a| a == "--list") {
+        println!("secret_service: test");
+        return;
+    }
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let fails = rt.block_on(async {
+        let tag = format!("Copper (test {})", std::process::id());
+        let s = SecretStore::open_tagged(&tag).await.expect("open");
+        empty(&s).await;
+        let r = crud(&s).await;
+        empty(&s).await;
+        match r {
+            Ok(d) => {
+                println!("PASS crud: {d}");
+                0
+            }
+            Err(why) => {
+                println!("FAIL crud: {why}");
+                1
+            }
+        }
+    });
+    std::process::exit(fails);
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+fn main() {
+    println!("secret_service: no password store on this platform; skipped");
 }
