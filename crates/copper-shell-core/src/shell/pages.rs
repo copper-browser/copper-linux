@@ -671,7 +671,8 @@ mod tests {
 
     #[test]
     fn icons_are_kept_per_part_of_a_site() {
-        let rel = |u: &str| icon_rel(u).map(|p| p.to_string_lossy().to_string());
+        // Compared with `/` on every system (Windows joins with `\\`).
+        let rel = |u: &str| icon_rel(u).map(|p| p.to_string_lossy().replace('\\', "/"));
         assert_eq!(
             rel("https://www.google.com/maps/@1,2,3z").as_deref(),
             Some("google.com/maps.png")

@@ -150,7 +150,7 @@ mod tests {
         let (store, dir) = store();
         let out: Value = serde_json::from_str(&answer(&store, &Map::new()).unwrap()).unwrap();
         assert_eq!(out["count"], 0);
-        assert!(out["folder"].as_str().unwrap().ends_with("/crashes"));
+        assert!(std::path::Path::new(out["folder"].as_str().unwrap()).ends_with("crashes"));
         let mut args = Map::new();
         args.insert("index".into(), json!(1));
         assert_eq!(answer(&store, &args).unwrap_err(), "No crashes recorded.");
@@ -175,10 +175,8 @@ mod tests {
         assert_eq!(out["crashes"][0]["what"], "EXC_BAD_ACCESS (SIGSEGV)");
         assert_eq!(out["crashes"][0]["topFrame"], "Tab.go + 12");
         assert!(
-            out["crashes"][0]["file"]
-                .as_str()
-                .unwrap()
-                .ends_with("/crashes/b.ips")
+            std::path::Path::new(out["crashes"][0]["file"].as_str().unwrap())
+                .ends_with(std::path::Path::new("crashes").join("b.ips"))
         );
         assert_eq!(out["crashes"][1]["what"], "the web process crashed");
         let mut args = Map::new();
