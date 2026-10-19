@@ -1,6 +1,6 @@
 [package]
 name = "copper-creds"
-description = "Secret Service password store and Bitwarden / 1Password CLI bridges."
+description = "Password store (Secret Service on Linux, Credential Manager on Windows) and Bitwarden / 1Password CLI bridges."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,10 +14,27 @@ tracing.workspace = true
 url.workspace = true
 regex = "1"
 tokio = { workspace = true, features = ["process", "fs"] }
-oo7 = { version = "0.6", default-features = false, features = ["tokio", "native_crypto"] }
 hmac = "0.12"
 sha1 = "0.10"
 sha2 = "0.10"
+
+# The Secret Service (GNOME Keyring, KWallet, KeePassXC…) over D-Bus.
+[target.'cfg(target_os = "linux")'.dependencies]
+oo7 = { version = "0.6", default-features = false, features = ["tokio", "native_crypto"] }
+
+# Credential Manager, DPAPI, job objects for vault CLIs.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Credentials",
+    "Win32_Security_Cryptography",
+    "Win32_System_Com",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+] }
+zeroize = "1"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["process", "fs", "rt-multi-thread", "macros"] }
