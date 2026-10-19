@@ -25,7 +25,7 @@ wpid=$!
 trap 'kill $wpid 2>/dev/null' EXIT
 for _ in $(seq 100); do [ -S "$rt/$sock" ] && break; sleep 0.1; done
 export WAYLAND_DISPLAY="$sock" GDK_BACKEND=wayland NO_AT_BRIDGE=1
-export COPPER_LOG=${COPPER_LOG:-warn,copper_app=info}
+export COPPER_LOG=${COPPER_LOG:-warn,copper_app=info,copper_shell_core=info}
 
 world() {
   export COPPER_WORLD=$1

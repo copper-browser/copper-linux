@@ -15,6 +15,7 @@
 //! * A page the shell drops while held (sleep, close) is let go on the next
 //!   tick.
 
+use crate::shell::GtkShell;
 use crate::shell::{Shell, WeakShell};
 use copper_core::TabId;
 use copper_engine::{Backstage as _, Engine as _};
@@ -278,6 +279,6 @@ impl ShellExt for Shell {
         self.pages_map()
             .borrow()
             .values()
-            .any(|s| &s.frame == frame)
+            .any(|s| s.frame.overlay() == frame)
     }
 }

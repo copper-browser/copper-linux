@@ -5,11 +5,12 @@ use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
 use copper_engine::{
-    ConsoleLevel, ConsoleMessage, CrashReason, DownloadId, EngineError, EventSink, EventStream,
-    FindOptions, Frames, InjectionTime, InputEvent, JsonMap, JsonValue, LinkHover, LoadState,
-    LocalFuture, NewWindowHandler, NewWindowRequest, PageEvent, PageOptions, PageView,
-    PermissionId, PermissionKind, Profile, Result, ScriptId, Snapshot, SnapshotRegion, StyleLevel,
-    StyleSheetId, Trust, UserScript, UserStyleSheet, WebsiteDataKinds, WindowDisposition, World,
+    Bitmap, ConsoleLevel, ConsoleMessage, CrashReason, DownloadId, EngineError, EventSink,
+    EventStream, FindOptions, Frames, InjectionTime, InputEvent, JsonMap, JsonValue, LinkHover,
+    LoadState, LocalFuture, NewWindowHandler, NewWindowRequest, PageEvent, PageId, PageOptions,
+    PageView, PermissionId, PermissionKind, Profile, Result, ScriptId, Snapshot, SnapshotRegion,
+    StyleLevel, StyleSheetId, Trust, TrustedInput, UserScript, UserStyleSheet, WeakPage,
+    WebsiteDataKinds, WindowDisposition, World,
 };
 use glib::prelude::*;
 use webkit6::prelude::*;
@@ -21,7 +22,7 @@ use webkit6::{
 };
 
 use crate::ghost::GhostHost;
-use crate::hands::{Hands, OpenMenu, TrustedInput};
+use crate::hands::{Hands, OpenMenu};
 use crate::profile::WebKitProfile;
 use crate::{WebKitContentFilter, backstage, caps, convert};
 
@@ -43,6 +44,8 @@ pub struct WebKitPage {
 }
 
 struct PageInner {
+    /// Process-unique identity (`PageView::page_id`).
+    id: PageId,
     view: WebView,
     ucm: UserContentManager,
     profile: WebKitProfile,
@@ -112,6 +115,15 @@ impl PageScripts {
         let mut pages = self.pages.borrow_mut();
         pages.retain(|w| w.strong_count() > 0);
         pages.iter().filter_map(Weak::upgrade).collect()
+    }
+
+    /// The id of the live page showing in `view` (a custom-scheme request
+    /// names the view, not the page).
+    pub(crate) fn page_of_view(&self, view: &WebView) -> Option<PageId> {
+        self.live()
+            .into_iter()
+            .find(|p| &p.view == view)
+            .map(|p| p.id)
     }
 }
 
@@ -319,6 +331,7 @@ impl WebKitPage {
         profile.register_page(&view, Rc::downgrade(&shared.sink));
         let page = WebKitPage {
             inner: Rc::new(PageInner {
+                id: PageId(crate::next_id()),
                 view,
                 ucm,
                 profile: profile.clone(),
@@ -370,42 +383,12 @@ impl WebKitPage {
         &self.inner.profile
     }
 
-    /// What `PageView::input` delivers through WebKit itself (trusted) on
-    /// this page: the start-up self-check's answer, unless turned off with
-    /// [`set_trusted_input`](Self::set_trusted_input).
-    pub fn trusted_input(&self) -> TrustedInput {
-        self.inner.shared.trusted.get()
-    }
-
-    /// `false`: deliver every input action from script (`isTrusted ==
-    /// false`), as before T-002. `true`: back to what the self-check allows.
-    pub fn set_trusted_input(&self, enabled: bool) {
-        let shared = &self.inner.shared;
-        shared.trusted.set(if enabled {
-            shared.available
-        } else {
-            TrustedInput::NONE
-        });
-    }
-
     pub(crate) fn view(&self) -> &WebView {
         &self.inner.view
     }
 
     pub(crate) fn shared(&self) -> &Rc<Shared> {
         &self.inner.shared
-    }
-
-    /// Whether a file chooser this page opened is showing. At most one page
-    /// has one at a time; it closes when the page navigates, crashes, leaves
-    /// its window or is dropped, or on an agent's Escape (`input`).
-    pub fn has_file_chooser(&self) -> bool {
-        self.inner.shared.has_file_chooser()
-    }
-
-    /// Close the page's file chooser as if cancelled; true if one was open.
-    pub fn cancel_file_chooser(&self) -> bool {
-        self.inner.shared.cancel_file_chooser()
     }
 
     fn sink(&self) -> &EventSink<PageEvent> {
@@ -754,8 +737,48 @@ impl PageInner {
     }
 }
 
+/// A [`WebKitPage`] that does not keep it alive (`PageView::downgrade`).
+#[derive(Clone)]
+pub struct WeakWebKitPage {
+    inner: Weak<PageInner>,
+}
+
+impl WeakPage for WeakWebKitPage {
+    type Page = WebKitPage;
+
+    fn upgrade(&self) -> Option<WebKitPage> {
+        self.inner.upgrade().map(|inner| WebKitPage { inner })
+    }
+}
+
+impl std::fmt::Debug for WeakWebKitPage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("WeakWebKitPage")
+    }
+}
+
 impl PageView for WebKitPage {
     type Filter = WebKitContentFilter;
+    type Weak = WeakWebKitPage;
+
+    fn page_id(&self) -> PageId {
+        self.inner.id
+    }
+
+    fn downgrade(&self) -> WeakWebKitPage {
+        WeakWebKitPage {
+            inner: Rc::downgrade(&self.inner),
+        }
+    }
+
+    fn view_size(&self) -> (u32, u32) {
+        let view = &self.inner.view;
+        (view.width().max(0) as u32, view.height().max(0) as u32)
+    }
+
+    fn is_mapped(&self) -> bool {
+        self.inner.view.is_mapped()
+    }
 
     fn load(&self, url: &str) {
         self.inner.view.load_uri(url);
@@ -993,6 +1016,11 @@ impl PageView for WebKitPage {
         })
     }
 
+    fn snapshot_bitmap(&self) -> LocalFuture<Result<Bitmap>> {
+        let fut = self.snapshot_texture();
+        Box::pin(async move { Ok(convert::texture_to_bitmap(&fut.await?)) })
+    }
+
     fn find(&self, query: &str, opts: FindOptions) -> LocalFuture<Result<u32>> {
         let Some(fc) = self.inner.view.find_controller() else {
             return Box::pin(std::future::ready(Err(EngineError::Other(
@@ -1103,6 +1131,31 @@ impl PageView for WebKitPage {
 
     fn input(&self, event: InputEvent) -> LocalFuture<Result<Trust>> {
         Box::pin(crate::hands::deliver(self.clone(), event))
+    }
+
+    /// The start-up self-check's answer for this page, unless turned off
+    /// with `set_trusted_input(false)`.
+    fn trusted_input(&self) -> TrustedInput {
+        self.inner.shared.trusted.get()
+    }
+
+    /// `false`: every input action from script, as before T-002; `true`:
+    /// back to what the self-check allows.
+    fn set_trusted_input(&self, enabled: bool) {
+        let shared = &self.inner.shared;
+        shared.trusted.set(if enabled {
+            shared.available
+        } else {
+            TrustedInput::NONE
+        });
+    }
+
+    fn has_file_chooser(&self) -> bool {
+        self.inner.shared.has_file_chooser()
+    }
+
+    fn cancel_file_chooser(&self) -> bool {
+        self.inner.shared.cancel_file_chooser()
     }
 
     fn show_inspector(&self) {

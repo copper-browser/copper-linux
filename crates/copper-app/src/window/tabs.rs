@@ -1,6 +1,7 @@
 //! What every drawn tab shares, in the column or the row: its mark, its
 //! menu, clicking, the keyboard, and dragging.
 
+use crate::shell::GtkShell;
 use crate::shell::{Shell, TabView};
 use copper_core::TabId;
 use copper_core::settings::Glyph;

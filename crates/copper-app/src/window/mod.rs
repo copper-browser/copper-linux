@@ -18,9 +18,9 @@ pub mod tabs;
 pub mod topbar;
 
 use crate::palette::{Card, Mode};
+use crate::shell::GtkShell;
 use crate::shell::Shell;
 use crate::spaces::colour::Tint;
-use copper_core::TabId;
 use copper_core::settings::TabsPosition;
 use gtk4 as gtk;
 use gtk4::prelude::*;
@@ -29,55 +29,9 @@ use libadwaita::prelude::*;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+/// What needs redrawing (the shell says; [`Ui::refresh`] draws it).
+pub use copper_shell_core::Refresh;
 pub use stage::Stage;
-
-/// What needs redrawing.
-#[derive(Debug, Clone, Default)]
-pub struct Refresh {
-    pub all: bool,
-    /// The lists of tabs (order, membership, pins).
-    pub tabs: bool,
-    /// Spaces: names, colours, which is current.
-    pub spaces: bool,
-    /// Which tab is selected.
-    pub selection: bool,
-    /// The field, the back/forward buttons, the private tint.
-    pub chrome: bool,
-    /// Tabs whose title, icon or state changed.
-    pub changed: Vec<TabId>,
-}
-
-impl Refresh {
-    pub fn all() -> Refresh {
-        Refresh {
-            all: true,
-            ..Default::default()
-        }
-    }
-
-    pub fn spaces() -> Refresh {
-        Refresh {
-            spaces: true,
-            tabs: true,
-            chrome: true,
-            ..Default::default()
-        }
-    }
-
-    pub fn chrome() -> Refresh {
-        Refresh {
-            chrome: true,
-            ..Default::default()
-        }
-    }
-
-    pub fn tab(id: &TabId) -> Refresh {
-        Refresh {
-            changed: vec![id.clone()],
-            ..Default::default()
-        }
-    }
-}
 
 /// Every widget the shell talks to.
 pub struct Ui {

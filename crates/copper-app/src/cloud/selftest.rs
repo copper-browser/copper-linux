@@ -13,6 +13,7 @@
 //!
 //! Prints `PASS`/`FAIL` lines and exits non-zero on any failure.
 
+use crate::shell::GtkShell;
 use crate::shell::Shell;
 use gtk4::prelude::*;
 use libadwaita::prelude::*;

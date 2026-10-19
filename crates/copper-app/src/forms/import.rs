@@ -7,6 +7,7 @@
 //! written to (copper-import).
 
 use super::rt;
+use crate::shell::GtkShell;
 use crate::shell::Shell;
 use crate::spaces::colour::SpaceColour;
 use copper_core::OpenOptions;

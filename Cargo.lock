@@ -281,6 +281,7 @@ dependencies = [
  "copper-import",
  "copper-mcp",
  "copper-pagejs",
+ "copper-shell-core",
  "copper-shield",
  "gdk4",
  "gio",
@@ -431,6 +432,26 @@ dependencies = [
  "serde",
  "serde_json",
  "webkit6",
+]
+
+[[package]]
+name = "copper-shell-core"
+version = "0.2.0"
+dependencies = [
+ "base64 0.22.1",
+ "copper-cloud",
+ "copper-core",
+ "copper-creds",
+ "copper-engine",
+ "copper-mcp",
+ "copper-pagejs",
+ "copper-shield",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "url",
 ]
 
 [[package]]

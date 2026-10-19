@@ -15,6 +15,8 @@
 //! * the settings pages; the update check against a local feed.
 
 use super::{curtain, panels, reader, shield, updates};
+use crate::platform::Gtk;
+use crate::shell::GtkShell;
 use crate::shell::{OpenTab, Shell};
 use copper_core::TabId;
 use copper_core::downloads::DownloadState;
@@ -207,16 +209,16 @@ impl Run {
 
     async fn shield(&self) {
         let start = Instant::now();
-        while shield::current_list().is_none() && start.elapsed() < Duration::from_secs(30) {
+        while shield::current_list::<Gtk>().is_none() && start.elapsed() < Duration::from_secs(30) {
             self.pause(100).await;
         }
         self.check(
-            shield::current_list().is_some(),
+            shield::current_list::<Gtk>().is_some(),
             "shield: the list compiled at launch",
         );
         self.note(&format!(
             "shield: list {} ready after {} ms",
-            shield::current_list().unwrap_or_default(),
+            shield::current_list::<Gtk>().unwrap_or_default(),
             start.elapsed().as_millis()
         ));
 
@@ -258,7 +260,7 @@ impl Run {
         self.server.clear();
         shield::set_paused(&self.shell, "localhost", true);
         let t = Instant::now();
-        while (shield::busy() || self.server.trackers_seen().len() < 10)
+        while (shield::busy::<Gtk>() || self.server.trackers_seen().len() < 10)
             && t.elapsed() < Duration::from_secs(15)
         {
             self.pause(100).await;
@@ -285,7 +287,7 @@ impl Run {
         self.server.clear();
         shield::set_paused(&self.shell, "localhost", false);
         let t = Instant::now();
-        while shield::busy() && t.elapsed() < Duration::from_secs(15) {
+        while shield::busy::<Gtk>() && t.elapsed() < Duration::from_secs(15) {
             self.pause(100).await;
         }
         self.pause(600).await;
@@ -335,7 +337,10 @@ impl Run {
         );
         curtain::toggle(&self.shell);
         self.pause(300).await;
-        self.check(curtain::picking(&id), "hide: Ctrl+Shift+H arms the picker");
+        self.check(
+            curtain::picking::<Gtk>(&id),
+            "hide: Ctrl+Shift+H arms the picker",
+        );
         // A trusted click in the middle of the cookie bar.
         let rect = self
             .eval(
@@ -364,10 +369,11 @@ impl Run {
             }
         }
         let t = Instant::now();
-        while curtain::veils("127.0.0.1").is_empty() && t.elapsed() < Duration::from_secs(5) {
+        while curtain::veils::<Gtk>("127.0.0.1").is_empty() && t.elapsed() < Duration::from_secs(5)
+        {
             self.pause(100).await;
         }
-        let veils = curtain::veils("127.0.0.1");
+        let veils = curtain::veils::<Gtk>("127.0.0.1");
         println!(
             "hide: hidden on 127.0.0.1: {:?}",
             veils
@@ -810,19 +816,19 @@ impl Run {
             self.note("updates: COPPER_UPDATE_FEED not set; skipped");
             return;
         }
-        updates::check(&self.shell, true);
-        let ok = updates::wait_checked(Duration::from_secs(10)).await;
-        let avail = updates::available();
+        updates::check::<Gtk>(&self.shell, true);
+        let ok = updates::wait_checked::<Gtk>(Duration::from_secs(10)).await;
+        let avail = updates::available::<Gtk>();
         println!(
             "updates: checked {ok}, available {avail:?}, page {}",
-            updates::release_page()
+            updates::release_page::<Gtk>()
         );
         self.check(
             avail.as_deref() == Some("9.9.9"),
             "updates: a newer version in the feed is offered",
         );
         self.check(
-            updates::release_page()
+            updates::release_page::<Gtk>()
                 == "https://github.com/copper-browser/copper-linux/releases/tag/v9.9.9",
             "updates: Download opens the release page",
         );
@@ -833,7 +839,7 @@ impl Run {
         self.shot("71-settings-updates-available").await;
         dialog.close();
         // Against GitHub itself (no release yet is a fine answer).
-        match updates::get(updates::FEED).await {
+        match updates::get::<Gtk>(updates::FEED).await {
             Ok(b) => self.note(&format!("updates: GitHub feed answered {} bytes", b.len())),
             Err(e) => self.note(&format!("updates: GitHub feed: {e}")),
         }

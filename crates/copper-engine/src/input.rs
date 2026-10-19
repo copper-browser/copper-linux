@@ -63,6 +63,34 @@ impl Trust {
     }
 }
 
+/// Which input actions `PageView::input` delivers through the engine's own
+/// input handling on one page (`isTrusted == true`), rather than from script.
+///
+/// Each engine fills this in from what it can do (WebKitGTK: a start-up
+/// self-check of its event controllers; WebView2: everything goes through
+/// the DevTools input domain). `PageView::set_trusted_input(false)` turns it
+/// all off, for tests and benches that compare the two paths.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TrustedInput {
+    /// Pointer moves and left clicks go through the engine.
+    pub pointer: bool,
+    /// Typing and editing keys go through the engine's editor.
+    pub editing: bool,
+    /// The page can be given focus without the window having it (a page an
+    /// agent works in backstage still sees `focus` and `:focus`).
+    pub page_focus: bool,
+}
+
+impl TrustedInput {
+    /// Everything from script.
+    pub const NONE: TrustedInput = TrustedInput {
+        pointer: false,
+        editing: false,
+        page_focus: false,
+    };
+}
+
 /// One input action. See `PageView::input` for how faithful each one is.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

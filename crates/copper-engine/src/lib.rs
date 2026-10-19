@@ -13,6 +13,17 @@
 //! that come *out* of the engine (events, JSON, images, cookies) are plain
 //! `Send` data, so an [`EventStream`] may be moved to a worker thread.
 //!
+//! # Shell needs
+//! Everything the shared shell (`copper-shell-core`) does with a page goes
+//! through these traits: identity and weak handles ([`PageView::page_id`],
+//! [`PageView::downgrade`]), on-screen state ([`PageView::view_size`],
+//! [`PageView::is_mapped`]), raw-pixel snapshots
+//! ([`PageView::snapshot_bitmap`]), the file chooser, trusted input, the
+//! page languages ([`Engine::set_preferred_languages`]) and custom URL
+//! schemes ([`Engine::register_scheme`]). Putting a page on screen is the
+//! toolkit's business: each engine hands its view out with an inherent
+//! method (`WebKitPage::widget`, the WebView2 page's composition visual).
+//!
 //! # Events
 //! `PageView::events()` and `Profile::downloads()` return an independent
 //! [`EventStream`] per call; each sees every event emitted after it was
@@ -38,12 +49,13 @@ pub use events::{
     EventStream, LinkHover, LoadState, NewWindowRequest, PageEvent, PermissionKind,
     WindowDisposition,
 };
-pub use input::{InputEvent, Modifiers, MouseButton, Trust};
+pub use input::{InputEvent, Modifiers, MouseButton, Trust, TrustedInput};
 pub use paths::EnginePaths;
 pub use types::{
-    Cookie, DownloadId, FindOptions, Frames, Image, InjectionTime, PageOptions, PermissionId,
-    ProfileId, SameSite, ScriptId, SnapshotRegion, StyleLevel, StyleSheetId, UserScript,
-    UserStyleSheet, WebsiteDataKinds, World,
+    Bitmap, Cookie, DownloadId, FindOptions, Frames, Image, InjectionTime, PageId, PageOptions,
+    PermissionId, ProfileId, SameSite, SchemeBody, SchemeHandler, SchemeRequest, SchemeResponse,
+    ScriptId, SnapshotRegion, StyleLevel, StyleSheetId, UserScript, UserStyleSheet,
+    WebsiteDataKinds, World,
 };
 
 /// JSON value returned by script evaluation and carried by script messages.
@@ -116,6 +128,28 @@ pub trait Engine {
     /// Take a script added with [`Engine::add_page_script`] off every page
     /// (from their next document); `false` if it is unknown.
     fn remove_page_script(&self, id: ScriptId) -> bool;
+
+    /// The languages pages are told the user reads (`Accept-Language`,
+    /// `navigator.languages`, the default `Intl` locale), best first, as
+    /// BCP 47 tags (`en-US`). Call before the first page: engines hand the
+    /// list to each web process as it starts. An empty list keeps the
+    /// engine's own choice.
+    fn set_preferred_languages(&self, languages: &[String]);
+
+    /// Serve every `<scheme>:` URL with `handler` (Copper's `copper://`
+    /// pages, such as the canvas). The scheme is a secure context, like
+    /// `https:` (pages get `crypto.randomUUID`, service workers and the
+    /// clipboard API). The handler answers synchronously on the main thread
+    /// and is told which page asked. Register before the first page loads a
+    /// URL of that scheme; registering a scheme again replaces its handler.
+    fn register_scheme(&self, scheme: &str, handler: SchemeHandler) -> Result<()>;
+}
+
+/// A handle to a page that does not keep it alive ([`PageView::downgrade`]).
+pub trait WeakPage: Clone + 'static {
+    type Page: PageView;
+    /// The page, while anything else still holds it.
+    fn upgrade(&self) -> Option<Self::Page>;
 }
 
 /// A compiled content-blocker list, ready to attach to pages.
@@ -158,9 +192,24 @@ pub trait Profile: Clone {
     fn downloads(&self) -> EventStream<DownloadEvent>;
 }
 
-/// One web page (a tab's content).
-pub trait PageView {
+/// One web page (a tab's content). Cheap to clone (shared handle): every
+/// clone is the same page, with the same [`PageView::page_id`].
+pub trait PageView: Clone + 'static {
     type Filter: ContentFilter;
+    /// What [`PageView::downgrade`] returns.
+    type Weak: WeakPage<Page = Self>;
+
+    // -- identity and view -------------------------------------------------
+    /// This page's process-unique identity (see [`PageId`]).
+    fn page_id(&self) -> PageId;
+    /// A handle that does not keep the page alive.
+    fn downgrade(&self) -> Self::Weak;
+    /// The size the page is laid out at, in logical (CSS at zoom 1) pixels:
+    /// `(0, 0)` before its view was ever laid out.
+    fn view_size(&self) -> (u32, u32);
+    /// Whether the page's view is in a window that is showing it (the stage,
+    /// or the backstage host while an agent works in it).
+    fn is_mapped(&self) -> bool;
 
     // -- navigation --------------------------------------------------------
     fn load(&self, url: &str);
@@ -223,6 +272,11 @@ pub trait PageView {
     /// Paint the page into a PNG. `Visible` needs the page to be on screen
     /// (mapped) or held by the engine's [`Backstage`].
     fn snapshot(&self, region: SnapshotRegion) -> LocalFuture<Result<Snapshot>>;
+    /// What is on screen right now as raw pixels, in device pixels (so its
+    /// width over [`PageView::view_size`]'s is the display scale). No PNG
+    /// encoding on the main thread: for callers that crop, scale and encode
+    /// on a worker. Needs the page to be mapped, like `snapshot(Visible)`.
+    fn snapshot_bitmap(&self) -> LocalFuture<Result<Bitmap>>;
     /// Highlight matches of `query`, select the first; resolves to the number
     /// of matches (0 = not found, capped at `opts.max_matches`).
     fn find(&self, query: &str, opts: FindOptions) -> LocalFuture<Result<u32>>;
@@ -270,6 +324,20 @@ pub trait PageView {
     /// (the file input fires `cancel`). A point with no element under it is `NotFound`. Resolves once the
     /// action's last event was handled (or after about a second).
     fn input(&self, event: InputEvent) -> LocalFuture<Result<Trust>>;
+    /// What [`PageView::input`] delivers through the engine on this page
+    /// right now.
+    fn trusted_input(&self) -> TrustedInput;
+    /// `false`: deliver every input action from script (`isTrusted ==
+    /// false`); `true`: back to everything the engine can do trusted.
+    fn set_trusted_input(&self, enabled: bool);
+
+    // -- file chooser --------------------------------------------------------
+    /// Whether a file chooser this page opened is showing. At most one page
+    /// has one at a time; it closes when the page navigates, crashes or is
+    /// dropped, or on an agent's Escape ([`PageView::input`]).
+    fn has_file_chooser(&self) -> bool;
+    /// Close the page's file chooser as if cancelled; `true` if one was open.
+    fn cancel_file_chooser(&self) -> bool;
 
     // -- tools -------------------------------------------------------------------
     /// Open the web inspector (needs `PageOptions::developer_extras`).

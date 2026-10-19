@@ -9,6 +9,7 @@
 //! - Delete: asks once, says where the tabs go.
 
 use super::colour::{Rgb, SpaceColour, Tint};
+use crate::shell::GtkShell;
 use crate::shell::Shell;
 use copper_core::TabId;
 use copper_core::session::Space;

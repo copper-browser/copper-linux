@@ -9,6 +9,7 @@
 use super::dropzone::{self, Band, Landing, Layout};
 use super::{Nav, tabs};
 use crate::palette::Mode;
+use crate::shell::GtkShell;
 use crate::shell::{Shell, TabView};
 use copper_core::TabId;
 use copper_core::settings::keys;

@@ -35,7 +35,7 @@ pub fn start(shell: &Shell) {
 #[cfg(debug_assertions)]
 mod debug {
     use super::super::agents;
-    use crate::shell::{OpenTab, Shell};
+    use crate::shell::{GtkShell, OpenTab, Shell};
     use copper_core::settings::Look;
     use copper_engine::{Backstage, BackstageMode, Engine as _};
     use copper_mcp::Who;

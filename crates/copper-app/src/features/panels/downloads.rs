@@ -14,6 +14,8 @@
 use super::{Refresh, close, escape_closes, showing};
 use crate::features::format;
 use crate::features::ui;
+use crate::platform::Glib;
+use crate::shell::GtkShell;
 use crate::shell::Shell;
 use copper_core::downloads::{DownloadId, DownloadState, Keep, LiveDownload};
 use gtk4 as gtk;
@@ -346,7 +348,7 @@ impl DownloadsPanel {
     fn kept_row(self: &Rc<Self>, shell: &Shell, k: &Keep) -> gtk::ListBoxRow {
         let exists = k.still_there();
         let now = copper_core::date::now_unix();
-        let when = format::ago(k.date.unix(), now);
+        let when = format::ago::<Glib>(k.date.unix(), now);
         let detail = if k.from.is_empty() {
             when
         } else {

@@ -17,6 +17,7 @@
 use crate::app::{set_exit, settle};
 use crate::control::{TabInfo, tab_infos};
 use crate::palette::Mode;
+use crate::shell::GtkShell;
 use crate::shell::{OpenTab, Shell};
 use copper_core::TabId;
 use copper_core::settings::{Look, TabsPosition};

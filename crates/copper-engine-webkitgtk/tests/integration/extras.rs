@@ -4,7 +4,7 @@
 use std::time::{Duration, Instant};
 
 use copper_engine_webkitgtk::copper_engine::{
-    Engine, InjectionTime, InputEvent, PageOptions, Trust, UserScript,
+    Engine, InjectionTime, InputEvent, PageOptions, PageView, Trust, UserScript,
 };
 use gtk4::prelude::*;
 use serde_json::json;

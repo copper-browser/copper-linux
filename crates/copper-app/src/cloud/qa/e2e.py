@@ -104,7 +104,7 @@ class Copper:
         if os.path.exists(self.sock_path):
             os.remove(self.sock_path)
         env = dict(os.environ, COPPER_WORLD=self.world, COPPER_CLOUD_BENCH=self.sock_path,
-                   COPPER_LOG=os.environ.get("COPPER_LOG", "warn,copper_app=info,copper_cloud=info"))
+                   COPPER_LOG=os.environ.get("COPPER_LOG", "warn,copper_app=info,copper_shell_core=info,copper_cloud=info"))
         self.log = open(os.path.join(OUT, f"{self.world}.log"), mode)
         self.proc = subprocess.Popen([BIN], env=env, stdout=self.log, stderr=subprocess.STDOUT)
         for _ in range(300):

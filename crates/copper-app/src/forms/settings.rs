@@ -280,7 +280,7 @@ fn refresh(ui: &Rc<Ui>) {
     let weak = Rc::downgrade(ui);
     glib::spawn_future_local(async move {
         if !v.keyring_open() {
-            v.note_probe(super::vault::probe(true).await);
+            v.note_probe(v.probe(true).await);
         }
         let vv = v.clone();
         let logins = rt::run(async move {

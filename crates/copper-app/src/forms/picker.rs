@@ -3,31 +3,18 @@
 //! keyboard focus from the page, and nothing is filled until a row is
 //! clicked; the secret is read only then.
 
-use super::{Forms, source_title};
+use super::{Forms, Row, RowKind, source_title};
 use crate::shell::Shell;
 use crate::shell::pages::PageSlot;
 use copper_core::TabId;
-use copper_creds::credential::Credential;
 use copper_pagejs::messages::FieldRect;
+use copper_shell_core::forms::PickerView;
 use gtk4 as gtk;
 use gtk4::prelude::*;
 use std::cell::Cell;
 use std::rc::Rc;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RowKind {
-    /// Fill the name and password.
-    Login,
-    /// Fill the one-time code.
-    Code,
-}
-
-#[derive(Clone, Debug)]
-pub struct Row {
-    pub credential: Credential,
-    pub kind: RowKind,
-}
-
+/// The list on a page.
 pub struct Picker {
     root: gtk::Box,
     frame: glib::WeakRef<gtk::Overlay>,
@@ -40,29 +27,31 @@ pub struct Picker {
 const ROW_HEIGHT: f64 = 46.0;
 
 impl Picker {
-    pub fn remove(&self) {
-        if let Some(f) = self.frame.upgrade() {
-            f.remove_overlay(&self.root);
-        }
-    }
-
-    pub fn users(&self) -> Vec<String> {
-        self.users.clone()
-    }
-
-    pub fn busy(&self) -> bool {
-        self.busy.get()
-    }
-
     /// Click row `i` (self-test), on the next turn of the loop.
     pub fn press(&self, i: usize) {
         if let Some(r) = self.list.row_at_index(i as i32) {
             glib::idle_add_local_once(move || r.emit_activate());
         }
     }
+}
+
+impl PickerView for Picker {
+    fn remove(&self) {
+        if let Some(f) = self.frame.upgrade() {
+            f.remove_overlay(&self.root);
+        }
+    }
+
+    fn users(&self) -> Vec<String> {
+        self.users.clone()
+    }
+
+    fn busy(&self) -> bool {
+        self.busy.get()
+    }
 
     /// Hang under the box (or over it, near the foot of the page).
-    pub fn place(&self, rect: FieldRect, zoom: f64) {
+    fn place(&self, rect: FieldRect, zoom: f64) {
         let frame = self.frame.upgrade();
         let (fw, fh) = frame
             .as_ref()
@@ -174,7 +163,7 @@ pub fn show(
     }
     slot.frame.add_overlay(&root);
     let frame = glib::WeakRef::new();
-    frame.set(Some(&slot.frame));
+    frame.set(Some(slot.frame.overlay()));
     let users = rows
         .iter()
         .map(|r| match r.kind {

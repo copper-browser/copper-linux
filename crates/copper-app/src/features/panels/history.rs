@@ -7,6 +7,7 @@ use super::{Refresh, close, escape_closes, go, site_mark};
 use crate::features::format;
 use crate::features::settings::privacy;
 use crate::features::ui;
+use crate::platform::Glib;
 use crate::shell::Shell;
 use copper_core::history::Trace;
 use gtk4 as gtk;
@@ -115,10 +116,11 @@ impl HistoryPanel {
         let mut list: Option<gtk::ListBox> = None;
         for t in traces.iter().take(SHOWN) {
             let unix = t.last.unix();
-            let d = format::day_number(unix);
+            let d = format::day_number::<Glib>(unix);
             if d != day {
                 day = d;
-                self.content.append(&ui::caption(&format::day(unix)));
+                self.content
+                    .append(&ui::caption(&format::day::<Glib>(unix)));
                 let l = ui::list();
                 let weak = shell.downgrade();
                 l.connect_row_activated(move |_, row| {
@@ -156,7 +158,7 @@ impl HistoryPanel {
         let r = ui::row(&mark, title, &t.key);
         r.row.set_widget_name(&t.url);
         r.row.set_tooltip_text(Some(&t.url));
-        let time = gtk::Label::new(Some(&format::clock(t.last.unix())));
+        let time = gtk::Label::new(Some(&format::clock::<Glib>(t.last.unix())));
         time.add_css_class("row-side");
         r.end.append(&time);
         let forget = ui::icon_button("window-close-symbolic", "Remove from history");

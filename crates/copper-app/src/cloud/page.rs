@@ -12,6 +12,7 @@
 //! card's countdown) are redrawn, so nothing typed is lost.
 
 use super::{Cloud, ago, count, get, run_then, spawn};
+use crate::platform::Gtk;
 use crate::shell::{OpenTab, Shell, WeakShell};
 use copper_cloud::client::MintedPairing;
 use copper_cloud::link::{is_bare_pairing_code, manual_link};
@@ -1273,7 +1274,7 @@ impl CloudPage {
                 let on = r.is_active();
                 spawn(async move { sync.set(d, on).await });
                 if d == Domain::Canvas {
-                    crate::canvas::cloud_changed();
+                    crate::canvas::cloud_changed::<Gtk>();
                 }
             });
         }

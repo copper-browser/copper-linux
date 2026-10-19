@@ -2,6 +2,7 @@
 //! Copper as the default browser, the search engine, the download folder.
 
 use super::{button, combo, group, line};
+use crate::shell::GtkShell;
 use crate::shell::Shell;
 use copper_core::address::ENGINES;
 use gtk4 as gtk;
