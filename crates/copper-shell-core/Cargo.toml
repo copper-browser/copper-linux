@@ -32,5 +32,9 @@ url.workspace = true
 # multi-threaded runtimes, which the UI thread never blocks on.
 tokio.workspace = true
 
+[dev-dependencies]
+# Single sign-on's tests: a throwaway profile.
+tempfile = "3"
+
 [lints]
 workspace = true

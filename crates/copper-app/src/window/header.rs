@@ -93,8 +93,11 @@ impl Header {
             let Some(me) = weak_me.upgrade() else { return };
             me.finish(shell);
             perform(shell, row, Mode::Edit, new_tab);
+            // A Copper Cloud link opened Settings, which keeps the keyboard.
+            let settings = matches!(&row.action, crate::palette::complete::Action::Go(u)
+                if copper_shell_core::cloud::join::is_cloud_link(u));
             // Where you went has the keyboard, as after the card.
-            if let Some(p) = shell.active_page() {
+            if !settings && let Some(p) = shell.active_page() {
                 crate::palette::p_focus(&p);
             }
         });

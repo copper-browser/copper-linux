@@ -16,7 +16,9 @@ canvas lives on the cloud, because that is what sharing means.
 ## Setting it up
 
 There are three steps, in order. A pairing code from a computer that is
-already signed in does all three in one go (see the next section).
+already signed in does all three in one go (see the next section), and so
+does a sign-in link from an instance that offers company sign-in (see
+*Signing in with your company account*).
 
 1. **Connect.** Paste the link code from your Copper Cloud administrator into
    the one field. If you run the server yourself, `copper-cloud link-code`
@@ -103,9 +105,20 @@ first, or pair in Settings › Cloud. Exit codes: 0 done, 1 the cloud refused or
 couldn't be reached, 2 a usage error or a running Copper.
 
 A deep link `copper://cloud/join?code=<the code, percent-encoded>` carries
-any of these codes. Copper registers itself for `copper://` links; on Linux
-0.3.0 the command line reads them (`copper cloud pair 'copper://cloud/join?code=…'`),
-and Settings › Cloud opening for them comes in a later release.
+any of these codes. Copper registers itself for `copper://` links, and since
+0.4.1 such a link opens **Settings › Cloud** with the code filled in —
+clicked on a web page (the instance's *Open in Copper*), run as
+`copper 'copper://cloud/join?code=…'` (a running Copper takes it over), or
+typed into the address field, which offers *Join Copper Cloud — HOST*
+instead of a search. It never opens as a tab. A sign-in link (below) starts
+the sign-in at once; any other code waits for you to press Connect or Pair.
+
+A link never switches Copper to another instance by itself. Connected to
+another instance already, Settings › Cloud says *This link is for HOST*,
+with **Dismiss**, and **Disconnect and use it…** (which asks first). Signed
+in to that same instance already, it says *Already signed in to HOST as
+EMAIL*. The command line reads deep links too
+(`copper cloud pair 'copper://cloud/join?code=…'`).
 
 ## Signing in with your company account
 
@@ -120,8 +133,25 @@ copper-cloud://HOST:PORT/#sso=google&fp=<sha256 of the certificate>
 
 It has no key in it: anyone may have it. Signing in is what proves who you
 are, and the instance makes the account the first time (if its admin lets
-it). On Linux 0.3.0 this runs from the command line; the *Continue with
-Google* button in Settings › Cloud comes in a later release:
+it).
+
+**In Settings › Cloud** (0.4.1), paste the sign-in link where a link code
+goes. Copper shows the host and the fingerprint, if the link has one, and a
+**Continue with Google** button (the name is the instance's own for its
+provider). Press it and your browser opens; the row becomes *Finish signing
+in in your browser…* with a spinner and **Cancel**. When the browser comes
+back you are signed in, and sync turns on with every switch (or the ones
+this device had before). A self-signed instance with no `fp=` in the link
+gets the same step as a pairing code: Copper shows its certificate's
+fingerprint to compare, and **Trust and continue** pins it.
+
+An instance you connected to with a link code shows the same **Continue
+with Google** button above the email and password form, when it offers
+single sign-on, with the domains it takes (*Use your @example.com account*).
+If its admin has turned password sign-in off for everyone but admins, the
+form waits behind **Sign in with a password instead**.
+
+**From the command line** (no window needed):
 
 ```sh
 copper cloud sso 'copper-cloud://HOST:PORT/#sso=google'
@@ -129,7 +159,7 @@ copper cloud sso            # the instance this Copper is connected to already
 ```
 
 Copper opens your browser at the company's sign-in page and waits up to
-**5 minutes** (Ctrl+C gives up). It listens for the answer on a loopback port
+**5 minutes** (Cancel, or Ctrl+C on the command line, gives up). It listens for the answer on a loopback port
 of its own (`127.0.0.1`, a fresh port each time), checks that the answer is
 for the request it made, and finishes the sign-in with the instance using a
 PKCE code verifier that never left this computer. The browser tab then says
@@ -137,8 +167,9 @@ PKCE code verifier that never left this computer. The browser tab then says
 address is printed; open it yourself on this computer.
 
 After that it is exactly as if you had paired: the link, the account and the
-session token in one write, the device id the server chose, and sync on with
-the same `--sync` choice as `copper cloud pair`.
+session token in one write, the device id the server chose, and sync on —
+in Settings › Cloud through the running window's own sync, on the command
+line with the same `--sync` choice as `copper cloud pair`.
 
 Copper asks the instance which sign-ins it offers (`GET /v1/auth/sso`); an
 instance from before single sign-on answers 404, and Copper says so.
@@ -225,15 +256,19 @@ is not touched, and other devices keep what they already pulled.
   the key was rotated or revoked. Get the link code again.
 - **"That pairing code doesn't work any more."** It was used, revoked, or is
   past its ten minutes. Make a new one.
-- **"That's a sign-in link for HOST."** It was pasted where a link or pairing
-  code goes. Run `copper cloud sso` with it.
+- **"That's a sign-in link for HOST."** It was given to `copper cloud pair`
+  (or an older Copper). Paste it in Settings › Cloud, or run
+  `copper cloud sso` with it.
+- **"This link is for HOST."** Copper is connected to another instance.
+  Dismiss it, or Disconnect and use it (nothing is deleted).
 - **"Use your @example.com account."** The instance takes accounts only from
   that domain: sign in again and pick your company account.
 - **"This instance doesn't offer single sign-on."** It is older than
   copper-cloud's single sign-on, or its admin turned it off. Use a link code
   and a password, or a pairing code.
-- **"Nothing came back from the browser in 5 minutes."** Run
-  `copper cloud sso` again, and finish in the browser it opens.
+- **"Nothing came back from the browser in 5 minutes — try again."** Press
+  Continue again (or run `copper cloud sso` again), and finish in the browser
+  it opens.
 - **"Copper is running on this profile."** `copper cloud pair` and
   `copper cloud sso` need the profile to themselves. Quit Copper, or use
   Settings › Cloud.

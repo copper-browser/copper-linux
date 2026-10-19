@@ -667,6 +667,9 @@ impl FieldCore {
             && typed == full;
         let offers = if untouched {
             Offers::default()
+        } else if let Some(join) = copper_shell_core::cloud::join::palette_offers(&full) {
+            // `copper://cloud/join?code=…`: Settings › Cloud, never a search.
+            join
         } else {
             complete::offers(purpose, &inputs(shell, &typed, &full, purpose))
         };
@@ -690,6 +693,12 @@ impl FieldCore {
         };
         let row = match row {
             Some(r) => r,
+            None if copper_shell_core::cloud::join::is_cloud_link(&full) => {
+                match copper_shell_core::cloud::join::palette_row(&full) {
+                    Some(r) => r,
+                    None => return,
+                }
+            }
             None => {
                 let (tabs, visited) = shell.suggestions(&full, 6);
                 let known = complete::known_place(&full, &tabs, &visited).map(|k| k.url.clone());
@@ -820,6 +829,10 @@ pub fn perform(shell: &Shell, row: &Row, mode: Mode, new_tab: bool) {
                     }
                 }
             }
+        }
+        // Copper Cloud's own links before anything opens them as a page.
+        Action::Go(url) if copper_shell_core::cloud::join::is_cloud_link(url) => {
+            crate::cloud::open_join(shell, url);
         }
         Action::Go(url) => match mode {
             Mode::Edit if !new_tab && shell.active_id().is_some() => {
