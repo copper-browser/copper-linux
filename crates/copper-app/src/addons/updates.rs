@@ -79,7 +79,8 @@ pub fn draw(shell: &Shell) {
         }
         let mut rows: Vec<gtk::Widget> = Vec::new();
         let status = core_glue::status();
-        if let Some(p) = core_glue::pending() {
+        let pending = core_glue::pending();
+        if let Some(p) = &pending {
             let r = line(
                 "Update available",
                 &format!("{} {} for the {}", p.name, p.version, p.slot_name),
@@ -106,8 +107,12 @@ pub fn draw(shell: &Shell) {
             format!("Couldn’t check just now · {e}")
         } else if !status.linked {
             "Addons come from your Copper Cloud. Link one in Settings › Cloud.".to_string()
+        } else if installed.is_empty() && pending.is_some() {
+            "Nothing installed yet".to_string()
         } else if installed.is_empty() {
             "No addons from your Copper Cloud".to_string()
+        } else if pending.is_some() {
+            format!("{} installed", installed.join(", "))
         } else {
             format!("{} · up to date", installed.join(", "))
         };

@@ -49,7 +49,7 @@ pub fn maybe_start(shell: &Shell) {
 }
 
 /// A page for the stage while the slot is open (no network needed).
-const READING: &str = "data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Ctitle%3EField%20notes%3C/title%3E\
+pub(super) const READING: &str = "data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Ctitle%3EField%20notes%3C/title%3E\
 %3Cmeta%20name=color-scheme%20content=%22light%20dark%22%3E\
 %3Cbody%20style=%22font:17px/1.6%20Georgia,serif;max-width:34em;margin:9vh%20auto;padding:0%202em%22%3E\
 %3Ch1%20style=%22font-weight:500%22%3EField%20notes%3C/h1%3E\
@@ -65,21 +65,23 @@ fn fixture() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("qa/addons/hello"))
 }
 
-struct Run {
-    shell: Shell,
-    out: PathBuf,
-    failures: RefCell<Vec<String>>,
+/// One self-test run: its PASS/FAIL lines, screenshots and page calls
+/// (shared with the cloud lane, `selftest_cloud.rs`).
+pub(super) struct Run {
+    pub(super) shell: Shell,
+    pub(super) out: PathBuf,
+    pub(super) failures: RefCell<Vec<String>>,
 }
 
 impl Run {
-    fn check(&self, ok: bool, what: &str) {
+    pub(super) fn check(&self, ok: bool, what: &str) {
         println!("{} {what}", if ok { "PASS" } else { "FAIL" });
         if !ok {
             self.failures.borrow_mut().push(what.into());
         }
     }
 
-    async fn shot(&self, name: &str) {
+    pub(super) async fn shot(&self, name: &str) {
         crate::app::settle(&self.shell.downgrade(), Duration::from_secs(5)).await;
         glib::timeout_future(Duration::from_millis(500)).await;
         let path = self.out.join(format!("{name}.png"));
@@ -100,13 +102,13 @@ impl Run {
         }
     }
 
-    async fn look(&self, look: Look) {
+    pub(super) async fn look(&self, look: Look) {
         self.shell.set_look(look);
         glib::timeout_future(Duration::from_millis(400)).await;
     }
 
     /// `body` as an async function in the addon's page world.
-    async fn js(&self, body: &str) -> Result<Value, String> {
+    pub(super) async fn js(&self, body: &str) -> Result<Value, String> {
         let Some(v) = pane::view() else {
             return Err("no addon view".into());
         };
@@ -119,7 +121,7 @@ impl Run {
     }
 
     /// Wait for `cond` (polled), at most `limit`.
-    async fn until(&self, limit: Duration, mut cond: impl FnMut() -> bool) -> bool {
+    pub(super) async fn until(&self, limit: Duration, mut cond: impl FnMut() -> bool) -> bool {
         let start = Instant::now();
         while start.elapsed() < limit {
             if cond() {
@@ -130,7 +132,7 @@ impl Run {
         cond()
     }
 
-    async fn until_js(&self, limit: Duration, body: &str) -> bool {
+    pub(super) async fn until_js(&self, limit: Duration, body: &str) -> bool {
         let start = Instant::now();
         while start.elapsed() < limit {
             if self.js(body).await.is_ok_and(|v| v == Value::Bool(true)) {
@@ -529,7 +531,7 @@ async fn run(shell: &Shell) -> Vec<String> {
     r.failures.into_inner()
 }
 
-fn short(v: &Result<Value, String>) -> String {
+pub(super) fn short(v: &Result<Value, String>) -> String {
     let s = match v {
         Ok(v) => v.to_string(),
         Err(e) => format!("error: {e}"),

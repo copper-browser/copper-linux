@@ -33,6 +33,8 @@ pub mod policy;
 pub mod scheme;
 #[cfg(debug_assertions)]
 pub mod selftest;
+#[cfg(debug_assertions)]
+pub mod selftest_cloud;
 pub mod settings;
 pub mod updates;
 pub mod view;
@@ -87,6 +89,8 @@ pub fn register(shell: &Shell) {
     view::watch_shell(shell);
     #[cfg(debug_assertions)]
     selftest::maybe_start(shell);
+    #[cfg(debug_assertions)]
+    selftest_cloud::maybe_start(shell);
 }
 
 /// Ctrl+E: show the slot, or put it away.
