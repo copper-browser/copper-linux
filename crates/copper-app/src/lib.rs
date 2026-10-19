@@ -23,6 +23,7 @@
 //! | [`screenshot`] | PNG of the whole window (debug QA) |
 
 pub mod actions;
+pub mod addons; // Addons: Copper's slots, filled from Copper Cloud (docs/addons.md)
 pub mod agents;
 pub mod app;
 pub mod canvas;

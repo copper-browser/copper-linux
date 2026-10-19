@@ -37,6 +37,7 @@
 //! Persistence: [`store::Store`] (atomic write + `.bak` + quarantine) and
 //! [`saver::Saver`] (debounced background writes with explicit flush).
 
+pub mod addons;
 pub mod address;
 pub mod agent;
 pub mod bookmarks;

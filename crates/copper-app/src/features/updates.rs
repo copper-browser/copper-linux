@@ -155,6 +155,7 @@ pub fn page(shell: &Shell) -> adw::PreferencesPage {
     let notes = group(None);
     notes.add(&note);
     page.add(&notes);
+    crate::addons::updates::attach(shell, &page); // Addons: "Update available" for addons, Flatpak too
     let view = Rc::new(View {
         group: g.downgrade(),
         rows: RefCell::default(),
@@ -215,6 +216,7 @@ impl View {
             let weak = shell.downgrade();
             b.connect_clicked(move |_| {
                 if let Some(s) = weak.upgrade() {
+                    crate::addons::updates::app_checked(); // Addons: Check now asks for addons too
                     check::<Gtk>(&s, true);
                 }
             });
@@ -253,6 +255,7 @@ impl View {
             }
         }
         *self.rows.borrow_mut() = rows;
+        crate::addons::updates::draw(shell); // Addons: the Addons group redraws with this one
     }
 }
 

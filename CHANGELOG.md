@@ -3,7 +3,35 @@
 Copper for Linux. Versions follow the `.deb` and the Flatpak; dates are
 release dates.
 
-## 0.3.0 — unreleased
+## 0.4.0 — 2026-10-19
+
+Addons: the Agent sidebar, filled by your Copper Cloud.
+
+### Added
+
+- **Agent sidebar (Ctrl+E).** A pane on the right of the window, full height,
+  340–620 px wide (`agent.paneWidth`, as on the Mac). It keeps running when
+  hidden. With no addon it says so and points to Settings › Addons.
+- **Addons from Copper Cloud.** Copper asks the linked cloud which addon fills
+  each slot (`/v1/addons`) at launch, on link or account changes, every six
+  hours, on Settings › Updates › Check now and on the cloud's event stream. A
+  new addon or version is downloaded, checked against its SHA-256 and staged;
+  Settings › Updates and a toast say "Update available — NAME VERSION for the
+  Agent sidebar", and **Install** loads it without a relaunch.
+- **Settings › Addons** lists installed addons, turns one off on this computer,
+  removes one, and checks for updates. It replaces the page that said
+  extensions aren't available.
+- **`copper-addon://`**: addons run from their verified bundle in a view of
+  their own, with a strict content policy, their own storage, no off-origin
+  navigation, and the bridge v1 API (`copper.info`, `copper.identity`,
+  `copper.settings`, `copper.storage`, `copper.fetch` for the hosts their
+  manifest names, `copper.openUrl`, `copper.page.current`,
+  `copper.oauth.authorize` in a sign-in window, `copper.ui.close`).
+- `COPPER_ADDONS_DEV_DIR` runs an addon folder directly in a test world, and
+  `COPPER_SELFTEST=addons` checks the whole path. See
+  [docs/addons.md](docs/addons.md).
+
+## 0.3.0 — 2026-10-19
 
 Copper Cloud single sign-on, and Copper as an agent's own browser with no
 display.

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hello addon</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header>
+    <div class="titles">
+      <h1>Hello addon</h1>
+      <p id="greeting" class="sub">Waiting for <code>window.copper</code>…</p>
+    </div>
+    <button id="close" class="icon" title="Close" aria-label="Close">×</button>
+  </header>
+  <main>
+    <section>
+      <h2>Bridge</h2>
+      <ol id="results" aria-live="polite"></ol>
+    </section>
+    <section>
+      <h2>Try</h2>
+      <div class="actions">
+        <button id="open">Open example.com</button>
+        <button id="oauth">Sign in (OAuth)</button>
+        <button id="again">Run again</button>
+      </div>
+    </section>
+    <section>
+      <h2>Events</h2>
+      <ol id="events" aria-live="polite"></ol>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
