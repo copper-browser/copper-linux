@@ -39,7 +39,13 @@ jobs:
           new=$(cat "$ref")
           echo "old=$old" >> "$GITHUB_OUTPUT"
           echo "new=$new" >> "$GITHUB_OUTPUT"
-          git diff --quiet && echo "changed=false" >> "$GITHUB_OUTPUT" || echo "changed=true" >> "$GITHUB_OUTPUT"
+          # Only the page counts: a canvas-app commit that leaves dist/canvas.html as it was keeps the pin.
+          if git diff --quiet -- crates/copper-app/src/canvas/resources/canvas.html; then
+            git checkout -- "$ref"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Push the pinned branch, open or update the issue
         if: steps.pin.outputs.changed == 'true'
         env:
