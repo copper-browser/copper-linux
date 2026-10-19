@@ -39,10 +39,10 @@ struct WebKitWebContext {
 struct WebKitSecurityManager {
     _p: [u8; 0],
 }
-/// The same opaque type `canvas::scheme` declares: both modules declare
-/// `webkit_web_context_register_uri_scheme`, and its callback's type must be
-/// the very same one in both (rustc's `clashing_extern_declarations`).
-use crate::canvas::scheme::WebKitURISchemeRequest;
+#[repr(C)]
+struct WebKitURISchemeRequest {
+    _p: [u8; 0],
+}
 #[repr(C)]
 struct WebKitURISchemeResponse {
     _p: [u8; 0],

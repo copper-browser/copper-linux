@@ -18,7 +18,7 @@
 //! Prints `PASS`/`FAIL` lines and exits non-zero on any failure.
 
 use super::{core_glue, pane, policy};
-use crate::shell::Shell;
+use crate::shell::{GtkShell, Shell};
 use copper_core::settings::Look;
 use copper_engine::{PageView, World};
 use gtk4::prelude::*;

@@ -11,7 +11,7 @@
 //! past the deadline is `timeout`.
 
 use super::policy::{self, Verdict};
-use crate::shell::Shell;
+use crate::shell::{GtkShell, Shell};
 use copper_engine::{Engine, PageEvent, PageOptions, PageView};
 use gtk4 as gtk;
 use gtk4::prelude::*;

@@ -15,7 +15,7 @@
 
 use super::core_glue;
 use crate::features::settings::{button, group, line};
-use crate::shell::Shell;
+use crate::shell::{GtkShell, Shell};
 use gtk4 as gtk;
 use gtk4::prelude::*;
 use libadwaita as adw;

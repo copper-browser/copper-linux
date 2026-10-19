@@ -11,7 +11,7 @@
 use super::policy::{self, DEFAULT_WIDTH};
 use super::view::AddonView;
 use super::{core_glue, shell};
-use crate::shell::Shell;
+use crate::shell::{GtkShell, Shell};
 use gtk4 as gtk;
 use gtk4::prelude::*;
 use libadwaita as adw;
