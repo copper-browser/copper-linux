@@ -218,6 +218,7 @@ impl<P: Platform> Host for AppHost<P> {
 
     fn drive(&self, event: &DriveEvent) {
         self.app.drive(event);
+        super::tell_drive(event);
     }
 
     fn processes_line(&self, _id: &TabId) -> String {
