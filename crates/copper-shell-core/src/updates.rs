@@ -67,9 +67,10 @@ pub trait UpdatesApp<P: Platform>: 'static {
     fn changed(&self, shell: &Shell<P>);
 }
 
-/// This build's version.
+/// The running app's version ([`copper_core::version::app`]: Copper for
+/// Linux's or Copper for Windows', whichever binary set it).
 pub fn version() -> &'static str {
-    env!("CARGO_PKG_VERSION")
+    copper_core::version::app()
 }
 
 /// The feed's file (`packaging/version-manifest.py`).

@@ -201,7 +201,7 @@ impl HttpFetcher {
             let mut b = reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .connect_timeout(Duration::from_secs(15))
-                .user_agent(concat!("Copper-Addon/", env!("CARGO_PKG_VERSION")));
+                .user_agent(format!("Copper-Addon/{}", copper_core::version::app()));
             if direct {
                 b = b.no_proxy();
             }

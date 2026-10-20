@@ -6,7 +6,8 @@
 //! `JSONSerialization` does (slashes escaped).
 //!
 //! * Origin is checked before anything else: a browser page sends one, an
-//!   MCP client does not; only `://127.0.0.1` and `://localhost` pass.
+//!   MCP client does not; only an `http(s)` origin whose host is exactly
+//!   `127.0.0.1`, `localhost` or `[::1]` passes ([`origin_allowed`]).
 //! * `/` and `/health` answer without a token.
 //! * `/mcp` needs `Authorization: Bearer <agent.json token>`.
 //! * POST carries JSON-RPC; the reply is always JSON, never SSE. GET is 405
@@ -274,15 +275,30 @@ async fn connection(mut stream: TcpStream, _peer: SocketAddr, shared: Arc<Shared
     }
 }
 
-/// Whether a request's Origin may reach the server.
+/// Whether a request's Origin may reach the server. No Origin (an MCP
+/// client) passes; otherwise it must be exactly an `http`/`https` origin on
+/// the loopback — host `127.0.0.1`, `localhost` or `[::1]`, any port. A
+/// look-alike (`http://localhost.evil.example`, `http://127.0.0.1.evil.example`,
+/// `http://localhost@evil.example`), `null` and anything unparsable are
+/// refused: the Mac's substring test let the first two through.
 pub fn origin_allowed(origin: Option<&str>) -> bool {
-    match origin {
-        None => true,
-        Some(o) => {
-            let o = o.to_lowercase();
-            o.contains("://127.0.0.1") || o.contains("://localhost")
-        }
-    }
+    let Some(origin) = origin else { return true };
+    let Ok(u) = url::Url::parse(origin.trim()) else {
+        return false;
+    };
+    let loopback = match u.host() {
+        Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(ip)) => ip == std::net::Ipv4Addr::LOCALHOST,
+        Some(url::Host::Ipv6(ip)) => ip == std::net::Ipv6Addr::LOCALHOST,
+        None => false,
+    };
+    matches!(u.scheme(), "http" | "https")
+        && loopback
+        && u.username().is_empty()
+        && u.password().is_none()
+        && matches!(u.path(), "" | "/")
+        && u.query().is_none()
+        && u.fragment().is_none()
 }
 
 /// Whether the request carries the bearer token.
@@ -423,5 +439,52 @@ mod tests {
         assert!(!authorised(Some("Bearer t0k"), ""));
         assert!(!authorised(Some("Basic t0k"), "t0k"));
         assert!(!authorised(None, "t0k"));
+    }
+
+    #[test]
+    fn loopback_origins_pass_on_any_port() {
+        for ok in [
+            "http://localhost",
+            "http://localhost:4123",
+            "https://localhost:8443",
+            "http://LOCALHOST:3000",
+            "http://127.0.0.1",
+            "http://127.0.0.1:4123",
+            "https://127.0.0.1:1",
+            "http://[::1]",
+            "http://[::1]:4123",
+            "http://localhost:4123/",
+        ] {
+            assert!(origin_allowed(Some(ok)), "{ok} should pass");
+        }
+    }
+
+    #[test]
+    fn look_alike_and_odd_origins_are_refused() {
+        for bad in [
+            "http://localhost.evil.example",
+            "http://127.0.0.1.evil.example",
+            "https://localhost.evil.example:4123",
+            "http://evil.example/://localhost",
+            "http://evil.example?x=://127.0.0.1",
+            "http://localhost@evil.example",
+            "http://evil.example@localhost",
+            "http://user:pw@127.0.0.1",
+            "http://evil-localhost",
+            "http://127.0.0.2",
+            "http://[::2]",
+            "http://localhost./",
+            "ws://localhost:4123",
+            "file://localhost/etc",
+            "chrome-extension://localhost",
+            "http://localhost/path",
+            "null",
+            "",
+            "localhost",
+            "://localhost",
+            "garbage ://127.0.0.1",
+        ] {
+            assert!(!origin_allowed(Some(bad)), "{bad} should be refused");
+        }
     }
 }

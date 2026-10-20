@@ -25,8 +25,11 @@ use std::error::Error as StdError;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// `User-Agent` on every request.
-pub const USER_AGENT: &str = concat!("Copper/", env!("CARGO_PKG_VERSION"), " (Linux)");
+/// `User-Agent` on every request: `Copper/<app version> (<system>)`
+/// ([`copper_core::version::user_agent`]).
+pub fn user_agent() -> String {
+    copper_core::version::user_agent()
+}
 
 /// SHA-256 of a certificate's DER, lowercase hex.
 pub fn fingerprint(der: &[u8]) -> String {
@@ -125,7 +128,7 @@ impl Trust {
         reqwest::Client::builder()
             .use_preconfigured_tls((*self.config).clone())
             .no_proxy()
-            .user_agent(USER_AGENT)
+            .user_agent(user_agent())
             .connect_timeout(Duration::from_secs(15))
             .pool_idle_timeout(Duration::from_secs(60))
             .build()

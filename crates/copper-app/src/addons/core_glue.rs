@@ -421,7 +421,7 @@ pub fn dispatch(active: &Active, text: String, host: Host, done: impl FnOnce(Str
     let mut ctx = Context::new(
         &active.core,
         Platform::Linux,
-        env!("CARGO_PKG_VERSION"),
+        copper_core::version::app(),
         g.store.clone(),
     );
     ctx.theme_dark = libadwaita::StyleManager::default().is_dark();

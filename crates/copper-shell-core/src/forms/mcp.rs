@@ -273,27 +273,11 @@ pub fn card_values(c: &AutofillCard) -> BTreeMap<String, String> {
 }
 
 fn card_label(c: &AutofillCard) -> String {
-    let last4 = c.last4();
-    let tail = if last4.is_empty() {
-        String::new()
-    } else {
-        format!("•••• {last4}")
-    };
-    [c.brand.as_str(), tail.as_str()]
-        .iter()
-        .filter(|s| !s.is_empty())
-        .copied()
-        .collect::<Vec<_>>()
-        .join(" ")
+    c.label()
 }
 
 fn full_name(i: &AutofillIdentity) -> String {
-    [&i.first_name, &i.middle_name, &i.last_name]
-        .iter()
-        .filter(|s| !s.is_empty())
-        .map(|s| s.as_str())
-        .collect::<Vec<_>>()
-        .join(" ")
+    i.full_name()
 }
 
 pub fn identity_values(i: &AutofillIdentity) -> BTreeMap<String, String> {

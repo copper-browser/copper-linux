@@ -218,6 +218,15 @@ pub fn register_core(shell: &Shell) {
     register_action(shell, "reopen-tab", &["<Control><Shift>t"], |s| {
         s.reopen();
     });
+    register_action(shell, "clear-tabs", &["<Control><Shift>k"], |s| {
+        let n = s.clear_tabs();
+        if n > 0 {
+            s.ui().cleared_toast(n);
+        }
+    });
+    register_action(shell, "undo-clear", &[], |s| {
+        s.undo_clear();
+    });
     register_action(
         shell,
         "next-tab",
@@ -492,6 +501,14 @@ pub fn register_core(shell: &Shell) {
         })
         .shortcut("Ctrl+W")
         .when(|s| s.active_id().is_some()),
+        Command::new("clear-tabs", "Clear Tabs", "go-down-symbolic", |s| {
+            let n = s.clear_tabs();
+            if n > 0 {
+                s.ui().cleared_toast(n);
+            }
+        })
+        .shortcut("Ctrl+Shift+K")
+        .when(|s| !s.clearable_tabs().is_empty()),
         Command::new("pin-tab", "Pin or Unpin Tab", "view-pin-symbolic", |s| {
             with_active(s, |s, id| s.toggle_pin(id))
         })

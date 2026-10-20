@@ -31,6 +31,12 @@ pub struct PageSlot<P: Platform> {
     pub loading: Cell<bool>,
     pub progress: Cell<f64>,
     pub audio: Cell<bool>,
+    /// This document asked for the camera, the microphone or the screen:
+    /// it may be on a call, so it never sleeps (Mac `Sleep.swift` "on a
+    /// call"; the engines say what was asked, not whether it is in use).
+    pub capture: Cell<bool>,
+    /// Downloads this page started that are still going.
+    pub downloads: RefCell<std::collections::HashSet<copper_engine::DownloadId>>,
     pub crashed: Cell<bool>,
     /// The address that failed to load, while its error shows.
     pub failed_url: RefCell<Option<String>>,
@@ -50,6 +56,8 @@ impl<P: Platform> PageSlot<P> {
             loading: Cell::new(false),
             progress: Cell::new(0.0),
             audio: Cell::new(false),
+            capture: Cell::new(false),
+            downloads: RefCell::default(),
             crashed: Cell::new(false),
             failed_url: RefCell::new(None),
             hover: RefCell::new(None),
@@ -181,6 +189,8 @@ impl<P: Platform> Shell<P> {
                 t.seen = copper_core::date::UnixTime::now();
             });
         }
+        // Woken: its last picture stands in until the page has drawn.
+        self.wake_cover(id);
         let profile = if private {
             self.engine().profile(&crate::private::profile_id(id), true)
         } else {
@@ -402,6 +412,7 @@ impl<P: Platform> Shell<P> {
                 self.set_opener(&opened, id);
             }
             PageEvent::Crashed(reason) => {
+                self.uncover(id, std::time::Duration::ZERO);
                 let url = self
                     .browser()
                     .tab(id)
@@ -423,6 +434,15 @@ impl<P: Platform> Shell<P> {
                 self.close_keeping_saved(id);
             }
             PageEvent::PermissionRequest { id: pid, kind, url } => {
+                if matches!(
+                    kind,
+                    PermissionKind::Camera
+                        | PermissionKind::Microphone
+                        | PermissionKind::CameraAndMicrophone
+                        | PermissionKind::DisplayCapture
+                ) {
+                    slot.capture.set(true);
+                }
                 self.ask_permission(slot, pid, kind, url.as_deref());
             }
             PageEvent::LinkHover(h) => {
@@ -435,7 +455,19 @@ impl<P: Platform> Shell<P> {
                 slot.audio.set(on);
                 self.view().refresh(self, &Refresh::tab(id));
             }
-            PageEvent::Download(_) | PageEvent::Console(_) | PageEvent::ScriptMessage { .. } => {}
+            PageEvent::Download(d) => {
+                let going = !matches!(
+                    d.state,
+                    copper_engine::DownloadState::Finished { .. }
+                        | copper_engine::DownloadState::Failed { .. }
+                );
+                if going {
+                    slot.downloads.borrow_mut().insert(d.id);
+                } else {
+                    slot.downloads.borrow_mut().remove(&d.id);
+                }
+            }
+            PageEvent::Console(_) | PageEvent::ScriptMessage { .. } => {}
         }
     }
 
@@ -454,6 +486,10 @@ impl<P: Platform> Shell<P> {
             }
             LoadState::Redirected { .. } => {}
             LoadState::Committed { url } => {
+                // A new document: whatever the old one asked for is over;
+                // a wake cover comes off once it has had time to paint.
+                slot.capture.set(false);
+                self.uncover(id, crate::cover::AFTER_COMMIT);
                 if let Some(url) = url
                     && !slot.private
                 {
@@ -468,6 +504,7 @@ impl<P: Platform> Shell<P> {
                 }
             }
             LoadState::Finished { .. } => {
+                self.uncover(id, std::time::Duration::ZERO);
                 slot.loading.set(false);
                 slot.progress.set(1.0);
                 self.0.hub.send(ShellEvent::Loaded(id.clone()));
@@ -477,6 +514,7 @@ impl<P: Platform> Shell<P> {
                 error,
                 cancelled,
             } => {
+                self.uncover(id, std::time::Duration::ZERO);
                 slot.loading.set(false);
                 if !cancelled {
                     slot.show_failure(&url, &error, self.view().is_online());

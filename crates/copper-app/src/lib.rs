@@ -70,7 +70,7 @@ pub fn main() -> std::process::ExitCode {
         return ExitCode::SUCCESS;
     }
     if opts.version {
-        println!("copper {}", env!("CARGO_PKG_VERSION"));
+        println!("copper {}", copper_core::version::app());
         return ExitCode::SUCCESS;
     }
     if cfg!(not(debug_assertions)) && opts.scripted() {

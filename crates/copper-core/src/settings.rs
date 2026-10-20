@@ -36,6 +36,9 @@ pub mod keys {
     pub const TABS_SLEEP: &str = "tabs.sleep";
     /// Seconds before an idle tab sleeps (0/absent = 1800).
     pub const SLEEP_AFTER: &str = "sleep.after";
+    /// How many pages stay loaded however long they are left (0/absent:
+    /// from the computer's memory). For measurements, as on the Mac.
+    pub const SLEEP_KEEP: &str = "sleep.keep";
     /// Ad blocker on. Default true.
     pub const SHIELD: &str = "shield";
     /// Hosts the ad blocker is off for, sorted.
@@ -276,6 +279,19 @@ impl Settings {
         self.number(keys::SLEEP_AFTER)
             .filter(|s| *s > 0.0)
             .unwrap_or(1800.0)
+    }
+
+    /// `sleep.after` was set by hand (measurements): every tab past it
+    /// sleeps, whatever the memory budget says (Mac `sleepIdle`).
+    pub fn sleep_after_set(&self) -> bool {
+        self.number(keys::SLEEP_AFTER).is_some_and(|s| s > 0.0)
+    }
+
+    /// `sleep.keep`, when set: how many pages stay loaded.
+    pub fn sleep_keep(&self) -> Option<usize> {
+        self.number(keys::SLEEP_KEEP)
+            .filter(|n| *n >= 1.0)
+            .map(|n| n as usize)
     }
 
     /// The ad blocker (default on).

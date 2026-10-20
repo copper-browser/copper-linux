@@ -59,6 +59,7 @@ pub mod settings;
 pub mod store;
 pub mod trails;
 pub mod updates;
+pub mod version;
 
 pub use address::{SearchEngine, url_from_typed};
 pub use bookmarks::{Bookmark, Bookmarks};

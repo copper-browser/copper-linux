@@ -9,6 +9,8 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
+    // Everything shared reads "this build" from here (copper_core::version).
+    copper_core::version::set_app(env!("CARGO_PKG_VERSION"));
     let args: Vec<String> = std::env::args().skip(1).collect();
     let exit = |code: i32| ExitCode::from(code.clamp(0, 255) as u8);
     if copper_mcp::cloud_cli::is_cloud(&args) {

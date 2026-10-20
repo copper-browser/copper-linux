@@ -23,7 +23,7 @@ pub fn entry(url: &str, reason: CrashReason, now: IsoDate) -> CrashEntry {
         kind: "fault".into(),
         time: now,
         source: Some("web-process".into()),
-        version: Some(env!("CARGO_PKG_VERSION").into()),
+        version: Some(copper_core::version::app().into()),
         os: Some(os_name()),
         reason: Some(
             match reason {

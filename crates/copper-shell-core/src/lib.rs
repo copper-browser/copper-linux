@@ -30,8 +30,10 @@
 
 pub mod agents;
 pub mod canvas;
+pub mod clear;
 pub mod cloud;
 pub mod control;
+pub mod cover;
 pub mod crash;
 pub mod curtain;
 pub mod downloads;
@@ -44,6 +46,7 @@ pub mod private;
 pub mod session;
 pub mod shell;
 pub mod shield;
+pub mod sleep;
 pub mod spaces;
 pub mod updates;
 pub mod util;
@@ -84,6 +87,21 @@ pub trait Platform: Sized + 'static {
     /// full name when there is one, else the login name): a signed-out
     /// canvas's own persona.
     fn user_name() -> String;
+
+    /// This computer's memory, total and available, in bytes: the tab
+    /// sleeper's budget and how short memory is ([`sleep`]). The default
+    /// reads `/proc/meminfo` on Linux.
+    fn memory() -> Option<(u64, u64)> {
+        sleep::system_memory()
+    }
+
+    /// The picture the engine kept of `page` when it was last hidden — a
+    /// JPEG and its size in pixels — for the wake cover ([`cover`]), where
+    /// the engine can't picture a hidden page on demand. Default: none (the
+    /// page is pictured as it is now).
+    fn kept_picture(_page: &PageOf<Self>) -> Option<(Vec<u8>, u32, u32)> {
+        None
+    }
 }
 
 /// The engine's page type for platform `P`.

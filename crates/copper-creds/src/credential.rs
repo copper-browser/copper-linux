@@ -170,6 +170,40 @@ pub struct AutofillIdentity {
     pub license_number: String,
 }
 
+impl AutofillIdentity {
+    /// First, middle and last name, the empty ones left out.
+    pub fn full_name(&self) -> String {
+        [&self.first_name, &self.middle_name, &self.last_name]
+            .iter()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// The line under its name in the list (`AutofillIdentity.summary`):
+    /// the address, else the email, the phone, the name.
+    pub fn summary(&self) -> String {
+        fn joined(parts: &[&str], by: &str) -> String {
+            parts
+                .iter()
+                .filter(|s| !s.is_empty())
+                .copied()
+                .collect::<Vec<_>>()
+                .join(by)
+        }
+        let street = joined(&[&self.address1, &self.address2, &self.address3], ", ");
+        let locality = joined(&[&self.city, &self.state, &self.postal_code], " ");
+        let place = joined(&[&locality, &self.country], ", ");
+        let address = joined(&[&street, &place], ", ");
+        let name = self.full_name();
+        [address, self.email.clone(), self.phone.clone(), name]
+            .into_iter()
+            .find(|s| !s.is_empty())
+            .unwrap_or_else(|| self.name.clone())
+    }
+}
+
 /// A payment card from a vault (`AutofillCard`).
 #[derive(Clone, PartialEq, Eq, Default)]
 pub struct AutofillCard {
@@ -202,6 +236,23 @@ impl AutofillCard {
             return String::new();
         }
         digits[digits.len() - 4..].iter().collect()
+    }
+
+    /// "Visa •••• 1111" (`AutofillCard.label`): the brand and the last
+    /// four, whichever there are.
+    pub fn label(&self) -> String {
+        let last4 = self.last4();
+        let tail = if last4.is_empty() {
+            String::new()
+        } else {
+            format!("•••• {last4}")
+        };
+        [self.brand.as_str(), tail.as_str()]
+            .iter()
+            .filter(|s| !s.is_empty())
+            .copied()
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 }
 
@@ -343,5 +394,46 @@ mod tests {
         assert_eq!(rows[0].source, Source::Bitwarden);
         let ranked = ranked(rows, "www.example.com", "bob");
         assert_eq!(ranked[0].user, "bob");
+    }
+
+    #[test]
+    fn identity_summary_prefers_the_address() {
+        let mut i = AutofillIdentity {
+            name: "Home".into(),
+            first_name: "Ana".into(),
+            last_name: "Lima".into(),
+            email: "ana@example.com".into(),
+            ..Default::default()
+        };
+        assert_eq!(i.full_name(), "Ana Lima");
+        assert_eq!(i.summary(), "ana@example.com");
+        i.address1 = "1 Main St".into();
+        i.city = "Springfield".into();
+        i.state = "IL".into();
+        i.postal_code = "62701".into();
+        i.country = "US".into();
+        assert_eq!(i.summary(), "1 Main St, Springfield IL 62701, US");
+        let bare = AutofillIdentity {
+            name: "Work".into(),
+            ..Default::default()
+        };
+        assert_eq!(bare.summary(), "Work");
+    }
+
+    #[test]
+    fn card_label_is_brand_and_last_four() {
+        let card = AutofillCard {
+            brand: "Visa".into(),
+            number: "4111 1111 1111 1234".into(),
+            ..Default::default()
+        };
+        assert_eq!(card.label(), "Visa •••• 1234");
+        let no_brand = AutofillCard {
+            number: "4111111111115678".into(),
+            ..Default::default()
+        };
+        assert_eq!(no_brand.label(), "•••• 5678");
+        assert_eq!(AutofillCard::default().label(), "");
+        assert!(!format!("{card:?}").contains("4111"));
     }
 }

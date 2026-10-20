@@ -11,11 +11,11 @@
 
 use super::view::{FormsUi, OfferData, OfferView, PickerView, Row, RowKind};
 use super::{Forms, rt, site_host};
-use crate::Platform;
 use crate::control::ShellEvent;
 use crate::main_loop::{MainLoop, Task, spawn};
 use crate::shell::Shell;
 use crate::shell::pages::PageSlot;
+use crate::{PageOf, Platform};
 use copper_core::TabId;
 use copper_creds::credential::{self, Credential, Source};
 use copper_creds::offer::{self as judge, Context, Decision, Outcome, Sent, Settle, SignInWatch};
@@ -440,20 +440,28 @@ impl<U: FormsUi> Forms<U> {
             return;
         };
         let kind = field.kind.as_str();
-        let login = matches!(kind, "username" | "password");
-        if !login && kind != "otp" {
+        let Some(want) = Want::of(kind, &field.group) else {
             self.with_tab(tab, |t| t.picked_into = false);
             self.lower_soon(tab);
             return;
-        }
+        };
         let Some((shell, slot)) = self.page_of(tab) else {
             return;
         };
-        if !shell.settings().fills_passwords() || self.is_private(tab) {
+        let on = {
+            let s = shell.settings();
+            match want {
+                Want::Login | Want::Code => s.fills_passwords(),
+                // `Browser.swift` `suggestions`: addresses and cards hang
+                // from their boxes while "Fill addresses and cards" is on.
+                Want::Identity | Want::Card => s.fills_everything(),
+            }
+        };
+        if !on || self.is_private(tab) {
             return;
         }
         let picked = self.with_tab(tab, |t| t.picked_into).unwrap_or(false);
-        if login && picked {
+        if want != Want::Code && picked {
             return;
         }
         let key = format!("{kind}|{}", field.label);
@@ -480,8 +488,29 @@ impl<U: FormsUi> Forms<U> {
         let v = self.vault.clone();
         let weak = Rc::downgrade(self);
         let tab = tab.clone();
-        let want_code = kind == "otp";
         Loop::<U>::spawn_local(async move {
+            let vault = v.clone();
+            let rows: Option<Vec<Row>> = match want {
+                Want::Identity => rt::run(async move { vault.identities().await })
+                    .await
+                    .map(|all| all.iter().map(Row::identity).collect()),
+                Want::Card => rt::run(async move { vault.cards().await })
+                    .await
+                    .map(|all| all.iter().map(Row::card).collect()),
+                Want::Login | Want::Code => None,
+            };
+            if let Some(rows) = rows {
+                let Some(f) = weak.upgrade() else { return };
+                if f.with_tab(&tab, |t| t.focus_gen) != Some(stamp) {
+                    return;
+                }
+                if rows.is_empty() {
+                    f.lower_now(&tab);
+                } else {
+                    f.show_picker(&tab, key, rect, rows);
+                }
+                return;
+            }
             let h = host.clone();
             let all = rt::run(async move { v.candidates(&h).await })
                 .await
@@ -490,7 +519,7 @@ impl<U: FormsUi> Forms<U> {
             if f.with_tab(&tab, |t| t.focus_gen) != Some(stamp) {
                 return;
             }
-            let rows: Vec<Row> = if want_code {
+            let rows: Vec<Row> = if want == Want::Code {
                 let mut coded: Vec<Credential> = all.into_iter().filter(|c| c.has_totp).collect();
                 if let Some(s) = signed.filter(|s| s.has_totp) {
                     coded.retain(|c| c.id != s.id);
@@ -596,6 +625,9 @@ impl<U: FormsUi> Forms<U> {
         let weak = Rc::downgrade(self);
         let tab = tab.clone();
         let page = slot.page.clone();
+        if let Some(id) = row.autofill_id() {
+            return self.pick_values(&shell, tab, &page, row.kind, id);
+        }
         Loop::<U>::spawn_local(async move {
             let id = row.credential.id.clone();
             let code = row.kind == RowKind::Code;
@@ -646,8 +678,103 @@ impl<U: FormsUi> Forms<U> {
         });
     }
 
+    /// An identity or card row was clicked: read its values from the
+    /// unlocked vault (only now) and fill the boxes they fit
+    /// (`Browser.swift` `choose(_ suggestion:)`). Nothing is put in a log or
+    /// an announcement; the page answers only how many boxes it filled.
+    fn pick_values(
+        self: &Rc<Self>,
+        shell: &Shell<U::Platform>,
+        tab: TabId,
+        page: &PageOf<U::Platform>,
+        kind: RowKind,
+        id: String,
+    ) {
+        let v = self.vault.clone();
+        let weak = Rc::downgrade(self);
+        let shell = shell.clone();
+        let page = page.clone();
+        Loop::<U>::spawn_local(async move {
+            let values = rt::run(async move {
+                match kind {
+                    RowKind::Card => v
+                        .cards()
+                        .await
+                        .iter()
+                        .find(|c| c.id == id)
+                        .map(super::mcp::card_values),
+                    _ => v
+                        .identities()
+                        .await
+                        .iter()
+                        .find(|i| i.id == id)
+                        .map(super::mcp::identity_values),
+                }
+            })
+            .await
+            .flatten();
+            let Some(f) = weak.upgrade() else { return };
+            let Some(values) = values else {
+                f.lower_now(&tab);
+                shell.toast("Copper couldn't reach the vault");
+                return;
+            };
+            let filled = call(&page, &copper_pagejs::forms::fill_values(&values)).await;
+            drop(values);
+            f.lower_now(&tab);
+            if filled.ok().flatten().unwrap_or(0) == 0 {
+                shell.toast("Couldn't find the boxes anymore");
+                return;
+            }
+            f.with_tab(&tab, |t| t.picked_into = true);
+        });
+    }
+
     /// Remember the account an agent signed in with (its code comes next).
     pub(crate) fn signed_in_with(&self, tab: &TabId, c: &Credential) {
         self.with_tab(tab, |t| t.signed_with = Some(c.clone()));
+    }
+}
+
+/// What the box with the caret asks for (`Browser.swift` `suggestions`,
+/// the page's `classify`/`groupFor`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Want {
+    /// A sign-in box: the site's accounts.
+    Login,
+    /// A one-time-code box: the accounts that keep a code.
+    Code,
+    /// An address/contact box: the vaults' identities.
+    Identity,
+    /// A card box: the vaults' cards.
+    Card,
+}
+
+impl Want {
+    fn of(kind: &str, group: &str) -> Option<Want> {
+        match (kind, group) {
+            ("username" | "password", _) => Some(Want::Login),
+            ("otp", _) => Some(Want::Code),
+            (_, "card") => Some(Want::Card),
+            (_, "identity") => Some(Want::Identity),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Want;
+
+    #[test]
+    fn the_box_decides_the_rows() {
+        assert_eq!(Want::of("username", "login"), Some(Want::Login));
+        assert_eq!(Want::of("password", "login"), Some(Want::Login));
+        assert_eq!(Want::of("otp", "login"), Some(Want::Code));
+        assert_eq!(Want::of("cardNumber", "card"), Some(Want::Card));
+        assert_eq!(Want::of("cardExp", "card"), Some(Want::Card));
+        assert_eq!(Want::of("address1", "identity"), Some(Want::Identity));
+        assert_eq!(Want::of("email", "identity"), Some(Want::Identity));
+        assert_eq!(Want::of("other", "other"), None);
     }
 }
