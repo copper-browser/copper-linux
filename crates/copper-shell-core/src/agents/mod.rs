@@ -281,7 +281,7 @@ impl<P: Platform> Agents<P> {
         let config = TransportConfig {
             port,
             token: self.token.clone(),
-            version: env!("CARGO_PKG_VERSION").to_string(),
+            version: copper_core::version::app().to_string(),
             headless: headless(),
         };
         match transport::start(config, tx) {
@@ -343,6 +343,11 @@ impl<P: Platform> Agents<P> {
     /// The tab an agent session keeps as its own.
     pub fn own_tab(&self, key: &str) -> Option<TabId> {
         self.mcp.own_tab(key)
+    }
+
+    /// Whether an agent is working on `tab` ([`copper_mcp::Mcp::works_on`]).
+    pub fn works_on(&self, tab: &TabId) -> bool {
+        self.mcp.works_on(tab)
     }
 
     /// Stop one agent session (Stop on its capsule).
@@ -440,7 +445,7 @@ fn mcp_settings(file: &AgentFile) -> copper_mcp::Settings {
     copper_mcp::Settings {
         jev: file.jev(),
         announces: file.announces(),
-        version: env!("CARGO_PKG_VERSION").to_string(),
+        version: copper_core::version::app().to_string(),
     }
 }
 

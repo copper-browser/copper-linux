@@ -28,6 +28,9 @@ use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::fmt;
 
+mod clear;
+pub use clear::Cleared;
+
 /// How many closed tabs ⌘⇧T remembers.
 pub const CLOSED_CAP: usize = 12;
 
@@ -585,6 +588,12 @@ impl Browser {
         self.row_of(&self.current)
             .and_then(|r| r.active.clone())
             .filter(|id| self.tabs.contains_key(id))
+    }
+
+    /// Whether some space remembers `id` as the tab it shows (the current
+    /// space's selection, or the one another space comes back to).
+    pub fn is_remembered(&self, id: &TabId) -> bool {
+        self.spaces.iter().any(|r| r.active.as_ref() == Some(id))
     }
 
     /// The selected tab.

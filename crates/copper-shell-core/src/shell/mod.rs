@@ -119,6 +119,8 @@ struct Inner<P: Platform> {
     settings_dirty: Cell<bool>,
     timers: RefCell<Vec<Task>>,
     shut: Cell<bool>,
+    /// Sleeping tabs' pictures and the wake covers up now.
+    covers: crate::cover::Covers<P>,
 }
 
 /// How to open a tab.
@@ -231,6 +233,7 @@ impl<P: Platform> Shell<P> {
             settings_dirty: Cell::new(false),
             timers: RefCell::default(),
             shut: Cell::new(false),
+            covers: Default::default(),
         }));
         CURRENT.with(|c| *c.borrow_mut() = Some(Box::new(shell.downgrade())));
         shell
@@ -294,6 +297,10 @@ impl<P: Platform> Shell<P> {
     /// pages already open themselves.
     pub fn on_page_created(&self, hook: impl Fn(&Shell<P>, &TabId, &PageOf<P>) + 'static) {
         self.0.page_hooks.borrow_mut().push(Rc::new(hook));
+    }
+
+    pub(crate) fn covers(&self) -> &crate::cover::Covers<P> {
+        &self.0.covers
     }
 
     /// Run `hook` whenever the window goes light or dark
@@ -547,6 +554,8 @@ impl<P: Platform> Shell<P> {
 
     /// Load `url` in a tab (waking it).
     pub fn navigate(&self, id: &TabId, url: &str) {
+        // Sent somewhere new, a sleeping tab's picture means nothing.
+        self.forget_cover(id);
         let had_page = self.page(id);
         self.0.browser.borrow_mut().update_tab(id, |t| {
             t.url = url.to_string();
@@ -1066,6 +1075,7 @@ impl<P: Platform> Shell<P> {
                 BrowserEvent::TabClosed(id) => {
                     refresh.tabs = true;
                     self.drop_page(id);
+                    self.forget_cover(id);
                     self.0.favicons.borrow_mut().remove(id);
                     self.0
                         .openers
@@ -1194,11 +1204,16 @@ impl<P: Platform> Shell<P> {
     }
 
     fn start_timers(&self) {
-        // Idle tabs go to sleep (Settings › Tabs; Mac `Sleep.swift`).
+        // Idle tabs go to sleep (Mac `Sleep.swift`): looked at every quarter
+        // of `sleep.after`, 5 s to a minute.
         let weak = self.downgrade();
         let t = crate::main_loop::spawn::<P::Loop>(async move {
             loop {
-                P::Loop::sleep(Duration::from_secs(60)).await;
+                let every = {
+                    let Some(s) = weak.upgrade() else { break };
+                    crate::sleep::every(s.settings().sleep_after_secs())
+                };
+                P::Loop::sleep(every).await;
                 let Some(s) = weak.upgrade() else { break };
                 s.sleep_idle_tabs();
             }
@@ -1206,32 +1221,83 @@ impl<P: Platform> Shell<P> {
         self.0.timers.borrow_mut().push(t);
     }
 
-    fn sleep_idle_tabs(&self) {
-        let (on, after) = {
-            let s = self.settings();
-            (s.sleeps_tabs(), s.sleep_after_secs())
+    /// Why tab `id` has to stay awake now ([`crate::sleep::keep`]).
+    pub fn keeps_awake(&self, id: &TabId) -> Option<crate::sleep::Keep> {
+        let agents = crate::agents::get::<P>();
+        let b = self.browser();
+        let t = b.tab(id)?;
+        let active = b.active_id();
+        let on_screen = active.as_ref() == Some(id)
+            || t.split.is_some()
+                && active
+                    .as_ref()
+                    .and_then(|a| b.tab(a))
+                    .is_some_and(|a| a.split == t.split);
+        let slot = self.slot(id);
+        let facts = crate::sleep::Facts {
+            on_screen,
+            pinned: t.is_pinned(),
+            agent: agents.as_ref().is_some_and(|a| a.works_on(id)),
+            blank: crate::clear::is_blank(&t.url),
+            private: t.private,
+            asleep: t.sleeping,
+            page: slot.is_some(),
+            loading: slot.as_ref().is_some_and(|s| s.loading.get()),
+            audio: slot.as_ref().is_some_and(|s| s.audio.get()),
+            call: slot.as_ref().is_some_and(|s| s.capture.get()),
+            downloading: slot
+                .as_ref()
+                .is_some_and(|s| !s.downloads.borrow().is_empty()),
+            opener: false,
         };
-        if !on {
-            return;
-        }
+        drop(b);
+        let opener = active.is_some_and(|a| self.opener_of(&a).as_ref() == Some(id));
+        crate::sleep::keep(&crate::sleep::Facts { opener, ..facts })
+    }
+
+    /// Put the tabs the policy picks to sleep ([`crate::sleep::choose`]).
+    pub fn sleep_idle_tabs(&self) {
+        let rules = {
+            let s = self.settings();
+            if !s.sleeps_tabs() {
+                return;
+            }
+            let memory = P::memory();
+            crate::sleep::Rules {
+                after: s.sleep_after_secs(),
+                after_set: s.sleep_after_set(),
+                budget: crate::sleep::budget(memory.map(|(total, _)| total), s.sleep_keep()),
+                pressure: memory
+                    .map(|(total, free)| crate::sleep::Pressure::of(total, free))
+                    .unwrap_or_default(),
+            }
+        };
         let now = UnixTime::now();
-        let ids: Vec<TabId> = {
+        let ids: Vec<(TabId, f64, bool)> = {
             let b = self.browser();
-            let active = b.active_id();
             b.all_tabs()
-                .filter(|t| !t.sleeping && !t.is_pinned() && !t.private)
-                .filter(|t| Some(&t.id) != active.as_ref())
-                .filter(|t| now.0 - t.seen.0 >= after)
-                .filter(|t| !self.slot(&t.id).is_some_and(|s| s.audio.get()))
-                .map(|t| t.id.clone())
+                .map(|t| (t.id.clone(), now.0 - t.seen.0, b.is_remembered(&t.id)))
                 .collect()
         };
-        if ids.is_empty() {
+        let candidates: Vec<crate::sleep::Candidate<TabId>> = ids
+            .into_iter()
+            .map(|(id, idle, remembered)| crate::sleep::Candidate {
+                loaded: self.slot(&id).is_some(),
+                keep: self.keeps_awake(&id),
+                remembered,
+                idle,
+                id,
+            })
+            .collect();
+        let chosen = crate::sleep::choose(&candidates, &rules);
+        if chosen.is_empty() {
             return;
         }
-        self.with_browser(|b| {
-            for id in &ids {
-                b.set_sleeping(id, true);
+        tracing::debug!(count = chosen.len(), "tabs going to sleep");
+        let weak = self.downgrade();
+        P::Loop::spawn_local(async move {
+            for id in chosen {
+                put_to_sleep(&weak, id).await;
             }
         });
     }
@@ -1283,6 +1349,51 @@ pub fn host_of(url: &str) -> String {
         },
         Err(_) => url.to_string(),
     }
+}
+
+/// Ask tab `id`'s page whether it holds anything typed, then let it go —
+/// looking again after each step, since each takes a moment and the tab
+/// may have been picked meanwhile (Mac `Browser.sleep`).
+pub async fn put_to_sleep<P: Platform>(weak: &WeakShell<P>, id: TabId) {
+    let page = {
+        let Some(s) = weak.upgrade() else { return };
+        if s.keeps_awake(&id).is_some() {
+            return;
+        }
+        let Some(page) = s.page(&id) else { return };
+        page
+    };
+    let typed = crate::forms::watch::call(&page, &copper_pagejs::forms::unsaved())
+        .await
+        .unwrap_or(false);
+    drop(page);
+    let Some(s) = weak.upgrade() else { return };
+    if typed {
+        tracing::debug!(tab = %id.short(), "awake: holding something typed");
+        return;
+    }
+    if let Some(k) = s.keeps_awake(&id) {
+        tracing::debug!(tab = %id.short(), "awake: {}", k.reason());
+        return;
+    }
+    // Its picture, for the cover it wakes under (if anyone draws covers).
+    let Some(page) = s.page(&id) else { return };
+    let drawn = s.draws_covers();
+    drop(s);
+    let cover = match drawn {
+        true => crate::cover::take::<P>(&page).await,
+        false => None,
+    };
+    drop(page);
+    let Some(s) = weak.upgrade() else { return };
+    if let Some(k) = s.keeps_awake(&id) {
+        tracing::debug!(tab = %id.short(), "awake: {}", k.reason());
+        return;
+    }
+    if let Some(cover) = cover {
+        s.keep_picture(&id, cover);
+    }
+    s.with_browser(|b| b.set_sleeping(&id, true));
 }
 
 #[cfg(test)]

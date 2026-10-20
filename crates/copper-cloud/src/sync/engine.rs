@@ -1958,7 +1958,19 @@ impl SyncEngine {
     /// Deletes visits on the cloud — every device's rows, as `selector` says —
     /// and leaves history here as it is. For settings, the CLI and agents.
     pub async fn delete_history(&self, selector: &Selector) -> Result<Outcome, Failure> {
-        self.erase(selector, &delete::words(selector), Here::Kept)
+        self.delete_history_until(selector, &delete::Stop::new())
+            .await
+    }
+
+    /// [`SyncEngine::delete_history`] that `stop` can stop (Settings › Cloud's
+    /// Stop): while looking, nothing goes ([`delete::Stop::failure`]); while
+    /// deleting, what already went is the outcome ([`Outcome::stopped`]).
+    pub async fn delete_history_until(
+        &self,
+        selector: &Selector,
+        stop: &delete::Stop,
+    ) -> Result<Outcome, Failure> {
+        self.erase(selector, &delete::words(selector), Here::Kept, stop)
             .await
     }
 
@@ -1971,7 +1983,12 @@ impl SyncEngine {
         let me = self.clone();
         tokio::spawn(async move {
             let _ = me
-                .erase(&Selector::cleared(), "cleared here", Here::Cleared)
+                .erase(
+                    &Selector::cleared(),
+                    "cleared here",
+                    Here::Cleared,
+                    &delete::Stop::new(),
+                )
                 .await;
         });
     }
@@ -1992,17 +2009,28 @@ impl SyncEngine {
                     &Selector::forgot(&key),
                     &format!("a page on {site}, forgotten here"),
                     Here::Forgot,
+                    &delete::Stop::new(),
                 )
                 .await;
         });
     }
 
-    async fn erase(&self, selector: &Selector, why: &str, here: Here) -> Result<Outcome, Failure> {
+    async fn erase(
+        &self,
+        selector: &Selector,
+        why: &str,
+        here: Here,
+        stop: &delete::Stop,
+    ) -> Result<Outcome, Failure> {
         let failed = |e: Failure| {
-            self.note(format!(
-                "History: nothing deleted from the cloud ({why}) — {}",
-                e.message
-            ));
+            // Stopped by the person: nothing to tell the log (the Mac's
+            // CancellationError).
+            if e.code != "stopped" {
+                self.note(format!(
+                    "History: nothing deleted from the cloud ({why}) — {}",
+                    e.message
+                ));
+            }
             e
         };
         if !self.inner.client.is_signed_in() {
@@ -2027,10 +2055,13 @@ impl SyncEngine {
             self.settle_push(selector, here);
         }
         let client = self.inner.client.clone();
-        // A task of its own: once deleting starts it runs to the end.
+        // A task of its own, so dropping this future never cuts a delete off
+        // halfway: only `stop` ends it early, at a point where what went is
+        // known.
         let selector_owned = selector.clone();
+        let stop = stop.clone();
         let result = tokio::spawn(async move {
-            delete::run(&selector_owned, delete::PAGE_LIMIT, |ask| {
+            delete::run_until(&selector_owned, delete::PAGE_LIMIT, &stop, |ask| {
                 let client = client.clone();
                 async move {
                     let answer = match ask.body {
@@ -2062,7 +2093,9 @@ impl SyncEngine {
                     outcome.deleted,
                     if outcome.deleted == 1 { "" } else { "s" }
                 );
-                let cut = if outcome.cut {
+                let cut = if outcome.stopped {
+                    " (stopped)".to_string()
+                } else if outcome.cut {
                     format!(
                         " (looked through the first {} only)",
                         delete::PAGE_LIMIT * delete::PAGE_SIZE

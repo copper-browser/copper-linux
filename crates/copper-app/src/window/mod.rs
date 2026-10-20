@@ -247,6 +247,16 @@ impl Ui {
         t.set_timeout(2);
         self.toasts.add_toast(t);
     }
+
+    /// "Cleared N tabs · Undo", for as long as Undo is offered
+    /// (`copper_shell_core::clear`).
+    pub fn cleared_toast(&self, count: usize) {
+        let t = adw::Toast::new(&copper_shell_core::clear::cleared_words(count));
+        t.set_button_label(Some("Undo"));
+        t.set_action_name(Some("win.undo-clear"));
+        t.set_timeout(copper_shell_core::clear::UNDO_FOR.as_secs() as u32);
+        self.toasts.add_toast(t);
+    }
 }
 
 /// What a window shortcut does while a dialog is up.

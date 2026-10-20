@@ -5,7 +5,7 @@
 
 use crate::client::{CloudClient, GATE_HEADER};
 use crate::error::{Failure, Result};
-use crate::tls::USER_AGENT;
+use crate::tls::user_agent;
 use rustls::pki_types::ServerName;
 use std::io;
 use std::pin::Pin;
@@ -95,7 +95,7 @@ impl CloudClient {
         };
         headers.insert(GATE_HEADER, value(&link.key)?);
         headers.insert("Authorization", value(&format!("Bearer {token}"))?);
-        headers.insert("User-Agent", value(USER_AGENT)?);
+        headers.insert("User-Agent", value(&user_agent())?);
 
         let host = link.endpoint.host.clone();
         let port = link.endpoint.effective_port();

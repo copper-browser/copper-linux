@@ -10,6 +10,11 @@
 //! every device's rows and deleting the matches by seq, 5,000 a request.
 //! Never seqs and filters in one request, and nothing chosen is never
 //! "everything". Nothing is deleted until the looking is done.
+//!
+//! A delete can be stopped ([`Stop`], [`run_until`]): while looking at once
+//! (the page being read is dropped; nothing was deleted), while deleting
+//! between two requests of seqs — never halfway through one, so the count of
+//! what went is always known and said ([`Outcome::stopped`]).
 
 use super::history::{Visit, parse_stamp, stamp};
 use crate::error::Failure;
@@ -17,6 +22,8 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// What `GET /v1/info`'s `features` lists when the server can delete.
 pub const FEATURE: &str = "history_delete";
@@ -26,6 +33,8 @@ pub const BATCH: usize = 5_000;
 pub const PAGE_SIZE: usize = 500;
 /// Pages read at most in one delete — 500,000 visits — so it always ends.
 pub const PAGE_LIMIT: usize = 1_000;
+/// A delete stopped before anything went (Mac: `CloudHistoryEraser`).
+pub const STOPPED: &str = "Stopped — nothing was deleted";
 /// Said instead of the controls when the cloud can't.
 pub const UNSUPPORTED: &str =
     "This cloud can't delete history — it needs copper-cloud 0.8.0 or later.";
@@ -327,6 +336,51 @@ pub fn time(text: &str, now: f64) -> Option<f64> {
     parse_stamp(text)
 }
 
+/// The switch that stops a delete ([`run_until`]). Cheap to clone; clones
+/// share it. Never pressed, it changes nothing ([`run`]).
+#[derive(Clone, Debug, Default)]
+pub struct Stop(Arc<StopInner>);
+
+#[derive(Debug, Default)]
+struct StopInner {
+    on: AtomicBool,
+    notify: tokio::sync::Notify,
+}
+
+impl Stop {
+    pub fn new() -> Stop {
+        Stop::default()
+    }
+
+    /// Stop the delete as soon as it safely can. Any thread.
+    pub fn stop(&self) {
+        self.0.on.store(true, Ordering::SeqCst);
+        self.0.notify.notify_waiters();
+    }
+
+    /// Whether [`Stop::stop`] was called.
+    pub fn stopped(&self) -> bool {
+        self.0.on.load(Ordering::SeqCst)
+    }
+
+    /// Resolves once stopped (at once if already).
+    pub async fn wait(&self) {
+        loop {
+            // Made before the check, so a stop in between still wakes it.
+            let woken = self.0.notify.notified();
+            if self.stopped() {
+                return;
+            }
+            woken.await;
+        }
+    }
+
+    /// The failure of a delete stopped before anything went.
+    pub fn failure() -> Failure {
+        Failure::new(0, "stopped", STOPPED)
+    }
+}
+
 /// What a delete came to.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Outcome {
@@ -339,6 +393,10 @@ pub struct Outcome {
     pub scanned: bool,
     /// Looked through the first [`PAGE_LIMIT`] pages only.
     pub cut: bool,
+    /// Stopped while deleting: [`Outcome::deleted`] went, the rest of the
+    /// matches stayed. (Stopped before anything went is
+    /// [`Stop::failure`].)
+    pub stopped: bool,
 }
 
 impl Outcome {
@@ -350,11 +408,25 @@ impl Outcome {
     }
 }
 
-/// One delete, start to end. `ask` makes one request and returns the
-/// answer's bytes, or the server's refusal.
-pub async fn run<F, Fut>(
+/// One delete, start to end, that can't be stopped ([`run_until`]). `ask`
+/// makes one request and returns the answer's bytes, or the server's refusal.
+pub async fn run<F, Fut>(selector: &Selector, page_limit: usize, ask: F) -> Result<Outcome, Failure>
+where
+    F: FnMut(Ask) -> Fut,
+    Fut: Future<Output = Result<Vec<u8>, Failure>>,
+{
+    run_until(selector, page_limit, &Stop::new(), ask).await
+}
+
+/// One delete, start to end, unless `stop` is pressed: before anything went
+/// that is [`Stop::failure`] (a page being read is dropped at once); while
+/// deleting, the requests already answered stand and the outcome says
+/// [`Outcome::stopped`]. A one-request delete (a window) is asked whole or
+/// not at all.
+pub async fn run_until<F, Fut>(
     selector: &Selector,
     page_limit: usize,
+    stop: &Stop,
     mut ask: F,
 ) -> Result<Outcome, Failure>
 where
@@ -368,6 +440,9 @@ where
             "Say what to delete — a time, a site, a page, a device — or ask for everything",
         ));
     }
+    if stop.stopped() {
+        return Err(Stop::failure());
+    }
     let mut outcome = Outcome::default();
     if !selector.scans() {
         outcome.deleted = deleted(&ask(window(selector)).await?);
@@ -379,7 +454,12 @@ where
     let mut pages = 0;
     let mut found: Vec<i64> = vec![];
     loop {
-        let data = ask(page(since)).await?;
+        // Only reading so far: a stop drops the page being read.
+        let data = tokio::select! {
+            biased;
+            _ = stop.wait() => return Err(Stop::failure()),
+            data = ask(page(since)) => data?,
+        };
         outcome.requests += 1;
         let Some(p) = Page::read(&data) else {
             return Err(Failure::new(
@@ -410,9 +490,20 @@ where
             break;
         }
     }
+    if stop.stopped() {
+        return Err(Stop::failure());
+    }
     outcome.matched = found.len();
     let mut count = 0;
     for group in found.chunks(BATCH) {
+        // Between two requests, never inside one: what went is known.
+        if stop.stopped() {
+            if count == 0 {
+                return Err(Stop::failure());
+            }
+            outcome.stopped = true;
+            break;
+        }
         match ask(seqs(group)).await {
             Ok(answer) => {
                 count += deleted(&answer);
@@ -759,6 +850,134 @@ mod tests {
         assert_eq!(outcome.looked, 1200);
         assert_eq!(outcome.requests, 3 + 1);
         assert!(deleted_seqs.iter().all(|s| s % 3 == 0));
+    }
+
+    /// `n` rows, every one on x.com, served 500 a page; `on_ask` sees each
+    /// ask first (the test stops from there).
+    fn serve(
+        n: i64,
+        deleted_seqs: &std::cell::RefCell<Vec<i64>>,
+        on_ask: impl Fn(&Ask),
+    ) -> impl FnMut(Ask) -> std::future::Ready<Result<Vec<u8>, Failure>> {
+        move |ask: Ask| {
+            on_ask(&ask);
+            let result = if ask.method == "GET" {
+                let since: i64 = ask.query[0].1.parse().unwrap();
+                let page: Vec<Value> = (since + 1..=n.min(since + 500))
+                    .map(|i| {
+                        json!({"seq": i, "device_id": "D", "visited_at": "2026-10-01T12:00:00Z",
+                               "payload": {"url": format!("https://x.com/p{i}"), "title": "t"}})
+                    })
+                    .collect();
+                let next = since + page.len() as i64;
+                serde_json::to_vec(&json!({"entries": page, "next": next, "more": next < n}))
+                    .unwrap()
+            } else {
+                let body: Value = serde_json::from_slice(ask.body.as_ref().unwrap()).unwrap();
+                let list: Vec<i64> = body["seqs"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_i64().unwrap())
+                    .collect();
+                let n = list.len();
+                deleted_seqs.borrow_mut().extend(list);
+                serde_json::to_vec(&json!({"deleted": n})).unwrap()
+            };
+            std::future::ready(Ok(result))
+        }
+    }
+
+    fn x_com() -> Selector {
+        Selector {
+            hosts: vec!["x.com".into()],
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_stop_while_looking_deletes_nothing() {
+        let stop = Stop::new();
+        let gone = std::cell::RefCell::new(vec![]);
+        let pages = std::cell::Cell::new(0);
+        let ask = serve(1_200, &gone, |a| {
+            if a.method == "GET" {
+                pages.set(pages.get() + 1);
+                if pages.get() == 2 {
+                    stop.stop();
+                }
+            }
+        });
+        let e = run_until(&x_com(), PAGE_LIMIT, &stop, ask)
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, "stopped");
+        assert_eq!(e.message, STOPPED);
+        assert!(gone.borrow().is_empty());
+        assert_eq!(pages.get(), 2, "no page is read after the stop");
+    }
+
+    #[tokio::test]
+    async fn a_stop_while_deleting_keeps_what_went_and_says_so() {
+        let stop = Stop::new();
+        let gone = std::cell::RefCell::new(vec![]);
+        // 12,000 matches: three requests of seqs (5,000 + 5,000 + 2,000).
+        let ask = serve(12_000, &gone, |a| {
+            if a.method != "GET" {
+                stop.stop();
+            }
+        });
+        let outcome = run_until(&x_com(), PAGE_LIMIT, &stop, ask).await.unwrap();
+        assert!(outcome.stopped);
+        assert_eq!(outcome.matched, 12_000);
+        assert_eq!(outcome.deleted, BATCH, "the request under way finished");
+        assert_eq!(gone.borrow().len(), BATCH);
+    }
+
+    #[tokio::test]
+    async fn a_stop_before_anything_asks_nothing() {
+        let stop = Stop::new();
+        stop.stop();
+        let gone = std::cell::RefCell::new(vec![]);
+        let asked = std::cell::Cell::new(0);
+        for selector in [x_com(), Selector::cleared()] {
+            let ask = serve(10, &gone, |_| asked.set(asked.get() + 1));
+            let e = run_until(&selector, PAGE_LIMIT, &stop, ask)
+                .await
+                .unwrap_err();
+            assert_eq!(e.code, "stopped");
+        }
+        assert_eq!(asked.get(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_stop_drops_the_page_being_read() {
+        let stop = Stop::new();
+        let s2 = stop.clone();
+        let never = |_: Ask| std::future::pending::<Result<Vec<u8>, Failure>>();
+        let stopper = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            s2.stop();
+        });
+        let e = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            run_until(&x_com(), PAGE_LIMIT, &stop, never),
+        )
+        .await
+        .expect("the stop ends the wait")
+        .unwrap_err();
+        assert_eq!(e.code, "stopped");
+        stopper.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn unstopped_runs_are_whole() {
+        let gone = std::cell::RefCell::new(vec![]);
+        let outcome = run(&x_com(), PAGE_LIMIT, serve(12_000, &gone, |_| {}))
+            .await
+            .unwrap();
+        assert!(!outcome.stopped);
+        assert_eq!(outcome.deleted, 12_000);
     }
 
     #[test]

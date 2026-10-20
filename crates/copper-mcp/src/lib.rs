@@ -90,7 +90,7 @@ impl Default for Settings {
         Settings {
             jev: false,
             announces: true,
-            version: env!("CARGO_PKG_VERSION").to_string(),
+            version: copper_core::version::app().to_string(),
         }
     }
 }
@@ -196,6 +196,15 @@ impl<H: Host> Mcp<H> {
     /// The tab an agent session holds, if any.
     pub fn own_tab(&self, key: &str) -> Option<TabId> {
         self.state.borrow().bound.get(key).cloned()
+    }
+
+    /// Whether an agent is working on `tab` right now: a live Jev run's
+    /// tab, or one staged for an agent's calls within the last
+    /// [`agent_tabs::LINGER`] (Mac: a hand on the tab that is busy or
+    /// lingering). Clear and the tab sleeper leave such a tab alone.
+    pub fn works_on(&self, tab: &TabId) -> bool {
+        let s = self.state.borrow();
+        s.held.contains_key(tab) || s.drive.jev.as_ref().is_some_and(|(_, t)| t == tab)
     }
 
     /// Calls served, and the last tool's name (Settings › Agents).

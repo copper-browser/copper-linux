@@ -814,7 +814,7 @@ fn do_health(env: &mut Env<'_>, conf: &Endpoint, json_out: bool) -> i32 {
     };
     let initialize = json!({
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
-        "params": { "protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": { "name": "copper-cli", "version": env!("CARGO_PKG_VERSION") } },
+        "params": { "protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": { "name": "copper-cli", "version": copper_core::version::app() } },
     });
     if post(env, &initialize, conf, Duration::from_secs(10)).is_none() {
         return 2;

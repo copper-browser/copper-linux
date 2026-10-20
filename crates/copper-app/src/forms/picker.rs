@@ -84,6 +84,8 @@ fn row_widget(row: &Row) -> gtk::ListBoxRow {
     let icon = gtk::Image::from_icon_name(match row.kind {
         RowKind::Login => "avatar-default-symbolic",
         RowKind::Code => "preferences-system-time-symbolic",
+        RowKind::Identity => "contact-new-symbolic",
+        RowKind::Card => "auth-smartcard-symbolic",
     });
     icon.add_css_class("key");
     b.append(&icon);
@@ -93,6 +95,8 @@ fn row_widget(row: &Row) -> gtk::ListBoxRow {
         RowKind::Login => c.user.clone(),
         RowKind::Code if c.user.is_empty() => "One-time code".to_string(),
         RowKind::Code => format!("Code for {}", c.user),
+        // An identity's name, a card's "Visa •••• 1234" (`Row::identity`).
+        RowKind::Identity | RowKind::Card => c.user.clone(),
     };
     let top = gtk::Label::new(Some(&user));
     top.add_css_class("user");
@@ -169,6 +173,8 @@ pub fn show(
         .map(|r| match r.kind {
             RowKind::Login => r.credential.user.clone(),
             RowKind::Code => format!("code:{}", r.credential.user),
+            RowKind::Identity => format!("identity:{}", r.credential.user),
+            RowKind::Card => format!("card:{}", r.credential.user),
         })
         .collect();
     let p = Picker {
