@@ -41,6 +41,28 @@ use std::sync::{Arc, RwLock};
 thread_local! {
     /// The running `Rc<Agents<P>>` ([`start`]; one platform per process).
     static AGENTS: RefCell<Option<Rc<dyn Any>>> = const { RefCell::new(None) };
+    /// Who else follows the drivers ([`on_drive`]).
+    static DRIVE_LISTENERS: RefCell<Vec<DriveListener>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Someone following the drivers ([`on_drive`]).
+type DriveListener = Rc<dyn Fn(&DriveEvent)>;
+
+/// Follow every [`DriveEvent`] the tools report, after the app's own
+/// [`AgentsApp::drive`]: the agent in the window ([`crate::chat`]) nests the
+/// Jev runs it starts under its steps and shows other drivers' hands. Main
+/// thread only; for the life of the process.
+pub fn on_drive(f: impl Fn(&DriveEvent) + 'static) {
+    DRIVE_LISTENERS.with(|l| l.borrow_mut().push(Rc::new(f)));
+}
+
+/// Tell the [`on_drive`] listeners (outside the list's borrow: a listener
+/// may add another).
+fn tell_drive(event: &DriveEvent) {
+    let listeners: Vec<DriveListener> = DRIVE_LISTENERS.with(|l| l.borrow().clone());
+    for f in listeners {
+        f(event);
+    }
 }
 
 /// The agents' state for this window (main thread only), once [`start`]ed
@@ -145,6 +167,10 @@ impl<P: Platform> Agents<P> {
         let token = Arc::new(RwLock::new(file.token().unwrap_or_default().to_string()));
         let host = host::AppHost::new(shell, app.clone());
         let mcp = Mcp::new(host, mcp_settings(&file));
+        // The tools work without the listener (the agent in the window calls
+        // them in-process), so the model and Jev requests they make run on
+        // the cloud lane's runtime until a listener brings its own.
+        mcp.set_runtime(crate::cloud::runtime().handle().clone());
         let agents = Rc::new(Agents {
             shell: shell.downgrade(),
             file: RefCell::new(file),
@@ -310,6 +336,9 @@ impl<P: Platform> Agents<P> {
     pub fn stop(&self) {
         self.capture_console(false);
         self.server.borrow_mut().take();
+        // The listener's runtime went with it; the tools keep working.
+        self.mcp
+            .set_runtime(crate::cloud::runtime().handle().clone());
         *self.trouble.borrow_mut() = None;
         if let Some(shell) = self.shell.upgrade() {
             self.app.release_all(&shell);
