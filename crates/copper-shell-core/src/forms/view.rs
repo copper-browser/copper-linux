@@ -109,7 +109,7 @@ impl Row {
         match &self.credential.id {
             CredentialId::Bitwarden(id) => Some(id.clone()),
             CredentialId::OnePassword(id) => Some(format!("op:{id}")),
-            CredentialId::Keychain { .. } => None,
+            CredentialId::Keychain { .. } | CredentialId::BotPass(_) => None,
         }
     }
 }

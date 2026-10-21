@@ -9,11 +9,13 @@ use crate::site::{bare, normalized};
 /// A saved sign-in's stable id, independent of where its secret lives. The
 /// string form is the Mac's (`kc:host\u{1}user`, `bw:<id>`, `op:<id>`), used
 /// in settings and the agent allow-list; on Linux `kc` is the Secret Service.
+/// `bp:<id>` is a BotPass item (the id BotPass's `/v1/fill/accounts` gives).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum CredentialId {
     Keychain { host: String, user: String },
     Bitwarden(String),
     OnePassword(String),
+    BotPass(String),
 }
 
 impl CredentialId {
@@ -34,6 +36,9 @@ impl CredentialId {
         if let Some(id) = text.strip_prefix("op:") {
             return (!id.is_empty()).then(|| Self::OnePassword(id.into()));
         }
+        if let Some(id) = text.strip_prefix("bp:") {
+            return (!id.is_empty()).then(|| Self::BotPass(id.into()));
+        }
         None
     }
 
@@ -42,6 +47,7 @@ impl CredentialId {
             Self::Keychain { .. } => Source::Keychain,
             Self::Bitwarden(_) => Source::Bitwarden,
             Self::OnePassword(_) => Source::OnePassword,
+            Self::BotPass(_) => Source::BotPass,
         }
     }
 }
@@ -52,6 +58,7 @@ impl fmt::Display for CredentialId {
             Self::Keychain { host, user } => write!(f, "kc:{host}\u{1}{user}"),
             Self::Bitwarden(id) => write!(f, "bw:{id}"),
             Self::OnePassword(id) => write!(f, "op:{id}"),
+            Self::BotPass(id) => write!(f, "bp:{id}"),
         }
     }
 }
@@ -76,6 +83,9 @@ pub enum Source {
     Keychain,
     Bitwarden,
     OnePassword,
+    /// A BotPass server Copper is paired with (as one of its bots). Its
+    /// grants decide which accounts are offered on which site.
+    BotPass,
 }
 
 impl Source {
@@ -85,6 +95,7 @@ impl Source {
             Source::Keychain => "keychain",
             Source::Bitwarden => "Bitwarden",
             Source::OnePassword => "1Password",
+            Source::BotPass => "BotPass",
         }
     }
 }
@@ -353,6 +364,7 @@ mod tests {
             },
             Source::Bitwarden => CredentialId::Bitwarden(format!("{host}-{user}")),
             Source::OnePassword => CredentialId::OnePassword(format!("{host}-{user}")),
+            Source::BotPass => CredentialId::BotPass(format!("{host}-{user}")),
         };
         Credential {
             id,
@@ -370,11 +382,16 @@ mod tests {
 
     #[test]
     fn ids_round_trip() {
-        for s in ["kc:example.com\u{1}ann", "bw:abc", "op:xyz"] {
+        for s in ["kc:example.com\u{1}ann", "bw:abc", "op:xyz", "bp:item1"] {
             assert_eq!(CredentialId::parse(s).unwrap().to_string(), s);
         }
         assert!(CredentialId::parse("kc:example.com").is_none());
         assert!(CredentialId::parse("bw:").is_none());
+        assert!(CredentialId::parse("bp:").is_none());
+        assert_eq!(
+            CredentialId::parse("bp:abc").unwrap().source(),
+            Source::BotPass
+        );
         assert!(CredentialId::parse("zz:1").is_none());
         let json = serde_json::to_string(&CredentialId::Bitwarden("1".into())).unwrap();
         assert_eq!(json, "\"bw:1\"");

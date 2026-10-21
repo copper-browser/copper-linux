@@ -142,6 +142,55 @@ Items in a Bitwarden folder or 1Password vault named `Agents` are shared automat
 field `copper-agent: deny` means never, even when sharing everything. Private
 tabs are always refused. Agents can't change any of this.
 
+### BotPass
+
+[BotPass](https://github.com/pprasha/botpass) is a password source of its
+own. Copper pairs with a BotPass server once, as a *device* of one BotPass
+bot, and from then on `browser_sign_in` (and the list under a sign-in box)
+offers that bot's accounts on the sites BotPass allows:
+
+- **Grants decide.** BotPass is asked for the accounts the bot may `use` on
+  the page's origin (`GET /v1/fill/accounts?origin=…`, usernames only). The
+  password or one-time code is fetched only when it is filled, for the
+  origin the page is on at that moment (`POST /v1/fill`), and BotPass checks
+  the grant again and records the use in its audit log. A look-alike or
+  phishing origin is offered nothing and given nothing. Grant with
+  `bp grant <bot> <item> --can use` (add `--host`/`--domain` for sites other
+  than the item's own URLs).
+- **Shared with agents by BotPass, not Copper.** BotPass accounts arrive
+  already allowed (`AgentHint::Allow`); they don't appear in Agent access,
+  and the result's `source` is `botpass`. The agent never sees the secret,
+  only that the sign-in happened.
+- **Words, not codes.** A locked server answers *BotPass is locked — run bp
+  unlock*; a removed device *Copper isn't paired with BotPass (or BotPass
+  removed this device) — run bp connect copper*; a refused grant says which
+  host BotPass refused.
+- **Passkeys are out of scope** (WebKitGTK has no WebAuthn), and Copper never
+  saves new passwords into BotPass.
+
+Pairing is one command on a machine with `bp` signed in:
+
+```sh
+bp connect copper            # makes the bot and a code, then runs:
+copper botpass pair --server https://botpass.lan:7443 \
+  --fingerprint <sha256 of BotPass's certificate> --code ABCD-EFGH [--name "Copper on laptop"]
+```
+
+`copper botpass pair` also takes a `botpass://host:port/#c=CODE&fp=FP`
+pairing link, `copper botpass status [--json]` says whether BotPass answers
+and is unlocked (exit 0) or not (exit 1), and `copper botpass unpair` forgets
+the pairing here (remove the device in BotPass to revoke its token). The same
+pairing is in Settings › Passwords › **BotPass** (server, fingerprint, code →
+**Pair**; then the server, the bot, locked or unlocked, **Unpair**).
+
+The pairing lives in `botpass.json` in Copper's data folder
+(`~/.local/share/copper/botpass.json`, `copper-<world>` with `COPPER_WORLD`;
+`%LOCALAPPDATA%\Copper\Data\botpass.json` on Windows), written atomically and
+0600: the server URL, the certificate fingerprint it is pinned to, the device
+token, and the device and bot names. A running Copper picks a new pairing up
+on its next fill; no restart. Plain `http://` is accepted only for a BotPass
+on this machine.
+
 ## Jev mode: hand over a goal
 
 Settings › Agents › **Let the agent hand Copper a goal** adds four tools, and

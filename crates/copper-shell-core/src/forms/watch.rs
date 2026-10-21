@@ -10,7 +10,7 @@
 //!   Nothing is filled until a row is clicked.
 
 use super::view::{FormsUi, OfferData, OfferView, PickerView, Row, RowKind};
-use super::{Forms, rt, site_host};
+use super::{Forms, rt, site_host, site_origin};
 use crate::control::ShellEvent;
 use crate::main_loop::{MainLoop, Task, spawn};
 use crate::shell::Shell;
@@ -481,9 +481,11 @@ impl<U: FormsUi> Forms<U> {
             });
             return;
         }
-        let Some(host) = slot.page.url().as_deref().and_then(site_host) else {
+        let page_url = slot.page.url();
+        let Some(host) = page_url.as_deref().and_then(site_host) else {
             return;
         };
+        let origin = page_url.as_deref().and_then(site_origin);
         let signed = self.with_tab(tab, |t| t.signed_with.clone()).flatten();
         let v = self.vault.clone();
         let weak = Rc::downgrade(self);
@@ -512,7 +514,7 @@ impl<U: FormsUi> Forms<U> {
                 return;
             }
             let h = host.clone();
-            let all = rt::run(async move { v.candidates(&h).await })
+            let all = rt::run(async move { v.candidates(&h, origin.as_deref()).await })
                 .await
                 .unwrap_or_default();
             let Some(f) = weak.upgrade() else { return };
@@ -628,14 +630,17 @@ impl<U: FormsUi> Forms<U> {
         if let Some(id) = row.autofill_id() {
             return self.pick_values(&shell, tab, &page, row.kind, id);
         }
+        // The origin the page is on now: a page that navigated away since
+        // the list opened is not filled for the old one.
+        let origin = page.url().as_deref().and_then(site_origin);
         Loop::<U>::spawn_local(async move {
             let id = row.credential.id.clone();
             let code = row.kind == RowKind::Code;
             let got = rt::run(async move {
                 if code {
-                    v.totp(&id).await
+                    v.totp_at(&id, origin.as_deref()).await
                 } else {
-                    v.secret(&id).await
+                    v.secret_at(&id, origin.as_deref()).await
                 }
             })
             .await

@@ -57,7 +57,10 @@ drive it through the same MCP tools.
   never fills anything on its own. Passwords live in the Secret Service
   (GNOME Keyring, KWallet or KeePassXC). Copper only opens the keyring when
   it needs it, never at launch. It can also fill from Bitwarden and
-  1Password through their command-line tools.
+  1Password through their command-line tools, and from a paired
+  [BotPass](https://github.com/pprasha/botpass) server, whose grants decide
+  which accounts Copper and its agents may use on which sites
+  (`bp connect copper`; [docs/agents.md](docs/agents.md#botpass)).
 - **Move in from Chrome, Chromium or Brave.** One sheet brings over
   bookmarks, history, open tabs and passwords. Nothing leaves the computer.
 - **Copper Cloud, if you want it.** See below.
@@ -166,6 +169,7 @@ Video needs the codecs the `.deb` recommends (`gstreamer1.0-libav`,
 | Tabs, history, bookmarks, hidden elements | JSON files in `~/.local/share/copper/` | You |
 | Settings | `~/.config/copper/settings.json` | You |
 | Agent token, Copper Cloud link and token | `agent.json`, `cloud.json` in `~/.local/share/copper/`, mode 0600 | You alone |
+| BotPass pairing (server, pinned fingerprint, device token) | `botpass.json` in `~/.local/share/copper/`, mode 0600 | You alone |
 | Cookies and site data | WebKit's store under `~/.local/share/copper/` | The sites that set them |
 
 The Flatpak keeps all of this under `~/.var/app/com.copperbrowser.Copper/`.
@@ -238,6 +242,7 @@ Packaging, releases and CI are described in
 | `crates/copper-pagejs` | page JavaScript ported from macOS |
 | `crates/copper-shield` | content-blocker rule builder |
 | `crates/copper-creds` | Secret Service store, Bitwarden and 1Password CLIs |
+| `crates/copper-botpass` | BotPass: pairing, `botpass.json`, per-origin fill, `copper botpass` |
 | `crates/copper-import` | Chrome, Chromium and Brave import |
 | `crates/copper-cloud` | Copper Cloud client and sync |
 | `crates/copper-mcp` | MCP server, tools and the `copper` CLI |

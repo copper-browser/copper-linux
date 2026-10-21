@@ -86,6 +86,10 @@ pub const USAGE: &str = "Usage: copper [--json] [--launch] [--tab ID] <command> 
   cloud sso [CODE]                          sign in with your company account in the browser
   cloud status                              the cloud link, account and sync switches
                                             (copper cloud help for the options)
+  botpass pair --server URL --code CODE [--fingerprint FP] [--name NAME]
+                                            pair with BotPass as one of its bots (what
+                                            bp connect copper runs); also: botpass status,
+                                            botpass unpair (copper botpass help)
   help                                      show this help
 
 Every page command works on your tab: the one you opened or chose with use,
@@ -547,6 +551,10 @@ pub fn make_request(command: &str, args: &[String]) -> Result<Spec, Early> {
         }
         // Answered without a window, before this parser (crate::cloud_cli).
         "cloud" => bad("cloud runs on its own: copper cloud pair|sso|status (copper cloud help)"),
+        // Answered without a window, before this parser (copper_botpass::cli).
+        "botpass" => {
+            bad("botpass runs on its own: copper botpass pair|status|unpair (copper botpass help)")
+        }
         c if ELSEWHERE.contains(&c) => bad(format!("{c} is not available in this build yet")),
         other => bad(format!("unknown command: {other}")),
     }

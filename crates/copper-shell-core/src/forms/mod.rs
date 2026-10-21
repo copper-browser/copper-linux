@@ -8,8 +8,8 @@
 //!   is ever filled without a click. The offer and the list are the app's
 //!   widgets ([`view::FormsUi`]).
 //! * [`vault`](mod@vault) — the platform's secret store (Secret Service, Credential
-//!   Manager), Bitwarden (`bw`) and 1Password (`op`), on the lane's own
-//!   Tokio runtime ([`rt`]).
+//!   Manager), Bitwarden (`bw`), 1Password (`op`) and BotPass
+//!   ([`copper_botpass`]), on the lane's own Tokio runtime ([`rt`]).
 //! * [`mcp`] — `browser_sign_in` / `browser_autofill` for the agents lane.
 //!
 //! The app adds Settings › Passwords, the "Bring in from Chrome" sheet and
@@ -167,6 +167,8 @@ pub fn set_backend<P: Platform>(shell: &Shell<P>, source: Source) {
         Source::Keychain => "keychain",
         Source::Bitwarden => "bitwarden",
         Source::OnePassword => "onepassword",
+        // Never a save target; new passwords stay in the keyring.
+        Source::BotPass => "keychain",
     };
     shell.update_settings(|s| s.set(copper_core::settings::keys::PASSWORDS_BACKEND, v));
 }
@@ -177,11 +179,14 @@ pub fn source_title(s: Source) -> &'static str {
         Source::Keychain => "Keyring",
         Source::Bitwarden => "Bitwarden",
         Source::OnePassword => "1Password",
+        Source::BotPass => "BotPass",
     }
 }
 
 /// Agent access (`AgentAccess.swift`): nothing is shared unless the user
-/// shared it, shared everything, or put it in an `Agents` folder.
+/// shared it, shared everything, or put it in an `Agents` folder. BotPass
+/// accounts come with [`AgentHint::Allow`]: Copper is paired as one of
+/// BotPass's bots, so BotPass's grants already decided it may use them.
 pub fn agent_allowed<P: Platform>(shell: &Shell<P>, c: &Credential) -> bool {
     if c.agent_hint == AgentHint::Deny {
         return false;
@@ -228,6 +233,12 @@ pub fn remember_op<P: Platform>(shell: &Shell<P>, r: &Remembered) {
             }
         }
     });
+}
+
+/// A page's origin (`scheme://host[:port]`, http(s) only), as BotPass
+/// grants are checked.
+pub fn site_origin(url: &str) -> Option<String> {
+    copper_botpass::page_origin(url)
 }
 
 /// The site a page is on, as passwords are keyed: lowercased, no `www.`.
