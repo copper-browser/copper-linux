@@ -25,6 +25,8 @@ copper-creds.workspace = true
 copper-import.workspace = true
 copper-shield.workspace = true
 copper-shell-core.workspace = true
+# Settings › Passwords › BotPass and `copper botpass pair|status|unpair`.
+copper-botpass.workspace = true
 gtk4.workspace = true
 gdk4.workspace = true
 libadwaita.workspace = true
