@@ -67,6 +67,7 @@ fn pair_list_fill_and_refuse_phishing() {
     assert_eq!((exit, st["state"].as_str()), (0, Some("unlocked")));
     assert!(!String::from_utf8_lossy(&out).contains("bpd_"));
     let file = data.path().join("botpass.json");
+    assert!(file.is_file(), "pairing file missing: {}", file.display());
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
