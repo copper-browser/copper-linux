@@ -1,7 +1,7 @@
 //! Settings › Passwords: saving and filling, the keyring's saved sign-ins
 //! (search, show after a confirmation, delete), sites never asked about,
-//! Bitwarden and 1Password, agent access, and bringing passwords in from
-//! Chrome (Mac `Passwords.swift`, `Fork/CredentialsSettings.swift`).
+//! Bitwarden, 1Password and BotPass, agent access, and bringing passwords in
+//! from Chrome (Mac `Passwords.swift`, `Fork/CredentialsSettings.swift`).
 
 use super::vault::{Keyring, Snapshot};
 use super::{keys, rt, source_title};
@@ -33,6 +33,7 @@ struct Ui {
     never: adw::PreferencesGroup,
     bw: adw::PreferencesGroup,
     op: adw::PreferencesGroup,
+    bp: adw::PreferencesGroup,
     agents: adw::PreferencesGroup,
     /// Rows added per group, so a rebuild takes exactly those out.
     rows: RefCell<HashMap<&'static str, Vec<gtk::Widget>>>,
@@ -232,6 +233,12 @@ pub fn page(shell: &Shell) -> adw::PreferencesPage {
     let op = adw::PreferencesGroup::new();
     op.set_title("1Password");
     page.add(&op);
+    let bp = adw::PreferencesGroup::new();
+    bp.set_title("BotPass");
+    bp.set_description(Some(
+        "Copper as one of your BotPass bots: its accounts are offered on the sites BotPass grants that bot, and fetched only when filled. Agents can sign in with them; BotPass's grants decide.",
+    ));
+    page.add(&bp);
     let agents = adw::PreferencesGroup::new();
     agents.set_title("Agent access");
     agents.set_description(Some(
@@ -249,6 +256,7 @@ pub fn page(shell: &Shell) -> adw::PreferencesPage {
         never,
         bw,
         op,
+        bp,
         agents,
         rows: RefCell::default(),
         logins: RefCell::default(),
@@ -284,6 +292,8 @@ fn refresh(ui: &Rc<Ui>) {
         }
         let vv = v.clone();
         let logins = rt::run(async move {
+            // Is BotPass there, and locked? (No token, no secret.)
+            vv.bp.refresh().await;
             vv.refresh().await;
             vv.logins().await
         })
@@ -306,6 +316,7 @@ fn build_all(ui: &Rc<Ui>) {
     build_never(ui);
     build_bw(ui);
     build_op(ui);
+    build_bp(ui);
 }
 
 fn build_keyring(ui: &Rc<Ui>) {
@@ -1004,6 +1015,147 @@ fn build_op(ui: &Rc<Ui>) {
         }
     }
     put(ui, "op", &ui.op, rows);
+}
+
+// MARK: BotPass
+
+fn build_bp(ui: &Rc<Ui>) {
+    use copper_botpass::BpState;
+    let snap = ui.snap.borrow().bp.clone();
+    let mut rows: Vec<gtk::Widget> = Vec::new();
+    if snap.paired() {
+        let (title, icon) = match &snap.state {
+            BpState::Locked => (
+                "Locked — run bp unlock".to_string(),
+                "system-lock-screen-symbolic",
+            ),
+            BpState::Revoked => (
+                "BotPass no longer knows this device — pair again".to_string(),
+                "dialog-warning-symbolic",
+            ),
+            BpState::Unreachable(why) => (
+                format!("Not answering: {}", first_line(why)),
+                "dialog-warning-symbolic",
+            ),
+            BpState::Ready => ("Unlocked".to_string(), "emblem-ok-symbolic"),
+            BpState::Paired | BpState::Unpaired => ("Paired".to_string(), "emblem-ok-symbolic"),
+        };
+        let head = row(
+            &title,
+            &format!(
+                "{}{}",
+                snap.url.clone().unwrap_or_default(),
+                snap.bot
+                    .as_deref()
+                    .map(|b| format!(" · bot {b}"))
+                    .unwrap_or_default()
+            ),
+        );
+        head.add_prefix(&gtk::Image::from_icon_name(icon));
+        let check = pill("Check", false);
+        let weak = Rc::downgrade(ui);
+        check.connect_clicked(move |_| {
+            if let Some(ui) = weak.upgrade() {
+                act(&ui, |v| async move {
+                    v.bp.refresh().await;
+                    Ok(())
+                });
+            }
+        });
+        head.add_suffix(&check);
+        rows.push(head.upcast());
+        rows.push(
+            row(
+                "This device",
+                snap.device_name.as_deref().unwrap_or("Copper"),
+            )
+            .upcast(),
+        );
+        rows.push(
+            row(
+                "Certificate",
+                &match &snap.fingerprint {
+                    Some(f) => format!("Pinned · SHA-256 {f}"),
+                    None => "No pin (public authorities, or this machine over http)".to_string(),
+                },
+            )
+            .upcast(),
+        );
+        let out = row(
+            "Pairing",
+            "Unpairing forgets the token here; remove the device in BotPass to revoke it",
+        );
+        let b = pill("Unpair", false);
+        let weak = Rc::downgrade(ui);
+        b.connect_clicked(move |_| {
+            if let Some(ui) = weak.upgrade() {
+                act(&ui, |v| async move {
+                    v.bp.unpair().map(|_| ()).map_err(|e| e.to_string())
+                });
+            }
+        });
+        out.add_suffix(&b);
+        rows.push(out.upcast());
+    } else {
+        rows.push(
+            row(
+                "Not paired",
+                "On the BotPass machine run bp connect copper — or make a code with bp pair <bot> and enter it here",
+            )
+            .upcast(),
+        );
+        let server = entry("Server (https://host:port, or a botpass:// link)", "");
+        server.set_input_purpose(gtk::InputPurpose::Url);
+        let fingerprint = entry("Certificate fingerprint (SHA-256)", "");
+        let code = entry("Pairing code", "");
+        let name = entry("Device name", &copper_botpass::default_device_name());
+        let go = row("", "");
+        let pair = pill("Pair", true);
+        go.add_suffix(&pair);
+        {
+            let weak = Rc::downgrade(ui);
+            let (server, fingerprint, code, name) = (
+                server.clone(),
+                fingerprint.clone(),
+                code.clone(),
+                name.clone(),
+            );
+            pair.connect_clicked(move |_| {
+                let Some(ui) = weak.upgrade() else { return };
+                let mut srv = server.text().trim().to_string();
+                let mut fp = fingerprint.text().trim().to_string();
+                let mut c = code.text().trim().to_string();
+                if let Some(link) = copper_botpass::parse_link(&srv) {
+                    srv = link.server;
+                    if c.is_empty() {
+                        c = link.code;
+                    }
+                    if fp.is_empty() {
+                        fp = link.fingerprint.unwrap_or_default();
+                    }
+                }
+                let n = name.text().trim().to_string();
+                code.set_text("");
+                act(&ui, move |v| async move {
+                    let fp = (!fp.is_empty()).then_some(fp.as_str());
+                    v.bp.pair(&srv, fp, &c, &n)
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| e.to_string())
+                });
+            });
+        }
+        for w in [
+            server.upcast_ref::<gtk::Widget>(),
+            fingerprint.upcast_ref(),
+            code.upcast_ref(),
+            name.upcast_ref(),
+            go.upcast_ref(),
+        ] {
+            rows.push(w.clone());
+        }
+    }
+    put(ui, "bp", &ui.bp, rows);
 }
 
 // MARK: agent access
