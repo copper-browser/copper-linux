@@ -1,0 +1,32 @@
+[package]
+name = "copper-botpass"
+description = "BotPass as a password source: pairing, botpass.json, and use-level fill on a page's origin."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# No GTK here: builds for Windows as well as Linux (the CI Windows job tests it).
+[dependencies]
+copper-core.workspace = true
+# The fingerprint-pinning TLS verifier (`copper_cloud::tls::Trust`).
+copper-cloud.workspace = true
+# `Credential`, `CredentialId::BotPass`, `Source::BotPass`.
+copper-creds.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+# A real self-signed TLS server for the pinning tests.
+rcgen = { version = "0.13", default-features = false, features = ["crypto", "ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+
+[lints]
+workspace = true

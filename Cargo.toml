@@ -7,6 +7,7 @@ members = [
     "crates/copper-pagejs",
     "crates/copper-shield",
     "crates/copper-creds",
+    "crates/copper-botpass",
     "crates/copper-import",
     "crates/copper-cloud",
     "crates/copper-mcp",
@@ -55,6 +56,7 @@ copper-engine-webkitgtk = { path = "crates/copper-engine-webkitgtk" }
 copper-pagejs = { path = "crates/copper-pagejs" }
 copper-shield = { path = "crates/copper-shield" }
 copper-creds = { path = "crates/copper-creds" }
+copper-botpass = { path = "crates/copper-botpass" }
 copper-import = { path = "crates/copper-import" }
 copper-cloud = { path = "crates/copper-cloud" }
 copper-mcp = { path = "crates/copper-mcp" }

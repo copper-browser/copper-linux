@@ -1,12 +1,15 @@
 //! Every place a saved sign-in can live, behind one handle the main loop
 //! uses: the platform's secret store ([`SecretStore`]: the Secret Service,
-//! Credential Manager), Bitwarden (`bw`) and 1Password (`op`). All of it runs on the lane's Tokio runtime
+//! Credential Manager), Bitwarden (`bw`), 1Password (`op`) and a paired
+//! BotPass server ([`BotPass`]: its grants decide what is offered on which
+//! origin; secrets are fetched per fill). All of it runs on the lane's Tokio runtime
 //! ([`super::rt`]); the main loop reads a [`Snapshot`] and awaits answers.
 //!
 //! Secrets leave here only as the return value of [`Vault::secret`] /
 //! [`Vault::totp`], which the caller puts straight into the page's fill
 //! script. Nothing here logs one.
 
+use copper_botpass::{BotPass, BpSnapshot};
 use copper_creds::bitwarden::{BwConfig, BwState};
 use copper_creds::credential::{
     self, AutofillCard, AutofillIdentity, Credential, CredentialId, Source,
@@ -64,6 +67,7 @@ pub struct Snapshot {
     pub op_problem: Option<String>,
     pub op_save_vault: Option<String>,
     pub op_remembered: Remembered,
+    pub bp: BpSnapshot,
 }
 
 impl Snapshot {
@@ -81,6 +85,10 @@ impl Snapshot {
 
     pub fn op_locked(&self) -> bool {
         self.op_state == Some(OpState::Locked)
+    }
+
+    pub fn bp_locked(&self) -> bool {
+        self.bp.locked()
     }
 
     /// Whether passwords can go to the keyring: open, or there to open on
@@ -122,10 +130,14 @@ pub fn always_there(_start: bool) -> Keyring {
 pub struct Vault {
     pub bw: Mutex<Bitwarden>,
     pub op: Mutex<OnePassword>,
+    /// BotPass (`botpass.json` in the data folder; re-read when it changes).
+    pub bp: BotPass,
     store: Mutex<Option<Arc<SecretStore>>>,
     snap: StdMutex<Snapshot>,
     look: Look,
 }
+
+const NO_ORIGIN: &str = "BotPass fills only on the page it was asked for";
 
 fn now() -> f64 {
     std::time::SystemTime::now()
@@ -141,6 +153,7 @@ impl Vault {
         Arc::new(Vault {
             bw: Mutex::new(bw),
             op: Mutex::new(op),
+            bp: BotPass::new(data_dir),
             store: Mutex::new(None),
             snap: StdMutex::new(Snapshot::default()),
             look,
@@ -256,6 +269,7 @@ impl Vault {
     pub async fn start(&self, remembered: Remembered) {
         self.bw.lock().await.start().await;
         self.op.lock().await.start(remembered).await;
+        self.bp.refresh().await;
         self.refresh().await;
     }
 
@@ -308,24 +322,54 @@ impl Vault {
             s.op_problem = op_problem;
             s.op_save_vault = save;
             s.op_remembered = rem;
+            s.bp = self.bp.snapshot();
         }
     }
 
     // MARK: reading
 
     /// Every source's accounts for `host`, merged (a vault's copy wins).
-    pub async fn candidates(&self, host: &str) -> Vec<Credential> {
-        let keyring = match self.store_for(Want::Read).await {
-            Ok(s) => s
-                .logins_matching(host)
-                .await
-                .map(|v| v.iter().map(Login::credential).collect())
-                .unwrap_or_default(),
-            Err(_) => Vec::new(),
+    /// `origin` is the page's `scheme://host[:port]`
+    /// ([`copper_botpass::page_origin`]): BotPass answers per origin, so
+    /// without one it offers nothing.
+    pub async fn candidates(&self, host: &str, origin: Option<&str>) -> Vec<Credential> {
+        let botpass = async {
+            match origin {
+                Some(o) => match self.bp.credentials_for(o).await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::debug!(error = %e, "BotPass offered nothing");
+                        Vec::new()
+                    }
+                },
+                None => Vec::new(),
+            }
         };
-        let bw = self.bw.lock().await.credentials_for(host);
-        let op = self.op.lock().await.credentials_for(host);
+        let others = async {
+            let keyring = match self.store_for(Want::Read).await {
+                Ok(s) => s
+                    .logins_matching(host)
+                    .await
+                    .map(|v| v.iter().map(Login::credential).collect())
+                    .unwrap_or_default(),
+                Err(_) => Vec::new(),
+            };
+            let bw = self.bw.lock().await.credentials_for(host);
+            let op = self.op.lock().await.credentials_for(host);
+            (keyring, bw, op)
+        };
+        let (bp, (keyring, bw, mut op)) = tokio::join!(botpass, others);
+        self.note_bp();
+        op.extend(bp);
         credential::combine(keyring, bw, op)
+    }
+
+    /// Keep BotPass's last state in the snapshot.
+    fn note_bp(&self) {
+        let bp = self.bp.snapshot();
+        if let Ok(mut s) = self.snap.lock() {
+            s.bp = bp;
+        }
     }
 
     /// Every account in every source (agent access lists in Settings).
@@ -340,6 +384,8 @@ impl Vault {
         };
         let bw = self.bw.lock().await.credentials();
         let op = self.op.lock().await.credentials();
+        // BotPass lists per origin only (its grants are per site), and
+        // shares with agents by its own grants: nothing to list here.
         credential::combine(keyring, bw, op)
     }
 
@@ -354,7 +400,23 @@ impl Vault {
 
     /// One account's password.
     pub async fn secret(&self, id: &CredentialId) -> Result<String, String> {
+        self.secret_at(id, None).await
+    }
+
+    /// One account's password, for the page at `origin` (BotPass fills only
+    /// for the origin it is asked about, checked again by its grants).
+    pub async fn secret_at(
+        &self,
+        id: &CredentialId,
+        origin: Option<&str>,
+    ) -> Result<String, String> {
         match id {
+            CredentialId::BotPass(i) => {
+                let origin = origin.ok_or(NO_ORIGIN)?;
+                let r = self.bp.password(i, origin).await.map_err(|e| e.to_string());
+                self.note_bp();
+                r
+            }
             CredentialId::Keychain { host, user } => {
                 let s = self
                     .store_for(Want::Read)
@@ -384,8 +446,19 @@ impl Vault {
 
     /// One account's current one-time code.
     pub async fn totp(&self, id: &CredentialId) -> Result<String, String> {
+        self.totp_at(id, None).await
+    }
+
+    /// One account's current one-time code, for the page at `origin`.
+    pub async fn totp_at(&self, id: &CredentialId, origin: Option<&str>) -> Result<String, String> {
         match id {
             CredentialId::Keychain { .. } => Err("no one-time code for this account".into()),
+            CredentialId::BotPass(i) => {
+                let origin = origin.ok_or(NO_ORIGIN)?;
+                let r = self.bp.totp(i, origin).await.map_err(|e| e.to_string());
+                self.note_bp();
+                r
+            }
             CredentialId::Bitwarden(i) => self
                 .bw
                 .lock()
@@ -514,6 +587,8 @@ impl Vault {
                 .iter()
                 .map(|i| i.username.clone())
                 .collect(),
+            // Copper never saves into BotPass.
+            Source::BotPass => Vec::new(),
         }
     }
 
@@ -568,6 +643,7 @@ impl Vault {
                     None => Ok(None),
                 }
             }
+            Source::BotPass => Ok(None),
         }
     }
 
@@ -616,6 +692,10 @@ impl Vault {
                 self.refresh().await;
                 r.map_err(|e| e.to_string())
             }
+            Source::BotPass => Err(
+                "BotPass doesn't take passwords from Copper — add them in BotPass (bp item create)"
+                    .into(),
+            ),
         }
     }
 

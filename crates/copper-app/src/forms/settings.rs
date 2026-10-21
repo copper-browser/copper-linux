@@ -174,7 +174,7 @@ pub fn page(shell: &Shell) -> adw::PreferencesPage {
         "1Password",
     ])));
     target.set_selected(match super::chosen_backend(shell) {
-        Source::Keychain => 0,
+        Source::Keychain | Source::BotPass => 0,
         Source::Bitwarden => 1,
         Source::OnePassword => 2,
     });

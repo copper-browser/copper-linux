@@ -5,7 +5,7 @@
 //! with the tab it resolved; signatures are fixed.
 
 use super::watch::call;
-use super::{FormsUi, agent_allowed, agent_allowed_id, rt, site_host};
+use super::{FormsUi, agent_allowed, agent_allowed_id, rt, site_host, site_origin};
 use crate::shell::Shell;
 use crate::{PageOf, Platform};
 use copper_core::TabId;
@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 struct Target<V> {
     page: V,
     host: String,
+    origin: Option<String>,
 }
 
 fn target<P: Platform>(
@@ -35,7 +36,8 @@ fn target<P: Platform>(
     let page = shell.ensure_page(tab).ok_or("no active tab")?;
     let url = page.url().filter(|u| !u.is_empty()).unwrap_or(url);
     let host = site_host(&url).ok_or("current tab has no host")?;
-    Ok(Target { page, host })
+    let origin = site_origin(&url);
+    Ok(Target { page, host, origin })
 }
 
 fn source_name(s: Source) -> &'static str {
@@ -43,11 +45,13 @@ fn source_name(s: Source) -> &'static str {
         Source::Bitwarden => "bitwarden",
         Source::OnePassword => "onepassword",
         Source::Keychain => "keychain",
+        Source::BotPass => "botpass",
     }
 }
 
 const BW_LOCKED: &str = "bitwarden is locked — unlock it in Settings › Passwords";
 const OP_LOCKED: &str = "1password is locked — unlock it in Settings › Passwords";
+const BP_LOCKED: &str = "BotPass is locked — run bp unlock";
 
 fn locked_hint(c: &Credential, e: String) -> String {
     let Some(v) = super::vault() else { return e };
@@ -55,8 +59,24 @@ fn locked_hint(c: &Credential, e: String) -> String {
     match c.source {
         Source::Bitwarden if snap.bw_locked() => BW_LOCKED.into(),
         Source::OnePassword if !snap.op_unlocked() => OP_LOCKED.into(),
+        Source::BotPass if snap.bp_locked() => BP_LOCKED.into(),
         _ => e,
     }
+}
+
+/// The origin to fill for: the page's own, now. BotPass is asked for the
+/// origin the page is on at the moment of filling; a page that moved to
+/// another site since the accounts were listed is refused, not filled.
+fn fill_origin<V: PageView>(
+    page: &V,
+    listed: &Option<String>,
+    c: &Credential,
+) -> Result<Option<String>, String> {
+    let now = page.url().as_deref().and_then(site_origin);
+    if c.source == Source::BotPass && now != *listed {
+        return Err("the page moved to another site while signing in — try again".into());
+    }
+    Ok(now.or_else(|| listed.clone()))
 }
 
 async fn submit<V: PageView>(page: &V) -> bool {
@@ -72,11 +92,12 @@ pub async fn sign_in<U: FormsUi>(
     tab: TabId,
     args: Map<String, Value>,
 ) -> Result<Value, String> {
-    let Target { page, host } = target(&shell, &tab, "sign-in")?;
+    let Target { page, host, origin } = target(&shell, &tab, "sign-in")?;
     let vault = super::vault().ok_or("passwords are not available in this build")?;
     let v = vault.clone();
     let h = host.clone();
-    let all = rt::run(async move { v.candidates(&h).await })
+    let o = origin.clone();
+    let all = rt::run(async move { v.candidates(&h, o.as_deref()).await })
         .await
         .unwrap_or_default();
     let permitted: Vec<Credential> = all
@@ -96,6 +117,9 @@ pub async fn sign_in<U: FormsUi>(
         }
         if snap.op_locked() {
             return Err(OP_LOCKED.into());
+        }
+        if snap.bp_locked() {
+            return Err(BP_LOCKED.into());
         }
         return Err(format!("no saved credential for {host}"));
     }
@@ -152,7 +176,8 @@ pub async fn sign_in<U: FormsUi>(
         }
         let v = vault.clone();
         let id = credential.id.clone();
-        let secret = rt::run(async move { v.secret(&id).await })
+        let o = fill_origin(&page, &origin, &credential)?;
+        let secret = rt::run(async move { v.secret_at(&id, o.as_deref()).await })
             .await
             .unwrap_or_else(|| Err("the vault did not answer".into()))
             .map_err(|e| locked_hint(&credential, e))?;
@@ -196,7 +221,8 @@ pub async fn sign_in<U: FormsUi>(
     }
     let v = vault.clone();
     let id = credential.id.clone();
-    let code = rt::run(async move { v.totp(&id).await })
+    let o = fill_origin(&page, &origin, &credential)?;
+    let code = rt::run(async move { v.totp_at(&id, o.as_deref()).await })
         .await
         .unwrap_or_else(|| Err("the vault did not answer".into()))
         .map_err(|e| locked_hint(&credential, e))?;
@@ -308,7 +334,7 @@ pub async fn autofill<P: Platform>(
     tab: TabId,
     args: Map<String, Value>,
 ) -> Result<Value, String> {
-    let Target { page, host } = target(&shell, &tab, "autofill")?;
+    let Target { page, host, .. } = target(&shell, &tab, "autofill")?;
     let vault = super::vault().ok_or("autofill is not available in this build")?;
     let snap = vault.snapshot();
     if !snap.bw_unlocked() && !snap.op_unlocked() {
