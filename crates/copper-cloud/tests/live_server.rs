@@ -243,6 +243,7 @@ fn kept(tab: &str, space: &str, url: &str, title: &str, pin: Option<&str>) -> Li
         url: url.into(),
         title: title.into(),
         pin: pin.map(str::to_string),
+        group: None,
     }
 }
 
@@ -777,6 +778,7 @@ async fn scenario(server: &Server) {
             visit("https://a-only.test/page", "A only", now - 300.0),
             visit("https://delete-me.test/x", "Delete me", now - 200.0),
         ],
+        groups: None,
         next_id: 0,
     }));
     let browser_b = Arc::new(MemoryBrowser::new(MemoryState {
@@ -803,6 +805,7 @@ async fn scenario(server: &Server) {
             extra: Default::default(),
         }],
         visits: vec![visit("https://b-only.test/", "B only", now - 100.0)],
+        groups: None,
         next_id: 0,
     }));
     let engine_a = SyncEngine::new(a.clone(), browser_a.clone());

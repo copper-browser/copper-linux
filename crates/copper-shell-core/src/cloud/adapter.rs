@@ -13,7 +13,7 @@ use crate::shell::Shell;
 use copper_cloud::sync::{BrowserState, LiveKept, LocalVisit};
 use copper_core::bookmarks::Bookmark;
 use copper_core::browser::OpenOptions;
-use copper_core::cloud::OpenTab;
+use copper_core::cloud::{CloudFolder, OpenTab};
 use copper_core::session::Space;
 use copper_core::{Browser, Tab, TabId};
 use serde_json::Value;
@@ -129,6 +129,7 @@ pub fn kept_in(b: &Browser) -> Vec<LiveKept> {
             url: t.url.clone(),
             title: t.title.clone(),
             pin: t.pin.clone(),
+            group: t.group.clone(),
         });
     }
     for space in b.spaces() {
@@ -144,6 +145,7 @@ pub fn kept_in(b: &Browser) -> Vec<LiveKept> {
                 url: t.url.clone(),
                 title: t.title.clone(),
                 pin: None,
+                group: t.group.clone(),
             });
         }
     }
@@ -255,6 +257,22 @@ impl<P: Platform> BrowserState for AppBrowser<P> {
         let keys = keys.to_vec();
         apply::<P, _, _>(move |s| {
             s.with_browser(|b| keep_keys_in(b, &keys));
+        });
+    }
+
+    fn groups(&self) -> Option<Vec<CloudFolder>> {
+        on_main::<P, _, _>(|s| crate::agents::groups::folders(s))
+    }
+
+    fn adopt_groups(&self, folders: &[CloudFolder], removed: &[String]) {
+        let (folders, removed) = (folders.to_vec(), removed.to_vec());
+        apply::<P, _, _>(move |s| crate::agents::groups::adopt(s, &folders, &removed));
+    }
+
+    fn file_kept(&self, tab_id: &str, group: Option<&str>) {
+        let (id, group) = (TabId(tab_id.to_string()), group.map(str::to_string));
+        apply::<P, _, _>(move |s| {
+            s.with_browser(|b| b.set_group(&id, group.as_deref()));
         });
     }
 

@@ -20,6 +20,51 @@ fn load<P: Platform>(shell: &Shell<P>) -> GroupsFile {
         .unwrap_or_default()
 }
 
+/// Every group in `groups.json`, read again only when the file changed.
+pub fn all<P: Platform>(shell: &Shell<P>) -> Vec<TabGroup> {
+    thread_local! {
+        static ALL: RefCell<Option<(Option<SystemTime>, Vec<TabGroup>)>> = const { RefCell::new(None) };
+    }
+    let path = shell.store().path(copper_core::DataFile::Groups);
+    let stamp = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+    if let Some(hit) = ALL.with(|a| {
+        a.borrow()
+            .as_ref()
+            .filter(|(at, _)| at.is_some() && *at == stamp)
+            .map(|(_, g)| g.clone())
+    }) {
+        return hit;
+    }
+    let groups = load(shell).groups;
+    ALL.with(|a| *a.borrow_mut() = Some((stamp, groups.clone())));
+    groups
+}
+
+/// Open a folder or shut it (each device's own; never synced).
+pub fn toggle<P: Platform>(shell: &Shell<P>, id: &str) {
+    let mut file = load(shell);
+    let Some(g) = file
+        .groups
+        .iter_mut()
+        .find(|g| g.id.eq_ignore_ascii_case(id))
+    else {
+        return;
+    };
+    g.collapsed = !g.collapsed;
+    if let Err(e) = shell.store().save(&file) {
+        tracing::warn!(error = %e, "could not write groups.json");
+        return;
+    }
+    crate::view::ShellView::refresh(
+        shell.view(),
+        shell,
+        &crate::view::Refresh {
+            tabs: true,
+            ..Default::default()
+        },
+    );
+}
+
 /// `groups.json`'s names, and the file's modification time they are from.
 type Names = (Option<SystemTime>, HashMap<String, String>);
 
@@ -106,4 +151,83 @@ pub fn assign<P: Platform>(shell: &Shell<P>, id: &TabId, name: &str) {
 /// Take the tab out of its group.
 pub fn remove<P: Platform>(shell: &Shell<P>, id: &TabId) {
     shell.with_browser(|b| b.set_group(id, None));
+}
+
+/// The folders as Copper Cloud carries them (`CloudDocs.Folder`): every
+/// group but whether it is open.
+pub fn folders<P: Platform>(shell: &Shell<P>) -> Vec<copper_core::cloud::CloudFolder> {
+    load(shell)
+        .groups
+        .into_iter()
+        .map(|g| copper_core::cloud::CloudFolder {
+            id: g.id,
+            name: g.name,
+            hue: g.hue,
+            space: g.space,
+            slot: g.slot,
+            extra: Default::default(),
+        })
+        .collect()
+}
+
+/// Another device's folders (`Groups.cloudAdopt`): each added or edited by
+/// id, those `removed` taken away (their tabs stay, unfiled), folders only
+/// this device has kept after. A folder new here arrives shut, as the Mac's
+/// imported ones are; open or shut otherwise stays as it was here.
+pub fn adopt<P: Platform>(
+    shell: &Shell<P>,
+    folders: &[copper_core::cloud::CloudFolder],
+    removed: &[String],
+) {
+    let mut file = load(shell);
+    let same = |a: &str, b: &str| a.eq_ignore_ascii_case(b);
+    let gone = |id: &str| removed.iter().any(|r| same(r, id));
+    let mut next: Vec<TabGroup> = folders
+        .iter()
+        .map(|f| {
+            let mut g = file
+                .groups
+                .iter()
+                .find(|g| same(&g.id, &f.id))
+                .cloned()
+                .unwrap_or_else(|| TabGroup {
+                    id: f.id.clone(),
+                    collapsed: true,
+                    ..Default::default()
+                });
+            g.name = f.name.clone();
+            g.hue = f.hue;
+            g.space = f.space.clone();
+            g.slot = f.slot;
+            g
+        })
+        .collect();
+    next.extend(
+        file.groups
+            .iter()
+            .filter(|g| !gone(&g.id) && !folders.iter().any(|f| same(&f.id, &g.id)))
+            .cloned(),
+    );
+    if next != file.groups {
+        file.groups = next;
+        if let Err(e) = shell.store().save(&file) {
+            tracing::warn!(error = %e, "could not write groups.json");
+            return;
+        }
+        NAMES.with(|n| n.borrow_mut().take());
+    }
+    if !removed.is_empty() {
+        let filed: Vec<TabId> = shell
+            .browser()
+            .all_tabs()
+            .filter(|t| t.group.as_deref().is_some_and(gone))
+            .map(|t| t.id.clone())
+            .collect();
+        shell.with_browser(|b| {
+            for id in &filed {
+                b.set_group(id, None);
+            }
+        });
+    }
+    crate::view::ShellView::refresh(shell.view(), shell, &crate::view::Refresh::spaces());
 }

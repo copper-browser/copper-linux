@@ -11,7 +11,7 @@
 //! both have the same thing. Nothing is lost on a first sync.
 
 use copper_core::bookmarks::Bookmark;
-use copper_core::cloud::{BookmarksDoc, KeptTab, SettingsDoc, SpacesDoc};
+use copper_core::cloud::{BookmarksDoc, CloudFolder, KeptTab, SettingsDoc, SpacesDoc};
 use copper_core::session::Space;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -170,12 +170,58 @@ pub fn spaces(base: Option<&SpacesDoc>, local: &SpacesDoc, server: &SpacesDoc) -
     .into_iter()
     .filter(|t| alive.contains(&uuid_key(&t.space)))
     .collect();
+    // A server document without folders is an older build's: it knows
+    // nothing of filing, so its blank `group`s are not unfilings.
+    let tabs = refiled(tabs, local, server);
     SpacesDoc {
         v: 1,
         spaces,
         tabs,
+        groups: groups(
+            base.and_then(|b| b.groups.as_deref()),
+            local.groups.as_deref(),
+            server.groups.as_deref(),
+        ),
         extra: Default::default(),
     }
+}
+
+/// Where the server said nothing about folders, each kept tab keeps the
+/// folder this device had it in.
+fn refiled(mut tabs: Vec<KeptTab>, local: &SpacesDoc, server: &SpacesDoc) -> Vec<KeptTab> {
+    if server.groups.is_some() || local.groups.is_none() {
+        return tabs;
+    }
+    let mine: HashMap<&str, &Option<String>> = local
+        .tabs
+        .iter()
+        .map(|t| (t.key.as_str(), &t.group))
+        .collect();
+    for t in &mut tabs {
+        if t.group.is_none()
+            && let Some(g) = mine.get(t.key.as_str())
+        {
+            t.group = (*g).clone();
+        }
+    }
+    tabs
+}
+
+/// The folders, merged like the spaces. A side that sent none (a build from
+/// before folders travelled) has said nothing about them: the other side's
+/// stand, rather than every folder reading as deleted (`CloudMerge.groups`).
+pub fn groups(
+    base: Option<&[CloudFolder]>,
+    local: Option<&[CloudFolder]>,
+    server: Option<&[CloudFolder]>,
+) -> Option<Vec<CloudFolder>> {
+    let Some(server) = server else {
+        return local.map(<[CloudFolder]>::to_vec);
+    };
+    let Some(local) = local else {
+        return Some(server.to_vec());
+    };
+    Some(list(base, local, server, |f: &CloudFolder| uuid_key(&f.id)))
 }
 
 /// Local spaces the server doesn't know, matched by name (ignoring case) to
@@ -385,6 +431,7 @@ mod tests {
             .unwrap()
             .to_string();
         KeptTab {
+            group: None,
             key: format!("{}|pin|{host}|{n}", space.to_lowercase()),
             space: space.into(),
             url: url.into(),
@@ -397,6 +444,7 @@ mod tests {
 
     fn doc(spaces: Vec<Space>, tabs: Vec<KeptTab>) -> SpacesDoc {
         SpacesDoc {
+            groups: None,
             v: 1,
             spaces,
             tabs,

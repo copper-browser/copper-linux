@@ -177,6 +177,31 @@ pub struct SpacesDoc {
     pub v: i64,
     pub spaces: Vec<Space>,
     pub tabs: Vec<KeptTab>,
+    /// The folders kept tabs are filed in (`CloudDocs.Folder`), in order.
+    /// `None` in a document from before folders travelled: then every
+    /// device keeps its own — never read as "no folders".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub groups: Option<Vec<CloudFolder>>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// A folder as it travels (`CloudDocs.Folder`; `groups.json`'s `TabGroup`
+/// without `collapsed`, which stays each device's own). Nesting is in the
+/// name, ` › ` between levels.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct CloudFolder {
+    /// UUID, uppercase.
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hue: Option<f64>,
+    /// The space an empty folder stands in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
+    /// Where an empty folder stands among its parent's tabs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot: Option<i64>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -192,6 +217,9 @@ pub struct KeptTab {
     pub pinned: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin: Option<String>,
+    /// The folder it is filed in ([`CloudFolder::id`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
