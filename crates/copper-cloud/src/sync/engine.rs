@@ -1336,6 +1336,7 @@ impl SyncEngine {
                         title: was.title.clone(),
                         pinned: item.pinned,
                         pin: item.pin.clone().or_else(|| was.pin.clone()),
+                        group: item.group.clone(),
                         extra: Default::default(),
                     },
                     None => KeptTab {
@@ -1345,6 +1346,7 @@ impl SyncEngine {
                         title: item.title.clone(),
                         pinned: item.pinned,
                         pin: item.pin.clone(),
+                        group: item.group.clone(),
                         extra: Default::default(),
                     },
                 })
@@ -1357,6 +1359,7 @@ impl SyncEngine {
             v: 1,
             spaces: self.inner.browser.spaces(),
             tabs,
+            groups: self.inner.browser.groups(),
             extra: Default::default(),
         }
     }
@@ -1442,6 +1445,44 @@ impl SyncEngine {
         }
         if !opened.is_empty() {
             browser.keep_keys(&opened);
+        }
+        // Folders, then which folder each kept tab is filed in — only when
+        // the document says: one from an older build has no folders at all,
+        // and must not empty this device's.
+        if let Some(folders) = &doc.groups {
+            let sent: HashSet<String> = folders.iter().map(|f| f.id.to_ascii_uppercase()).collect();
+            let removed: Vec<String> = base
+                .and_then(|b| b.groups.as_ref())
+                .map(|g| {
+                    g.iter()
+                        .filter(|f| !sent.contains(&f.id.to_ascii_uppercase()))
+                        .map(|f| f.id.clone())
+                        .collect()
+                })
+                .unwrap_or_default();
+            browser.adopt_groups(folders, &removed);
+            let filed: HashMap<&str, Option<&str>> = doc
+                .tabs
+                .iter()
+                .map(|t| (t.key.as_str(), t.group.as_deref()))
+                .collect();
+            let keys = self.with(|s| s.tab_keys.clone());
+            for item in self.live_kept() {
+                let Some(key) = keys.get(&item.tab_id) else {
+                    continue;
+                };
+                let Some(want) = filed.get(key.as_str()) else {
+                    continue;
+                };
+                let same = match (*want, item.group.as_deref()) {
+                    (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+                    (None, None) => true,
+                    _ => false,
+                };
+                if !same {
+                    browser.file_kept(&item.tab_id, *want);
+                }
+            }
         }
         // Spaces gone from the document, last.
         if !doc.spaces.is_empty() {
@@ -2229,6 +2270,7 @@ mod tests {
 
     fn tab(id: &str, space: &str, url: &str, pin: Option<&str>, key: Option<&str>) -> LiveKept {
         LiveKept {
+            group: None,
             tab_id: id.into(),
             key: key.map(str::to_string),
             space: space.into(),
@@ -2335,10 +2377,12 @@ mod tests {
         // session written before keys were kept, or with spaces sync off).
         let theirs = "a0000000-0000-4000-8000-00000000000a|saved|127.0.0.1|from-the-mac";
         let doc = SpacesDoc {
+            groups: None,
             v: 1,
             spaces: vec![space(HOME, "Home"), space(WORK, "Work")],
             tabs: vec![
                 KeptTab {
+                    group: None,
                     key: theirs.into(),
                     space: HOME.into(),
                     url: KEPT_AT.into(),
@@ -2348,6 +2392,7 @@ mod tests {
                     extra: Default::default(),
                 },
                 KeptTab {
+                    group: None,
                     key: "a0000000-0000-4000-8000-00000000000a|pin|mail.test|https://mail.test/"
                         .into(),
                     space: HOME.into(),
@@ -2505,6 +2550,7 @@ mod tests {
         let b = browser(vec![]);
         let e = launch(dir.path(), &b);
         let before = SpacesDoc {
+            groups: None,
             v: 1,
             spaces: vec![space(HOME, "Home"), space(WORK, "Work")],
             tabs: vec![],
@@ -2514,6 +2560,7 @@ mod tests {
         let key = "a0000000-0000-4000-8000-00000000000a|saved|127.0.0.1|made-elsewhere";
         let mut doc = before.clone();
         doc.tabs.push(KeptTab {
+            group: None,
             key: key.into(),
             space: HOME.into(),
             url: KEPT_AT.into(),
@@ -2533,5 +2580,61 @@ mod tests {
         let next = relaunched(&b, 2);
         let e2 = launch(dir.path(), &next);
         assert_eq!(build(&e2), doc);
+    }
+
+    #[test]
+    fn folders_come_with_the_spaces_and_an_old_document_keeps_them() {
+        use copper_core::cloud::CloudFolder;
+        let dir = tempfile::tempdir().unwrap();
+        let b = browser(vec![]);
+        let e = launch(dir.path(), &b);
+        let before = SpacesDoc {
+            groups: None,
+            v: 1,
+            spaces: vec![space(HOME, "Home"), space(WORK, "Work")],
+            tabs: vec![],
+            extra: Default::default(),
+        };
+        synced(&e, 1, &before);
+        let folder = |id: &str, name: &str| CloudFolder {
+            id: id.into(),
+            name: name.into(),
+            ..Default::default()
+        };
+        let apps = "F0000000-0000-4000-8000-0000000000A2";
+        let mut doc = before.clone();
+        doc.groups = Some(vec![
+            folder("F0000000-0000-4000-8000-0000000000A1", "Exowatt"),
+            folder(apps, "Exowatt › Apps"),
+        ]);
+        doc.tabs.push(KeptTab {
+            group: Some(apps.into()),
+            key: "a0000000-0000-4000-8000-0000000000ab|saved|x.test|https://x.test/".into(),
+            space: WORK.into(),
+            url: "https://x.test/".into(),
+            title: "X".into(),
+            pinned: false,
+            pin: None,
+            extra: Default::default(),
+        });
+        e.apply_spaces(&doc, Some(&before));
+        let got = b.snapshot();
+        assert_eq!(got.groups.as_ref().map(Vec::len), Some(2));
+        assert_eq!(got.kept[0].group.as_deref(), Some(apps));
+        // What it sends back carries the folders and the filing.
+        synced(&e, 2, &doc);
+        let built = build(&e);
+        assert_eq!(built.groups, doc.groups);
+        assert_eq!(built.tabs[0].group.as_deref(), Some(apps));
+        // A document from an older build, without folders, takes nothing away.
+        let merged = merge::spaces(
+            Some(&doc),
+            &built,
+            &SpacesDoc {
+                groups: None,
+                ..doc.clone()
+            },
+        );
+        assert_eq!(merged.groups, doc.groups);
     }
 }

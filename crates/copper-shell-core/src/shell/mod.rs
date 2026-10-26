@@ -159,6 +159,8 @@ pub struct TabView<I> {
     pub audio: bool,
     pub crashed: bool,
     pub favicon: Option<I>,
+    /// The folder it is filed in (`groups.json` id).
+    pub group: Option<String>,
 }
 
 /// The current space's tabs, as the column lays them out.
@@ -442,6 +444,7 @@ impl<P: Platform> Shell<P> {
             audio: slot.as_ref().is_some_and(|s| s.audio.get()),
             crashed: slot.as_ref().is_some_and(|s| s.crashed.get()),
             favicon,
+            group: t.group.clone(),
         })
     }
 

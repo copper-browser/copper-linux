@@ -9,7 +9,7 @@
 //! the GTK app, the MCP server and tests ([`MemoryBrowser`]).
 
 use copper_core::bookmarks::Bookmark;
-use copper_core::cloud::OpenTab;
+use copper_core::cloud::{CloudFolder, OpenTab};
 use copper_core::session::Space;
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -33,6 +33,8 @@ pub struct LiveKept {
     pub title: String,
     /// The pin's letter, as the column draws it.
     pub pin: Option<String>,
+    /// The folder it is filed in (`groups.json` id), if any.
+    pub group: Option<String>,
 }
 
 /// A place as history keeps it.
@@ -74,6 +76,17 @@ pub trait BrowserState: Send + Sync {
     /// across launches (the app: the tab's `session.json` entry), and hand it
     /// back as [`LiveKept::key`]. Not a change to push.
     fn keep_keys(&self, keys: &[(String, String)]);
+    /// The folders kept tabs are filed in, in order (`groups.json`); `None`
+    /// for a browser that keeps none, which then sends no `groups`.
+    fn groups(&self) -> Option<Vec<CloudFolder>> {
+        None
+    }
+    /// Make the folders these: added or edited by id, `removed` ones (sent
+    /// before, gone from the document) taken away — their tabs stay,
+    /// unfiled. Whether a folder is open stays this device's own.
+    fn adopt_groups(&self, _folders: &[CloudFolder], _removed: &[String]) {}
+    /// File a kept tab in a folder (`None`: in none).
+    fn file_kept(&self, _tab_id: &str, _group: Option<&str>) {}
 
     // settings
 
@@ -121,6 +134,8 @@ pub struct MemoryState {
     pub bookmarks: Vec<Bookmark>,
     pub open: Vec<OpenTab>,
     pub visits: Vec<LocalVisit>,
+    /// `None`: a browser without folders.
+    pub groups: Option<Vec<CloudFolder>>,
     pub next_id: u64,
 }
 
@@ -197,6 +212,7 @@ impl BrowserState for MemoryBrowser {
             url: url.to_string(),
             title: title.to_string(),
             pin: pin.map(str::to_string),
+            group: None,
         });
         Some(id)
     }
@@ -213,6 +229,33 @@ impl BrowserState for MemoryBrowser {
             if let Some(t) = s.kept.iter_mut().find(|t| &t.tab_id == tab) {
                 t.key = Some(key.clone());
             }
+        }
+    }
+
+    fn groups(&self) -> Option<Vec<CloudFolder>> {
+        self.lock().groups.clone()
+    }
+
+    fn adopt_groups(&self, folders: &[CloudFolder], removed: &[String]) {
+        let mut s = self.lock();
+        let gone = |id: &str| removed.iter().any(|r| r.eq_ignore_ascii_case(id));
+        let mut out = folders.to_vec();
+        for old in s.groups.iter().flatten() {
+            if !gone(&old.id) && !out.iter().any(|f| f.id.eq_ignore_ascii_case(&old.id)) {
+                out.push(old.clone());
+            }
+        }
+        for t in &mut s.kept {
+            if t.group.as_deref().is_some_and(gone) {
+                t.group = None;
+            }
+        }
+        s.groups = Some(out);
+    }
+
+    fn file_kept(&self, tab_id: &str, group: Option<&str>) {
+        if let Some(t) = self.lock().kept.iter_mut().find(|t| t.tab_id == tab_id) {
+            t.group = group.map(str::to_string);
         }
     }
 

@@ -38,6 +38,7 @@ pub mod cover;
 pub mod crash;
 pub mod curtain;
 pub mod downloads;
+pub mod folders;
 pub mod format;
 pub mod forms;
 pub mod main_loop;
