@@ -32,6 +32,8 @@ url.workspace = true
 # The agent in the window (`chat`): its requests to the router, and the
 # transcript's item ids.
 reqwest.workspace = true
+# Site icons fetched without a page (`shell::marks`): an `.ico` re-encoded as PNG.
+png = "0.17"
 uuid = { version = "1", features = ["v4"] }
 # The control API's channels (`tokio::sync`), driven from the UI main loop
 # and called from any thread; the cloud's and the passwords' own

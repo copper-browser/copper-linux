@@ -15,6 +15,7 @@
 //! only (`Rc`); other threads reach it through [`crate::control::Control`].
 
 pub mod languages;
+pub mod marks;
 pub mod pages;
 
 use crate::control::{Hub, ShellEvent};
@@ -101,6 +102,10 @@ struct Inner<P: Platform> {
     favicons: RefCell<HashMap<TabId, P::Icon>>,
     /// Kept icons read from disk, by their file under `favicons/`.
     host_icons: RefCell<HashMap<String, Option<P::Icon>>>,
+    /// Sites already asked for an icon this launch (`marks`), and those
+    /// waiting to be asked.
+    marks_asked: RefCell<std::collections::HashSet<String>>,
+    marks_waiting: RefCell<Vec<String>>,
     /// Tab → the tab whose page opened it (popups, links to a new window).
     openers: RefCell<HashMap<TabId, TabId>>,
     /// Run for every page a tab gets ([`Shell::on_page_created`]).
@@ -218,6 +223,8 @@ impl<P: Platform> Shell<P> {
             pages: RefCell::default(),
             favicons: RefCell::default(),
             host_icons: RefCell::default(),
+            marks_asked: RefCell::default(),
+            marks_waiting: RefCell::default(),
             openers: RefCell::default(),
             page_hooks: RefCell::default(),
             dark_hooks: RefCell::default(),
@@ -413,6 +420,9 @@ impl<P: Platform> Shell<P> {
             .get(id)
             .cloned()
             .or_else(|| self.cached_icon(&t.url));
+        if favicon.is_none() && !t.private {
+            self.want_mark(&t.url);
+        }
         Some(TabView {
             id: t.id.clone(),
             label: if t.title.trim().is_empty() && t.url.is_empty() {

@@ -475,6 +475,7 @@ dependencies = [
  "copper-mcp",
  "copper-pagejs",
  "copper-shield",
+ "png",
  "reqwest",
  "serde",
  "serde_json",

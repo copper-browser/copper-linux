@@ -26,7 +26,8 @@ pub mod keys {
     pub const MANNER: &str = "manner";
     /// Column width in points.
     pub const SIDEBAR_WIDTH: &str = "sidebar.width";
-    /// `letters` | `icons`. Default `letters`.
+    /// `letters` | `icons`. Default `icons`: a site's own mark, its letter
+    /// only where it has none.
     pub const GLYPH: &str = "glyph";
     /// `row` | `recent`. Default `row`.
     pub const TABS_SWITCHING: &str = "tabs.switching";
@@ -94,8 +95,8 @@ pub enum Look {
 /// What a tab wears beside its title.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Glyph {
-    #[default]
     Letters,
+    #[default]
     Icons,
 }
 

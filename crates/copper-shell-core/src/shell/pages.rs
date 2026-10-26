@@ -614,6 +614,87 @@ impl<P: Platform> Shell<P> {
         })
     }
 
+    /// Ask `url`'s site for its icon without a page (`marks`), once a
+    /// launch: for a row that has none yet, a pin from another device or a
+    /// tab asleep since before its icon was kept. Batched: every row drawn
+    /// in one pass goes out together on the loop's next turn.
+    pub fn want_mark(&self, url: &str) {
+        let Some(rel) = icon_rel(url) else {
+            return;
+        };
+        let Some(site) = rel.parent().map(|p| p.to_string_lossy().to_string()) else {
+            return;
+        };
+        let Ok(u) = url::Url::parse(url) else {
+            return;
+        };
+        if !u.scheme().starts_with("http") || !u.host_str().is_some_and(|h| h.contains('.')) {
+            return;
+        }
+        if !self.0.marks_asked.borrow_mut().insert(site.clone()) {
+            return;
+        }
+        let origin = u.origin().ascii_serialization();
+        let first = {
+            let mut waiting = self.0.marks_waiting.borrow_mut();
+            waiting.push(origin);
+            waiting.len() == 1
+        };
+        if !first {
+            return;
+        }
+        let weak = self.downgrade();
+        crate::main_loop::spawn::<P::Loop>(async move {
+            let Some(origins) = weak
+                .upgrade()
+                .map(|s| std::mem::take(&mut *s.0.marks_waiting.borrow_mut()))
+            else {
+                return;
+            };
+            let got = crate::main_loop::spawn_blocking(move || super::marks::fetch_all(origins))
+                .await
+                .unwrap_or_default();
+            let Some(shell) = weak.upgrade() else {
+                return;
+            };
+            let mut landed = false;
+            for (origin, png) in got {
+                let Some(front) = icon_rel(&format!("{origin}/")) else {
+                    continue;
+                };
+                if shell.view().decode_icon(&png).is_none() {
+                    continue;
+                }
+                let path = shell.icon_path(&front);
+                // A page's own icon may have landed meanwhile; it wins.
+                if path.exists() {
+                    continue;
+                }
+                if let Some(dir) = path.parent() {
+                    let _ = std::fs::create_dir_all(dir);
+                }
+                if std::fs::write(&path, &png).is_ok() {
+                    // Forget the misses remembered for every page on the site.
+                    let site = front.parent().map(std::path::Path::to_path_buf);
+                    shell.host_icons().borrow_mut().retain(|k, _| {
+                        site.as_ref()
+                            .is_none_or(|s| !std::path::Path::new(k).starts_with(s))
+                    });
+                    landed = true;
+                }
+            }
+            if landed {
+                shell.view().refresh(
+                    &shell,
+                    &Refresh {
+                        tabs: true,
+                        ..Default::default()
+                    },
+                );
+            }
+        });
+    }
+
     fn kept_icon(&self, rel: &std::path::Path) -> Option<P::Icon> {
         let key = rel.to_string_lossy().to_string();
         if let Some(hit) = self.host_icons().borrow().get(&key) {
