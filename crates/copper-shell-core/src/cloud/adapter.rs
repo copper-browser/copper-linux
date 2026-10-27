@@ -117,6 +117,9 @@ pub fn kept<P: Platform>(shell: &Shell<P>) -> Vec<LiveKept> {
 /// [`kept`], of a browser.
 pub fn kept_in(b: &Browser) -> Vec<LiveKept> {
     let mut out = Vec::new();
+    // Pins belong to no space: keyed once, under the first space, as the
+    // Mac keys them (Copper#92), so every device names a pin the same way.
+    let anchor = b.spaces().next().map(|s| s.id.clone());
     for t in b.pins() {
         if t.private || !is_web(&t.url) {
             continue;
@@ -124,7 +127,7 @@ pub fn kept_in(b: &Browser) -> Vec<LiveKept> {
         out.push(LiveKept {
             tab_id: t.id.0.clone(),
             key: carried_key(t),
-            space: t.space.clone(),
+            space: anchor.clone().unwrap_or_else(|| t.space.clone()),
             pinned: true,
             url: t.url.clone(),
             title: t.title.clone(),

@@ -1420,6 +1420,20 @@ impl SyncEngine {
         // the first time it wakes (and is quit before anything else syncs)
         // comes back as the same entry.
         let mut opened: Vec<(String, String)> = vec![];
+        // Pins are global, but older Macs keyed them by the space on screen,
+        // so a document can hold one pin under several spaces' keys (Mac:
+        // Copper#92). A pin for a site already pinned here is that pin: take
+        // its key when the pin's own is gone from the document, and never
+        // pin the site twice.
+        // shortcut: matched by host, so two pins on one site sync as one; upgrade when pins carry an id.
+        let host = |u: &str| is_web(u).and_then(|u| u.host_str().map(str::to_lowercase));
+        let mut keys_now = self.with(|s| s.tab_keys.clone());
+        let mut pinned_here: Vec<(String, Option<String>)> = self
+            .live_kept()
+            .into_iter()
+            .filter(|t| t.pinned)
+            .map(|t| (t.tab_id, host(&t.url)))
+            .collect();
         for entry in &doc.tabs {
             if local_keys.contains(&entry.key) {
                 continue;
@@ -1427,6 +1441,26 @@ impl SyncEngine {
             let Some(url) = is_web(&entry.url) else {
                 continue;
             };
+            if entry.pinned
+                && let Some(site) = host(&entry.url)
+                && pinned_here
+                    .iter()
+                    .any(|(_, h)| h.as_deref() == Some(site.as_str()))
+            {
+                let free = pinned_here.iter().position(|(tab, h)| {
+                    h.as_deref() == Some(site.as_str())
+                        && keys_now
+                            .get(tab)
+                            .is_none_or(|k| !doc_keys.contains(k.as_str()))
+                });
+                if let Some(i) = free {
+                    let tab = pinned_here[i].0.clone();
+                    keys_now.insert(tab.clone(), entry.key.clone());
+                    self.with(|s| s.tab_keys.insert(tab.clone(), entry.key.clone()));
+                    opened.push((tab, entry.key.clone()));
+                }
+                continue;
+            }
             let pin = entry.pinned.then(|| {
                 entry.pin.clone().unwrap_or_else(|| {
                     copper_core::address::pretty(&url)
@@ -1440,6 +1474,10 @@ impl SyncEngine {
                 browser.open_kept(&entry.url, &entry.title, pin.as_deref(), &entry.space)
             {
                 self.with(|s| s.tab_keys.insert(tab.clone(), entry.key.clone()));
+                if pin.is_some() {
+                    keys_now.insert(tab.clone(), entry.key.clone());
+                    pinned_here.push((tab.clone(), host(&entry.url)));
+                }
                 opened.push((tab, entry.key.clone()));
             }
         }
@@ -2580,6 +2618,69 @@ mod tests {
         let next = relaunched(&b, 2);
         let e2 = launch(dir.path(), &next);
         assert_eq!(build(&e2), doc);
+    }
+
+    #[test]
+    fn a_pin_keyed_under_two_spaces_is_pinned_once() {
+        // An older Mac keyed its pins by the space on screen: the document
+        // holds each pin under both spaces' keys. One pin each, not two.
+        let dir = tempfile::tempdir().unwrap();
+        let home = |host: &str, url: &str| format!("{}|pin|{host}|{url}", HOME.to_lowercase());
+        let work = |host: &str, url: &str| format!("{}|pin|{host}|{url}", WORK.to_lowercase());
+        let pin = |key: String, space: &str, url: &str| KeptTab {
+            group: None,
+            key,
+            space: space.into(),
+            url: url.into(),
+            title: url.into(),
+            pinned: true,
+            pin: Some("P".into()),
+            extra: Default::default(),
+        };
+        let mail_key = home("mail.test", "https://mail.test/");
+        let b = browser(vec![tab(
+            "mail",
+            HOME,
+            "https://mail.test/",
+            Some("M"),
+            Some(&mail_key),
+        )]);
+        let e = launch(dir.path(), &b);
+        let mut before = SpacesDoc {
+            groups: None,
+            v: 1,
+            spaces: vec![space(HOME, "Home"), space(WORK, "Work")],
+            tabs: vec![pin(mail_key.clone(), HOME, "https://mail.test/")],
+            extra: Default::default(),
+        };
+        before.tabs.sort_by(|a, b| a.key.cmp(&b.key));
+        synced(&e, 1, &before);
+        let mut doc = before.clone();
+        doc.tabs.extend([
+            // The same pin, browsed elsewhere, under the other space.
+            pin(
+                work("mail.test", "https://mail.test/u/1"),
+                WORK,
+                "https://mail.test/u/1",
+            ),
+            // A new pin, twice.
+            pin(
+                home("news.test", "https://news.test/"),
+                HOME,
+                "https://news.test/",
+            ),
+            pin(
+                work("news.test", "https://news.test/"),
+                WORK,
+                "https://news.test/",
+            ),
+        ]);
+        doc.tabs.sort_by(|a, b| a.key.cmp(&b.key));
+        e.apply_spaces(&doc, Some(&before));
+        let urls: Vec<String> = b.snapshot().kept.into_iter().map(|t| t.url).collect();
+        assert_eq!(urls, vec!["https://mail.test/", "https://news.test/"]);
+        // The pin already here keeps its own key.
+        assert_eq!(keys(&b)[0], ("mail".into(), Some(mail_key)));
     }
 
     #[test]
