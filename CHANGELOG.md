@@ -5,6 +5,11 @@ release dates.
 
 ## Unreleased
 
+## 0.5.0 — 2026-10-28
+
+Calendar peek on the Calendar pin, folder-aware dragging, and pins that
+sync once per site.
+
 ### Added
 
 - **Calendar peek.** Rest the pointer on a Google Calendar pin for half a
@@ -25,6 +30,14 @@ release dates.
   placement Copper for Windows draws (`copper_shell_core::sidedrop`) and
   **Remove from Folder** (`agents::groups::take_out`) live in the shared
   crate; this window does not draw folders yet.
+- **Pins sync once per site (Mac: Copper#92, #109–#111).** Pins are keyed
+  once, under the first space; a pin for a site already pinned here takes
+  that pin's key instead of pinning it again; every spaces merge keeps one
+  pin per site (the lowest key); a second pin for a pinned site closes; and
+  a pin another device re-keys keeps its page rather than closing and
+  reopening.
+- **Start-up reads history.json beside the session**, and visits synced
+  from other devices write history once a minute instead of on every pull.
 
 ## 0.4.1 — 2026-10-19
 
