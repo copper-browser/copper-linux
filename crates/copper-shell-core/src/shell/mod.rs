@@ -826,6 +826,32 @@ impl<P: Platform> Shell<P> {
         self.with_browser(|b| b.place_in_section(dragged, saved, before));
     }
 
+    /// A drag let go at `spot` in a column that draws folders
+    /// ([`crate::sidedrop`]): in that block and that folder (or none), at
+    /// that place.
+    pub fn drop_at_spot(&self, dragged: &TabId, spot: &crate::sidedrop::Spot) {
+        let groups = crate::agents::groups::all(self);
+        self.with_browser(|b| {
+            let Some(private) = b.tab(dragged).map(|t| t.private) else {
+                return;
+            };
+            let row: Vec<(TabId, bool)> = b
+                .row(b.current_space_id())
+                .iter()
+                .map(|t| (t.id.clone(), t.saved))
+                .collect();
+            let at = crate::sidedrop::index(spot, dragged, &row, |t, folder| {
+                let group = b.tab(t).and_then(|t| t.group.as_deref());
+                crate::agents::groups::in_folder(&groups, group, folder)
+            });
+            b.place_in_section(dragged, spot.saved, None);
+            // A private tab is never saved, so never in a Saved folder.
+            let group = spot.group.as_deref().filter(|_| !(private && spot.saved));
+            b.set_group(dragged, group);
+            b.move_tab(dragged, at);
+        });
+    }
+
     /// A drag let go on a section's head (Saved: kept, at the top; Today:
     /// today's, at the top).
     pub fn drop_in_section(&self, dragged: &TabId, saved: bool) {

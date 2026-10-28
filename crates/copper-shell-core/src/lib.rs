@@ -48,6 +48,7 @@ pub mod private;
 pub mod session;
 pub mod shell;
 pub mod shield;
+pub mod sidedrop;
 pub mod sleep;
 pub mod spaces;
 pub mod updates;

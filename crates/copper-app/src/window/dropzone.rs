@@ -50,6 +50,9 @@ pub struct Landing {
     /// The block has no row but the dragged one: the marker is the empty
     /// block's own slot (Saved's seam, or the space under "New Tab").
     pub empty: bool,
+    /// It would land where it already is: no marker (Mac: nothing opens
+    /// over a row's own place).
+    pub stays: bool,
 }
 
 /// Where a drop at `y` lands for the `dragged` tab (its own row, if it is
@@ -69,11 +72,17 @@ pub fn land(layout: &Layout, y: f64, dragged: &TabId) -> Landing {
         (None, None) if saved => (layout.saved_top + new_top) / 2.0,
         (None, None) => new_bottom + 1.0,
     };
+    // Its own row's next one in the block is where it already is.
+    let stays = bands
+        .iter()
+        .position(|b| b.id == *dragged)
+        .is_some_and(|i| bands.get(i + 1).map(|b| &b.id) == before.as_ref());
     Landing {
         saved,
         before,
         line,
         empty: others.is_empty(),
+        stays,
     }
 }
 
@@ -139,9 +148,15 @@ mod tests {
         let c = column();
         // s2 over its own lower half: before nothing (still the end).
         let l = land(&c, 150.0, &id("s2"));
-        assert_eq!((l.saved, l.before), (true, None));
+        assert_eq!((l.saved, l.before, l.stays), (true, None, true));
         // s1 over its own upper half: before s2 — where it already is.
-        assert_eq!(land(&c, 95.0, &id("s1")).before, Some(id("s2")));
+        let l = land(&c, 95.0, &id("s1"));
+        assert_eq!((l.before, l.stays), (Some(id("s2")), true));
+        // s1 over s2's lower half moves; t1 over s1's place moves.
+        assert!(!land(&c, 150.0, &id("s1")).stays);
+        assert!(!land(&c, 95.0, &id("t1")).stays);
+        // t1 over the top of Today, its own place.
+        assert!(land(&c, 195.0, &id("t1")).stays);
     }
 
     #[test]

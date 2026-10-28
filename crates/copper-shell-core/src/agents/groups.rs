@@ -4,6 +4,7 @@
 //! membership round-trip with the Mac's.
 
 use crate::Platform;
+use crate::folders::{MARK, below};
 use crate::shell::Shell;
 use copper_core::TabId;
 use copper_core::groups::{GroupsFile, TabGroup};
@@ -153,6 +154,61 @@ pub fn remove<P: Platform>(shell: &Shell<P>, id: &TabId) {
     shell.with_browser(|b| b.set_group(id, None));
 }
 
+/// Remove from Folder (`Groups.takeOut`): out of every folder, onto the
+/// line just under the outermost one it was in, in its own block. Left
+/// where it stood, it would split that folder in two around it.
+pub fn take_out<P: Platform>(shell: &Shell<P>, id: &TabId) {
+    let groups = all(shell);
+    let name = |g: Option<&str>| {
+        g.and_then(|g| groups.iter().find(|x| x.id.eq_ignore_ascii_case(g)))
+            .map(|x| x.name.as_str())
+    };
+    let to = {
+        let b = shell.browser();
+        let Some(tab) = b.tab(id) else { return };
+        let row = b.row(&tab.space);
+        let filed: Vec<(bool, Option<&str>)> = row
+            .iter()
+            .map(|t| (t.saved, name(t.group.as_deref())))
+            .collect();
+        row.iter()
+            .position(|t| t.id == *id)
+            .and_then(|here| under_folder(&filed, here))
+    };
+    shell.with_browser(|b| {
+        b.set_group(id, None);
+        if let Some(to) = to {
+            b.move_tab(id, to);
+        }
+    });
+}
+
+/// Where Remove from Folder moves row `here` of `row` (each tab's block
+/// and folder name): onto the last place of the outermost folder it is in,
+/// in its block, when that is further down.
+fn under_folder(row: &[(bool, Option<&str>)], here: usize) -> Option<usize> {
+    let (saved, Some(name)) = row[here] else {
+        return None;
+    };
+    let root = name.split(MARK).next().unwrap_or(name);
+    row.iter()
+        .rposition(|(s, n)| *s == saved && n.is_some_and(|n| n == root || below(n, root)))
+        .filter(|last| *last > here)
+}
+
+/// Is a tab filed in `group` in `folder`, or in a folder inside it?
+pub fn in_folder(groups: &[TabGroup], group: Option<&str>, folder: &str) -> bool {
+    let name = |id: &str| {
+        groups
+            .iter()
+            .find(|g| g.id.eq_ignore_ascii_case(id))
+            .map(|g| g.name.as_str())
+    };
+    let Some(mine) = group else { return false };
+    mine.eq_ignore_ascii_case(folder)
+        || matches!((name(mine), name(folder)), (Some(a), Some(b)) if below(a, b))
+}
+
 /// The folders as Copper Cloud carries them (`CloudDocs.Folder`): every
 /// group but whether it is open.
 pub fn folders<P: Platform>(shell: &Shell<P>) -> Vec<copper_core::cloud::CloudFolder> {
@@ -230,4 +286,45 @@ pub fn adopt<P: Platform>(
         });
     }
     crate::view::ShellView::refresh(shell.view(), shell, &crate::view::Refresh::spaces());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn taken_out_it_goes_under_the_outermost_folder_in_its_block() {
+        let w = Some("Work");
+        let docs = Some("Work › Docs");
+        // a, then Work: b, Work › Docs: c, Work: d; Today: e in Work.
+        let row = [(true, None), (true, w), (true, docs), (true, w), (false, w)];
+        // c, in the inner folder, goes under d: out of both.
+        assert_eq!(under_folder(&row, 2), Some(3));
+        // d is already the folder's last: it stays.
+        assert_eq!(under_folder(&row, 3), None);
+        // e's Work in Today is its own run.
+        assert_eq!(under_folder(&row, 4), None);
+        // A loose tab has no folder to leave.
+        assert_eq!(under_folder(&row, 0), None);
+    }
+
+    #[test]
+    fn in_a_folder_or_one_inside_it() {
+        let groups = [
+            TabGroup {
+                id: "W".into(),
+                name: "Work".into(),
+                ..Default::default()
+            },
+            TabGroup {
+                id: "D".into(),
+                name: "Work › Docs".into(),
+                ..Default::default()
+            },
+        ];
+        assert!(in_folder(&groups, Some("d"), "W"));
+        assert!(in_folder(&groups, Some("W"), "w"));
+        assert!(!in_folder(&groups, Some("W"), "D"));
+        assert!(!in_folder(&groups, None, "W"));
+    }
 }
