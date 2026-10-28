@@ -300,6 +300,10 @@ impl Column {
     }
 
     fn show_marker(&self, landing: &Landing) {
+        if landing.stays {
+            self.hide_marker();
+            return;
+        }
         let armed = landing.saved && landing.empty && self.slot.reveals_child();
         if armed {
             // The slot itself lights up; no line over it.
@@ -319,12 +323,18 @@ impl Column {
     }
 
     /// A tab's row (or square, or pill) was picked up: open the Saved slot
-    /// if Saved is empty, so there is somewhere visible to drop it.
+    /// if Saved is empty, and the favourites' if there are none, so there is
+    /// somewhere visible to drop it.
     pub fn drag_began(&self, id: &TabId) {
         self.dragging.replace(Some(id.clone()));
         let empty = self.order.borrow().0.iter().all(|t| t == id);
-        self.slot
-            .set_reveal_child(empty && self.widget.get_visible());
+        let shown = self.widget.get_visible();
+        self.slot.set_reveal_child(empty && shown);
+        let pinned = self.rows.borrow().get(id).is_some_and(|r| r.pin);
+        if shown && !pinned && self.pins.first_child().is_none() {
+            self.pins.insert(&pin_slot(), -1);
+            self.pins.set_visible(true);
+        }
     }
 
     /// The drag is over (dropped or not).
@@ -332,6 +342,13 @@ impl Column {
         self.dragging.replace(None);
         self.hide_marker();
         self.slot.set_reveal_child(false);
+        // Only while there are no favourites (a rebuild meanwhile took it).
+        if let Some(c) = self.pins.first_child()
+            && c.first_child().is_some_and(|w| w.has_css_class("pin-slot"))
+        {
+            self.pins.remove(&c);
+            self.pins.set_visible(false);
+        }
     }
 
     pub fn update_nav(&self, shell: &Shell) {
@@ -496,6 +513,22 @@ fn tab_row(shell: &Shell, t: &TabView) -> Row {
     };
     fill(shell, &row, t);
     row
+}
+
+/// While a tab is dragged and there are no favourites: where to drop it to
+/// pin (the favourites' own drop target takes it).
+fn pin_slot() -> gtk::Box {
+    let slot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    slot.add_css_class("pin");
+    slot.add_css_class("pin-slot");
+    slot.set_size_request(42, 42);
+    slot.set_tooltip_text(Some("Drop here to pin"));
+    slot.update_property(&[gtk::accessible::Property::Label("Drop here to pin")]);
+    let mark = gtk::Image::from_icon_name("view-pin-symbolic");
+    mark.set_pixel_size(14);
+    mark.set_hexpand(true);
+    slot.append(&mark);
+    slot
 }
 
 /// A favourite: a soft square with the site's mark.

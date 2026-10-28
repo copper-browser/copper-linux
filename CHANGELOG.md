@@ -3,6 +3,18 @@
 Copper for Linux. Versions follow the `.deb` and the Flatpak; dates are
 release dates.
 
+## Unreleased
+
+### Fixed
+
+- **Dragging a tab in the column, as the Mac does (Copper#113).** Over
+  its own place no marker shows, since letting go there moves nothing. With
+  no favourites yet, a dragged row opens a *Drop here to pin* square where
+  they go, so a row can still be pinned by dragging. The folder-aware drop
+  placement Copper for Windows draws (`copper_shell_core::sidedrop`) and
+  **Remove from Folder** (`agents::groups::take_out`) live in the shared
+  crate; this window does not draw folders yet.
+
 ## 0.4.1 — 2026-10-19
 
 Company sign-in in Settings › Cloud, and `copper://cloud/join` links that

@@ -288,7 +288,7 @@ fn surface(scope: &str, t: &Tint) -> String {
 {scope} .drop-after {{ box-shadow: inset 0 -2px {dot}; }}
 {scope} .drop-into {{ box-shadow: inset 0 0 0 2px {dot_soft}; }}
 {scope} .drop-marker {{ background-color: {marker}; box-shadow: 0 0 0 1px {pill}; }}
-{scope} .save-slot {{ color: {muted}; box-shadow: inset 0 0 0 1px {hair}; }}
+{scope} .save-slot, {scope} .pin-slot {{ color: {muted}; box-shadow: inset 0 0 0 1px {hair}; }}
 {scope} .armed .save-slot {{ color: {ink}; background-color: {hover}; box-shadow: inset 0 0 0 2px {dot}; }}
 "#,
         bg = t.background_css(),
