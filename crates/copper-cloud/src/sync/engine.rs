@@ -1238,7 +1238,17 @@ impl SyncEngine {
     /// click). Every tab's key is kept on the tab ([`BrowserState::keep_keys`]),
     /// so that holds across launches too.
     fn build_spaces(&self, base: Option<&SpacesDoc>) -> SpacesDoc {
-        let list = self.live_kept();
+        // Pins sync one per site (merge::one_pin_per_site): a second pin for
+        // a site already pinned here — one an older build opened from another
+        // device's copy — closes before this device says what it has.
+        let mut seen: HashSet<String> = HashSet::new();
+        let (list, extra): (Vec<LiveKept>, Vec<LiveKept>) = self
+            .live_kept()
+            .into_iter()
+            .partition(|t| !t.pinned || seen.insert(merge::site(&t.url)));
+        for t in &extra {
+            self.inner.browser.close_kept(&t.tab_id);
+        }
         let base_by: HashMap<&str, &KeptTab> = base
             .map(|b| b.tabs.iter().map(|t| (t.key.as_str(), t)).collect())
             .unwrap_or_default();
@@ -1406,10 +1416,19 @@ impl SyncEngine {
         let base_keys: HashSet<&str> = base
             .map(|b| b.tabs.iter().map(|t| t.key.as_str()).collect())
             .unwrap_or_default();
-        for key in &local_keys {
-            if !doc_keys.contains(key.as_str())
-                && base_keys.contains(key.as_str())
-                && let Some(tab) = by_key.get(key)
+        // A pin whose site the document still pins under another key is not
+        // gone: it takes that key below rather than closing and reopening.
+        let doc_pin_sites: HashSet<String> = doc
+            .tabs
+            .iter()
+            .filter(|t| t.pinned)
+            .map(|t| merge::site(&t.url))
+            .collect();
+        for t in &local.tabs {
+            if !doc_keys.contains(t.key.as_str())
+                && base_keys.contains(t.key.as_str())
+                && !(t.pinned && doc_pin_sites.contains(&merge::site(&t.url)))
+                && let Some(tab) = by_key.get(&t.key)
                 && live.contains(tab)
             {
                 browser.close_kept(tab);
@@ -2681,6 +2700,56 @@ mod tests {
         assert_eq!(urls, vec!["https://mail.test/", "https://news.test/"]);
         // The pin already here keeps its own key.
         assert_eq!(keys(&b)[0], ("mail".into(), Some(mail_key)));
+    }
+
+    #[test]
+    fn a_second_pin_for_a_site_closes_and_a_rekeyed_pin_stays_open() {
+        // What an older build left here: the same site pinned twice.
+        let dir = tempfile::tempdir().unwrap();
+        let key = |n: &str| {
+            format!(
+                "{}|pin|mail.test|https://mail.test/{n}",
+                HOME.to_lowercase()
+            )
+        };
+        let b = browser(vec![
+            tab(
+                "first",
+                HOME,
+                "https://mail.test/",
+                Some("M"),
+                Some(&key("")),
+            ),
+            tab(
+                "copy",
+                HOME,
+                "https://mail.test/u/1",
+                Some("M"),
+                Some(&key("u/1")),
+            ),
+        ]);
+        let e = launch(dir.path(), &b);
+        let built = build(&e);
+        let pins: Vec<&str> = built
+            .tabs
+            .iter()
+            .filter(|t| t.pinned)
+            .map(|t| t.key.as_str())
+            .collect();
+        assert_eq!(pins, vec![key("").as_str()]);
+        assert_eq!(keys(&b), vec![("first".into(), Some(key("")))]);
+
+        // Another device's merge kept the site's pin under another key: the
+        // pin here takes that key and stays open, never closed and reopened.
+        synced(&e, 1, &built);
+        let mut doc = built.clone();
+        doc.tabs[0].key =
+            "00000000-0000-4000-8000-000000000000|pin|mail.test|https://mail.test/".into();
+        e.apply_spaces(&doc, Some(&built));
+        assert_eq!(
+            keys(&b),
+            vec![("first".into(), Some(doc.tabs[0].key.clone()))]
+        );
     }
 
     #[test]

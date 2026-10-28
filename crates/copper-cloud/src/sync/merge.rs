@@ -143,6 +143,33 @@ pub fn list<T: PartialEq + Clone>(
     out
 }
 
+/// The site a kept tab is on: its host, lowercased (the whole address when
+/// it has none).
+pub fn site(url: &str) -> String {
+    url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_lowercase))
+        .unwrap_or_else(|| url.to_lowercase())
+}
+
+/// One pin per site: of the pinned entries on one host, the one with the
+/// lowest key stays — the same choice on every device. Older Macs sent every
+/// copy of a pin round again (Mac: Copper#109), and a merge must not carry
+/// them on.
+// shortcut: two pins on one host (two Google accounts, say) sync as one; key by host and path if that is ever wanted.
+pub fn one_pin_per_site(tabs: Vec<KeptTab>) -> Vec<KeptTab> {
+    let mut keep: HashMap<String, String> = HashMap::new();
+    for t in tabs.iter().filter(|t| t.pinned) {
+        let lowest = keep.entry(site(&t.url)).or_insert_with(|| t.key.clone());
+        if t.key < *lowest {
+            *lowest = t.key.clone();
+        }
+    }
+    tabs.into_iter()
+        .filter(|t| !t.pinned || keep.get(&site(&t.url)) == Some(&t.key))
+        .collect()
+}
+
 /// Spaces and their kept tabs.
 pub fn spaces(base: Option<&SpacesDoc>, local: &SpacesDoc, server: &SpacesDoc) -> SpacesDoc {
     // The first sync of a second device: both have a "Home" (each made its own
@@ -172,7 +199,7 @@ pub fn spaces(base: Option<&SpacesDoc>, local: &SpacesDoc, server: &SpacesDoc) -
     .collect();
     // A server document without folders is an older build's: it knows
     // nothing of filing, so its blank `group`s are not unfilings.
-    let tabs = refiled(tabs, local, server);
+    let tabs = one_pin_per_site(refiled(tabs, local, server));
     SpacesDoc {
         v: 1,
         spaces,
@@ -678,6 +705,36 @@ mod tests {
     }
 
     #[test]
+    fn pins_merge_to_one_per_site() {
+        const WORK: &str = "B0000000-0000-4000-8000-000000000002";
+        let home = "A0000000-0000-4000-8000-000000000001";
+        let saved = KeptTab {
+            pinned: false,
+            key: format!("{}|saved|x.test|0", home.to_lowercase()),
+            ..kept(home, "https://x.test/a", "saved", 0)
+        };
+        let tabs = vec![
+            kept(WORK, "https://x.test/", "work copy", 0),
+            kept(home, "https://x.test/", "home", 0),
+            kept(home, "https://x.test/other", "home copy", 1),
+            kept(home, "https://y.test/", "y", 0),
+            saved.clone(),
+        ];
+        let doc = SpacesDoc {
+            v: 1,
+            spaces: vec![space(home, "Home"), space(WORK, "Work")],
+            tabs: tabs.clone(),
+            groups: None,
+            extra: Default::default(),
+        };
+        let merged = spaces(None, &doc, &doc);
+        let titles: Vec<&str> = merged.tabs.iter().map(|t| t.title.as_str()).collect();
+        // The lowest key per site (home's space id sorts first), the other
+        // site's pin, and a Saved row on a pinned site all stay.
+        assert_eq!(titles, vec!["home", "y", "saved"]);
+    }
+
+    #[test]
     fn mac_fixture_documents_merge_with_themselves() {
         let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/mac/");
         let read = |name: &str| std::fs::read(format!("{root}{name}")).ok();
@@ -693,7 +750,17 @@ mod tests {
                 .filter(|t| seen.insert(t.key.clone()))
                 .cloned()
                 .collect();
-            assert_eq!(merged.tabs, unique);
+            // And one pin per site: this fixture is a real document from
+            // when older Macs sent pins round twice.
+            assert_eq!(merged.tabs, one_pin_per_site(unique));
+            let mut sites = HashSet::new();
+            assert!(
+                merged
+                    .tabs
+                    .iter()
+                    .filter(|t| t.pinned)
+                    .all(|t| sites.insert(site(&t.url)))
+            );
         }
         if let Some(bytes) = read("cloud-bookmarks.json") {
             let d: BookmarksDoc = serde_json::from_slice(&bytes).unwrap();
