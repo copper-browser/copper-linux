@@ -1,8 +1,10 @@
 //! Settings pages (Mac: `Settings.swift`, `Fork/SettingsFork.swift`,
-//! `Fork/PrivacySettings.swift`): General, Tabs, Appearance, Privacy,
-//! Extensions, Updates. Every key is the Mac's (copper-core `settings`).
+//! `Fork/PrivacySettings.swift`): General, Tabs (with the Calendar pin's
+//! calendars), Appearance, Privacy, Extensions, Updates. Every key is the
+//! Mac's (copper-core `settings`).
 //! The shell skips its own General page because this lane registers one.
 
+pub mod calendar;
 pub mod general;
 pub mod privacy;
 
@@ -259,6 +261,7 @@ fn tabs(shell: &Shell) -> adw::PreferencesPage {
         |s, on| s.update_settings(|st| st.set(keys::TABS_SLEEP, on)),
     ));
     page.add(&leave);
+    page.add(&calendar::group(shell));
     page
 }
 

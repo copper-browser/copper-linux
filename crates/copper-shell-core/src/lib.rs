@@ -7,7 +7,8 @@
 //! colours and the thread-safe [`control`] API automation drives it with;
 //! and the lanes on top of it — the copper-cloud sync ([`cloud`]), Canvas
 //! ([`canvas`]), the agents' MCP server ([`agents`]), the agent in the
-//! window ([`chat`]), passwords and form fill ([`forms`]), the ad blocker ([`shield`]), hide-anything
+//! window ([`chat`]), the Calendar pin's card ([`calendar`]), passwords
+//! and form fill ([`forms`]), the ad blocker ([`shield`]), hide-anything
 //! ([`curtain`]), the update check ([`updates`]), the palette's matching
 //! ([`palette`]) and the shell's words for times and sizes ([`format`](mod@format)).
 //! Linux (GTK4 + WebKitGTK, `copper-app`) and Windows (Win32 +
@@ -29,6 +30,7 @@
 //! for how an app is put together and what is still to move here.
 
 pub mod agents;
+pub mod calendar;
 pub mod canvas;
 pub mod chat;
 pub mod clear;

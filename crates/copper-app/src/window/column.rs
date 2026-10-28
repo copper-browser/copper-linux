@@ -428,6 +428,13 @@ impl Column {
         fill(shell, row, &t);
     }
 
+    /// Pin `id`'s square, while it is drawn.
+    pub fn pin(&self, id: &TabId) -> Option<gtk::Widget> {
+        let rows = self.rows.borrow();
+        let row = rows.get(id).filter(|r| r.pin)?;
+        Some(row.root.clone().upcast())
+    }
+
     /// Keep the live row in sight.
     fn reveal_live(&self, shell: &Shell) {
         let Some(id) = shell.active_id() else { return };
@@ -546,6 +553,7 @@ fn pin_square(shell: &Shell, t: &TabView) -> Row {
     let badge = gtk::Image::new();
     tabs::wire_activation(shell, root.upcast_ref(), &t.id);
     tabs::wire_drag(shell, root.upcast_ref(), &t.id, false);
+    super::peek::watch(shell, root.upcast_ref(), &t.id);
     let row = Row {
         root,
         mark,
@@ -582,7 +590,9 @@ fn fill(shell: &Shell, row: &Row, t: &TabView) {
             l.upcast()
         };
         row.mark.append(&m);
-        row.root.set_tooltip_text(Some(&t.label));
+        // A Calendar pin's card says more than its name would.
+        let tip = (!copper_shell_core::calendar::peeks(&t.url)).then_some(t.label.as_str());
+        row.root.set_tooltip_text(tip);
         row.root
             .update_property(&[gtk::accessible::Property::Label(&format!(
                 "{}, pinned",

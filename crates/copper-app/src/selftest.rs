@@ -10,6 +10,10 @@
 //!   kept, spaces, selection), only the selected tab has a page, private
 //!   tabs are gone; selecting another tab wakes it.
 //! * `mac` — a world holding the Mac `session.json` fixture: it opens.
+//! * `calendar` — the Calendar pin's card: with no calendar, then with one
+//!   this run serves (meetings around now); what it lists and leaves out,
+//!   that the page keeps the keyboard, and that it goes when the pointer
+//!   leaves. Saves the card light and dark.
 //!
 //! Headless weston has no seat, so input is driven through the shell and
 //! the widgets' own signals (`insert-at-cursor` for typing).
@@ -24,7 +28,7 @@ use copper_core::settings::{Look, TabsPosition};
 use copper_engine::PageView;
 use gtk4 as gtk;
 use gtk4::prelude::*;
-use libadwaita::prelude::AdwDialogExt;
+use libadwaita::prelude::{AdwDialogExt, PreferencesDialogExt};
 use std::cell::RefCell;
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -120,6 +124,7 @@ pub fn start(shell: &Shell, phase: String, out: PathBuf) {
             "fresh" => fresh(&run).await,
             "restore" => restore(&run).await,
             "mac" => mac(&run).await,
+            "calendar" => calendar(&run).await,
             other => run.check(false, &format!("unknown phase {other}")),
         }
         let failures = run.failures.borrow().clone();
@@ -590,6 +595,181 @@ async fn mac(run: &Run) {
 }
 
 /// What a relaunch must show, without ids (they are fresh each run).
+/// The served calendar's address: Google's shape, so its owner reads.
+const CALENDAR: &str = "/calendar/ical/selftest%40example.com/private-x/basic.ics";
+
+async fn calendar(run: &Run) {
+    use crate::window::peek;
+    let s = &run.shell;
+    s.set_look(Look::Light);
+    s.set_tabs_position(TabsPosition::Left);
+    // Asleep before it loads: signed out, Google sends it elsewhere.
+    let pin = s.open("https://calendar.google.com/calendar/r", OpenTab::default());
+    s.drop_page(&pin);
+    s.browser_mut().set_sleeping(&pin, true);
+    s.pin(&pin);
+    let page = run.open("/essay", true);
+    run.wait_loaded(&page).await;
+    if let Some(p) = s.active_page() {
+        crate::palette::p_focus(&p);
+    }
+    settle(&s.downgrade(), Duration::from_secs(2)).await;
+    run.check(
+        s.ui()
+            .column
+            .pin(&pin)
+            .is_some_and(|p| p.tooltip_text().is_none()),
+        "the Calendar pin has no tooltip over its card",
+    );
+    let focus = gtk::prelude::GtkWindowExt::focus(s.window());
+
+    // A pass over the pin opens nothing.
+    peek::rest(s, &pin);
+    glib::timeout_future(Duration::from_millis(200)).await;
+    peek::left(s, &pin);
+    glib::timeout_future(Duration::from_millis(500)).await;
+    run.check(
+        peek::popover().is_none(),
+        "passing over the pin opens nothing",
+    );
+
+    peek::rest(s, &pin);
+    glib::timeout_future(Duration::from_millis(700)).await;
+    let lines = peek::lines();
+    run.check(
+        lines
+            .iter()
+            .any(|l| l == copper_shell_core::calendar::NO_FEEDS),
+        &format!("with no calendar the card says where to add one: {lines:?}"),
+    );
+    card_shot(run, "calendar-card-none");
+    peek::hide();
+
+    run.check(
+        copper_shell_core::calendar::add(s, &run.url(CALENDAR)).is_ok(),
+        "a calendar's address is added",
+    );
+    peek::rest(s, &pin);
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(10)
+        && !peek::lines().iter().any(|l| l == "Daily standup")
+    {
+        glib::timeout_future(Duration::from_millis(100)).await;
+    }
+    let lines = peek::lines();
+    println!("card: {lines:?}");
+    let at = |what: &str| lines.iter().position(|l| l.starts_with(what));
+    run.check(
+        matches!(
+            (at("Daily standup"), at("Design review"), at("Lunch")),
+            (Some(a), Some(b), Some(c)) if a < b && b < c
+        ),
+        "the meetings, soonest first",
+    );
+    run.check(
+        at("Now · until ").is_some() && at("In 25 min · ").is_some(),
+        "the standup is on now, the review in 25 minutes",
+    );
+    run.check(
+        lines.iter().filter(|l| *l == "[Join]").count() == 2,
+        "Join for the Meet and the Zoom call, none for lunch",
+    );
+    run.check(
+        at("Cancelled").is_none() && at("Vendor").is_none() && at("Offsite").is_none(),
+        "no cancelled, declined or all-day events",
+    );
+    run.check(
+        gtk::prelude::GtkWindowExt::focus(s.window()) == focus
+            && peek::popover().is_some_and(|p| p.focus_child().is_none()),
+        "the page keeps the keyboard",
+    );
+    for (look, name) in [
+        (Look::Light, "calendar-card"),
+        (Look::Dark, "calendar-card-dark"),
+    ] {
+        s.set_look(look);
+        glib::timeout_future(Duration::from_millis(400)).await;
+        card_shot(run, name);
+    }
+    s.set_look(Look::Light);
+    let settings = crate::window::settings::dialog(s);
+    settings.set_visible_page_name(crate::features::settings::calendar::PAGE);
+    run.shot("calendar-settings").await;
+    settings.close();
+
+    peek::left(s, &pin);
+    glib::timeout_future(Duration::from_millis(500)).await;
+    run.check(
+        peek::popover().is_none(),
+        "the card goes once the pointer leaves",
+    );
+}
+
+/// The open card, as a picture of its own (a popover is a surface of its
+/// own, not in the window's).
+fn card_shot(run: &Run, name: &str) {
+    let path = run.out.join(format!("{name}.png"));
+    match crate::window::peek::popover()
+        .ok_or_else(|| anyhow::anyhow!("no card"))
+        .and_then(|pop| crate::screenshot::save(pop.upcast_ref(), &path))
+    {
+        Ok(()) => println!("SHOT {}", path.display()),
+        Err(e) => run.check(false, &format!("screenshot {name}: {e}")),
+    }
+}
+
+/// A calendar around now: the Mac's staged meetings
+/// (`CalendarPeek.bench` `stage`), then what the card leaves out.
+fn calendar_ics() -> String {
+    let now = copper_core::date::now_unix() as i64;
+    let at = |minutes: i64| {
+        glib::DateTime::from_unix_utc(now + minutes * 60)
+            .and_then(|d| d.format("%Y%m%dT%H%M%SZ"))
+            .map(|s| s.to_string())
+            .unwrap_or_default()
+    };
+    let day = glib::DateTime::from_unix_utc(now)
+        .and_then(|d| d.format("%Y%m%d"))
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    let event = |uid: &str, start: i64, end: i64, more: &str| {
+        format!(
+            "BEGIN:VEVENT\r\nUID:{uid}\r\nDTSTART:{}\r\nDTEND:{}\r\n{more}END:VEVENT\r\n",
+            at(start),
+            at(end)
+        )
+    };
+    [
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nX-WR-CALNAME:Selftest\r\n".to_string(),
+        // Yesterday's, repeating daily: today's is on now.
+        event(
+            "standup",
+            -5 - 24 * 60,
+            10 - 24 * 60,
+            "RRULE:FREQ=DAILY;COUNT=3\r\nSUMMARY:Daily standup\r\nDESCRIPTION:Join with Google Meet: https://meet.google.com/abc-defg-hij\\nAgenda: https://docs.google.com/document/d/1\r\n",
+        ),
+        event(
+            "review",
+            25,
+            55,
+            "SUMMARY:Design review with the whole controls team\r\nLOCATION:https://zoom.us/j/123\r\n",
+        ),
+        event("lunch", 150, 210, "SUMMARY:Lunch\r\n"),
+        event("cancelled", 60, 90, "SUMMARY:Cancelled sync\r\nSTATUS:CANCELLED\r\n"),
+        event(
+            "declined",
+            90,
+            120,
+            "SUMMARY:Vendor call\r\nATTENDEE;PARTSTAT=DECLINED:mailto:selftest@example.com\r\n",
+        ),
+        format!(
+            "BEGIN:VEVENT\r\nUID:offsite\r\nDTSTART;VALUE=DATE:{day}\r\nSUMMARY:Offsite\r\nEND:VEVENT\r\n"
+        ),
+        "END:VCALENDAR\r\n".to_string(),
+    ]
+    .concat()
+}
+
 fn layout(s: &Shell) -> serde_json::Value {
     let b = s.browser();
     let current = b.current_space_id().to_string();
@@ -792,6 +972,8 @@ fn answer(mut stream: std::net::TcpStream, icons: &[Vec<u8>]) {
             0,
         );
         ("200 OK", "text/html; charset=utf-8", html.into_bytes())
+    } else if path == CALENDAR {
+        ("200 OK", "text/calendar", calendar_ics().into_bytes())
     } else if let Some((i, p)) = PAGES.iter().enumerate().find(|(_, p)| p.path == path) {
         (
             "200 OK",
