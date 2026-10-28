@@ -1174,12 +1174,19 @@ impl<P: Platform> Shell<P> {
     /// History changed; written a few seconds later (the list is sorted on
     /// write, so not on every visit).
     pub fn history_changed(&self) {
+        self.history_changed_after(Duration::from_secs(3));
+    }
+
+    /// [`Shell::history_changed`], written `after` from now (or with the
+    /// write already waiting). Visits synced from other devices arrive
+    /// every few seconds while they browse; each write is the whole file.
+    pub fn history_changed_after(&self, after: Duration) {
         if self.0.history_dirty.replace(true) {
             return;
         }
         let weak = self.downgrade();
         P::Loop::spawn_local(async move {
-            P::Loop::sleep(Duration::from_secs(3)).await;
+            P::Loop::sleep(after).await;
             if let Some(s) = weak.upgrade() {
                 s.write_history();
             }

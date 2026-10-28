@@ -39,50 +39,55 @@ pub fn load(store: &Store) -> Loaded {
         _ => {}
     };
 
-    let session: SessionShape = match store.load::<SessionShape>() {
-        Ok(l) => {
-            note(&mut notice, "tabs", &l.source);
-            l.value
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "session.json");
-            notice.get_or_insert_with(|| "Your tabs couldn’t be read.".into());
-            SessionShape::default()
-        }
-    };
-    let browser = browser_from(&session);
+    // history.json is the biggest file (a megabyte and more): read it on
+    // a thread of its own while the session is read and the tabs built.
+    std::thread::scope(|scope| {
+        let history = scope.spawn(|| store.load::<Vec<copper_core::history::Visit>>());
+        let session: SessionShape = match store.load::<SessionShape>() {
+            Ok(l) => {
+                note(&mut notice, "tabs", &l.source);
+                l.value
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "session.json");
+                notice.get_or_insert_with(|| "Your tabs couldn’t be read.".into());
+                SessionShape::default()
+            }
+        };
+        let browser = browser_from(&session);
 
-    let history = match store.load::<Vec<copper_core::history::Visit>>() {
-        Ok(l) => {
-            note(&mut notice, "history", &l.source);
-            History::from_file(l.value)
+        let history = match history.join().expect("history.json reader") {
+            Ok(l) => {
+                note(&mut notice, "history", &l.source);
+                History::from_file(l.value)
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "history.json");
+                History::new()
+            }
+        };
+        let bookmarks = match store.load::<Vec<copper_core::bookmarks::Bookmark>>() {
+            Ok(l) => Bookmarks::new(l.value),
+            Err(e) => {
+                tracing::error!(error = %e, "bookmarks.json");
+                Bookmarks::default()
+            }
+        };
+        let settings = match store.load::<serde_json::Map<String, serde_json::Value>>() {
+            Ok(l) => Settings::new(l.value),
+            Err(e) => {
+                tracing::error!(error = %e, "settings.json");
+                Settings::default()
+            }
+        };
+        Loaded {
+            browser,
+            history,
+            bookmarks,
+            settings,
+            notice,
         }
-        Err(e) => {
-            tracing::error!(error = %e, "history.json");
-            History::new()
-        }
-    };
-    let bookmarks = match store.load::<Vec<copper_core::bookmarks::Bookmark>>() {
-        Ok(l) => Bookmarks::new(l.value),
-        Err(e) => {
-            tracing::error!(error = %e, "bookmarks.json");
-            Bookmarks::default()
-        }
-    };
-    let settings = match store.load::<serde_json::Map<String, serde_json::Value>>() {
-        Ok(l) => Settings::new(l.value),
-        Err(e) => {
-            tracing::error!(error = %e, "settings.json");
-            Settings::default()
-        }
-    };
-    Loaded {
-        browser,
-        history,
-        bookmarks,
-        settings,
-        notice,
-    }
+    })
 }
 
 /// The browser a session file describes: everything asleep but the active

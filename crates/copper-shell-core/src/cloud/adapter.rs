@@ -359,7 +359,8 @@ impl<P: Platform> BrowserState for AppBrowser<P> {
     }
 
     fn settle_history(&self) {
-        apply::<P, _, _>(|s| s.history_changed());
+        // Visits from other devices: one write a minute at most, not one a pull.
+        apply::<P, _, _>(|s| s.history_changed_after(Duration::from_secs(60)));
     }
 }
 
