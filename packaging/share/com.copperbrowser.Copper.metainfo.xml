@@ -51,6 +51,16 @@
   </requires>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.5.0" date="2026-10-28">
+      <description>
+        <p>Calendar peek on the Google Calendar pin, folder-aware dragging, and pins that sync once per site.</p>
+        <ul>
+          <li>Rest on a Google Calendar pin to see your next meetings, with Join for video calls (Settings › Tabs › Calendar).</li>
+          <li>Dragging a row shows no marker over its own place, and can pin it even with no favourites yet.</li>
+          <li>Pins sync once per site across devices; a pin another device re-keys keeps its page.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.4.1" date="2026-10-19">
       <description>
         <p>Sign in to Copper Cloud with your company account from Settings, and open copper://cloud/join links there.</p>
