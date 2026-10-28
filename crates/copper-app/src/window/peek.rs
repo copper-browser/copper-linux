@@ -1,8 +1,8 @@
 //! The Calendar pin's card (Mac: `Fork/CalendarPeek.swift`, `Side.swift`
 //! `PinSquare`): rest the pointer on a Google Calendar pin for half a
 //! second and the next meetings show beside it; the card goes a quarter
-//! second after the pointer has left both the pin and the card, so it can
-//! cross the gap between them. Passing over the pins opens nothing.
+//! second after the pointer has left both the pin and the card
+//! ([`calendar::settle`]).
 //!
 //! The card is a popover that doesn't hide on outside clicks, so it never
 //! takes the keyboard from the page, and nothing in it can be focused.
@@ -17,12 +17,7 @@ use gtk4 as gtk;
 use gtk4::prelude::*;
 use libadwaita::prelude::PreferencesDialogExt;
 use std::cell::RefCell;
-use std::time::Duration;
 
-/// How long the pointer rests on the pin before the card opens, and how
-/// long it may be off both before the card goes.
-const REST: Duration = Duration::from_millis(500);
-const LEAVE: Duration = Duration::from_millis(250);
 /// The card's width (the Mac's 290).
 const WIDTH: i32 = 290;
 
@@ -80,32 +75,28 @@ pub fn left(shell: &Shell, id: &TabId) {
     settle(shell);
 }
 
-/// Open the card once the pointer has rested, or put it away once the
-/// pointer has left; whatever was waiting to happen is called off.
+/// Open the card once the pointer has rested, or put it away once it has
+/// left; whatever was waiting to happen is called off.
 fn settle(shell: &Shell) {
     PEEK.with_borrow_mut(|p| {
         if let Some(t) = p.timer.take() {
             t.remove();
         }
-        let resting = p.pin.as_ref();
         let showing = p
             .open
             .as_ref()
             .filter(|(pop, _)| pop.is_mapped())
             .map(|(_, t)| t);
-        let settled = match (resting, showing) {
-            (Some(on), Some(beside)) => on == beside,
-            (None, Some(_)) => p.card,
-            (None, None) => true,
-            (Some(_), None) => false,
-        };
-        if settled {
+        let Some(open) = calendar::settle(p.pin.as_ref(), p.card, showing) else {
             return;
-        }
-        let open = resting.is_some();
+        };
         let weak = shell.downgrade();
         p.timer = Some(glib::timeout_add_local_once(
-            if open { REST } else { LEAVE },
+            if open {
+                calendar::REST
+            } else {
+                calendar::LEAVE
+            },
             move || {
                 PEEK.with_borrow_mut(|p| p.timer = None);
                 match weak.upgrade() {

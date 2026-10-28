@@ -14,6 +14,7 @@ use copper_calendar::{Cache, feeds};
 pub use copper_calendar::{Card, Feed, Meeting, peeks};
 use std::cell::RefCell;
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// The card's words.
 pub const HEADING: &str = "Coming up";
@@ -22,6 +23,26 @@ pub const NOTHING: &str = "Nothing in the next 12 hours.";
 pub const NO_FEEDS: &str = "Add your Google Calendar in Settings to see your next meetings here.";
 pub const OPEN_SETTINGS: &str = "Open Calendar Settings";
 pub const JOIN: &str = "Join";
+
+/// How long the pointer rests on a Calendar pin before the card opens
+/// (passing over the pins opens nothing), and how long it may be off both
+/// the pin and the card before the card goes (so it can cross the gap).
+pub const REST: Duration = Duration::from_millis(500);
+pub const LEAVE: Duration = Duration::from_millis(250);
+
+/// What the card is to do, from where the pointer is (Mac: `PinSquare`
+/// `settlePeek`): on Calendar pin `pin` or not, on the card or not, with
+/// the card up beside `showing` or away. `Some(true)`: open beside `pin`
+/// once the pointer has rested [`REST`]; `Some(false)`: go after
+/// [`LEAVE`]; `None`: stay as it is.
+pub fn settle<T: PartialEq>(pin: Option<&T>, on_card: bool, showing: Option<&T>) -> Option<bool> {
+    match (pin, showing) {
+        (Some(on), Some(beside)) if on == beside => None,
+        (Some(_), _) => Some(true),
+        (None, Some(_)) if !on_card => Some(false),
+        (None, _) => None,
+    }
+}
 
 /// Where Google Calendar gives the address.
 pub const WHERE: &str =
@@ -200,6 +221,19 @@ mod tests {
             color: String::new(),
             join: None,
         }
+    }
+
+    #[test]
+    fn the_card_opens_on_a_rest_and_goes_on_leaving_both() {
+        let (a, b) = (&"a", &"b");
+        assert_eq!(settle(Some(a), false, None), Some(true));
+        assert_eq!(settle(Some(a), false, Some(a)), None);
+        // Another Calendar pin: the card moves there after a rest.
+        assert_eq!(settle(Some(b), false, Some(a)), Some(true));
+        // Off the pin onto the card: it stays; off both: it goes.
+        assert_eq!(settle(None, true, Some(a)), None);
+        assert_eq!(settle(None, false, Some(a)), Some(false));
+        assert_eq!(settle::<&str>(None, false, None), None);
     }
 
     #[test]
