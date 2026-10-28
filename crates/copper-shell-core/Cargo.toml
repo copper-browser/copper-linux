@@ -17,6 +17,8 @@ copper-core.workspace = true
 copper-creds.workspace = true
 # BotPass: a paired BotPass server as another password source.
 copper-botpass.workspace = true
+# The Calendar pin's card: calendar.json and the calendars it names.
+copper-calendar.workspace = true
 copper-engine.workspace = true
 # Canvas: posters' crop/scale/JPEG (`copper_mcp::shot`) and the board
 # page's curated calls (`copper_pagejs::canvas`).

@@ -170,6 +170,7 @@ Video needs the codecs the `.deb` recommends (`gstreamer1.0-libav`,
 | Settings | `~/.config/copper/settings.json` | You |
 | Agent token, Copper Cloud link and token | `agent.json`, `cloud.json` in `~/.local/share/copper/`, mode 0600 | You alone |
 | BotPass pairing (server, pinned fingerprint, device token) | `botpass.json` in `~/.local/share/copper/`, mode 0600 | You alone |
+| Calendar pin's calendars (secret iCal addresses) | `calendar.json` in `~/.local/share/copper/`, mode 0600 | You alone |
 | Cookies and site data | WebKit's store under `~/.local/share/copper/` | The sites that set them |
 
 The Flatpak keeps all of this under `~/.var/app/com.copperbrowser.Copper/`.
@@ -243,6 +244,7 @@ Packaging, releases and CI are described in
 | `crates/copper-shield` | content-blocker rule builder |
 | `crates/copper-creds` | Secret Service store, Bitwarden and 1Password CLIs |
 | `crates/copper-botpass` | BotPass: pairing, `botpass.json`, per-origin fill, `copper botpass` |
+| `crates/copper-calendar` | the Calendar pin's card: `calendar.json`, iCal reading, the next meetings |
 | `crates/copper-import` | Chrome, Chromium and Brave import |
 | `crates/copper-cloud` | Copper Cloud client and sync |
 | `crates/copper-mcp` | MCP server, tools and the `copper` CLI |

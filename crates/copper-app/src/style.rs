@@ -173,6 +173,20 @@ list.copper-suggestions > label.suggestion-header:first-child { padding-top: 2px
 
 .copper-dropdown { padding: 6px; border-radius: 12px; }
 
+/* — the Calendar pin's card (`CalendarPeekCard`) — */
+.calendar-peek > contents { padding: 0 0 4px 0; }
+.calendar-peek .heading { font-size: 11px; font-weight: 500; opacity: .6; margin: 12px 14px 6px 14px; }
+.calendar-peek .note { font-size: 13px; margin: 0 14px 10px 14px; }
+.calendar-peek .quiet { font-size: 13px; opacity: .6; margin: 0 14px 10px 14px; }
+.calendar-peek .error { font-size: 11.5px; opacity: .7; margin: 4px 14px 8px 14px; }
+.calendar-peek .meeting { padding: 8px 12px 8px 14px; }
+.calendar-peek .meeting .title { font-size: 13px; font-weight: 500; }
+.calendar-peek .meeting .when { font-size: 11.5px; opacity: .6; }
+.calendar-peek .meeting .when.now { color: @accent_color; opacity: 1; }
+.calendar-peek .rule { margin-left: 31px; }
+.calendar-peek button.pill { min-height: 24px; padding: 0 12px; font-size: 12px; font-weight: 500; }
+.calendar-peek button.settings { margin: 0 14px 10px 14px; }
+
 /* — space editor — */
 .swatch { min-width: 26px; min-height: 26px; padding: 0; border-radius: 99px; }
 .swatch.chosen { box-shadow: 0 0 0 2px @window_bg_color, 0 0 0 4px @copper_ink; }

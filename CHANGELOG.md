@@ -5,6 +5,17 @@ release dates.
 
 ## Unreleased
 
+### Added
+
+- **Calendar peek.** Rest the pointer on a Google Calendar pin for half a
+  second and a card beside it lists your meetings in the next 12 hours (up
+  to four, soonest first), with **Join** for a Meet, Zoom, Teams or Webex
+  call; all-day, cancelled and declined events are left out. It reads the
+  calendars whose secret iCal addresses you add in Settings › Tabs ›
+  Calendar, kept in `calendar.json` (0600) on this computer and never sent
+  through Copper Cloud. The reading is the toolkit-free `copper-calendar`
+  crate, for the Windows shell to draw too.
+
 ### Fixed
 
 - **Dragging a tab in the column, as the Mac does (Copper#113).** Over
