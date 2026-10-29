@@ -5,6 +5,11 @@ release dates.
 
 ## Unreleased
 
+## 0.5.1 — 2026-10-29
+
+Copper Cloud: a computer can only overwrite what was changed on it, and a
+sync that would unfile or remove many kept tabs asks first.
+
 ### Fixed
 
 - **A computer can only overwrite what was changed on it (Copper Cloud

@@ -51,6 +51,15 @@
   </requires>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.5.1" date="2026-10-29">
+      <description>
+        <p>Copper Cloud: a computer can only overwrite what was changed on it.</p>
+        <ul>
+          <li>Folders and kept tabs only change on your other devices when you changed them here.</li>
+          <li>A sync that would unfile or remove more than 10 kept tabs asks first, both ways.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.5.0" date="2026-10-28">
       <description>
         <p>Calendar peek on the Google Calendar pin, folder-aware dragging, and pins that sync once per site.</p>
