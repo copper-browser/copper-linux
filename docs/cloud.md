@@ -208,6 +208,31 @@ ways: the copy last synced, this computer's, and the server's.
 - Deleted on one side, unchanged on the other: it stays deleted.
 - New on either side: it is kept.
 
+Spaces add one rule: **a computer only overwrites what was changed on it.**
+Copper notes each change you make here to kept tabs and folders — filing a
+tab, taking it out of a folder, saving, unsaving or removing a kept tab,
+deleting a folder, whether by hand, by dragging or through an agent's
+tools. For anything the server already has, only those changes go up;
+anything else this computer has (a session copied from another computer,
+folders it never got) is taken back to the server's copy instead of
+published. The notes are kept in `cloud-sync.json`, so a change made
+offline still goes up after a relaunch, and each is dropped once the server
+has it. The first spaces sync after launch, and after every reconnect,
+takes the server's copy first.
+
+If one sync would unfile or remove more than 10 kept tabs, or delete a
+folder that still holds tabs, Copper stops and asks:
+
+- *This computer is about to unfile 12 tabs on all your devices* —
+  **Sync It** sends it; **Undo Here** puts this computer back the way your
+  other devices have it. Deleting a space you confirmed is not asked again.
+- *Another device unfiled 12 tabs* — **Accept** takes it here; **Keep
+  Mine** keeps your folders and tabs and sends them back to the others.
+
+Every spaces publish and apply is logged (`cloud publish|apply doc=spaces
+v=… unfiled=N removed=M folders-=K held=yes|no`), in the log and in the
+cloud's own log.
+
 History is not a document. New visits go up in batches. Other devices'
 visits come down from where the last pull stopped. Copper pulls at sign-in,
 at *Turn on sync*, whenever the event stream reconnects, and when another

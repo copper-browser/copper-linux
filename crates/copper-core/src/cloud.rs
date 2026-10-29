@@ -108,8 +108,46 @@ pub struct CloudSyncFile {
     /// The Personal canvas switch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canvas: Option<bool>,
+    /// What was changed here in the spaces document since the server last
+    /// took it: only these may overwrite the base (kept beside the bases, so
+    /// an edit made offline still goes up after a relaunch).
+    #[serde(default, skip_serializing_if = "SpacesIntents::is_empty")]
+    pub intents: SpacesIntents,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+/// Changes made on this device to filing and kept tabs, not yet taken by the
+/// server (`CloudSync.Intents`). Each is numbered, so one made while a
+/// publish was on its way is not cleared by that publish's answer.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct SpacesIntents {
+    /// Kept-tab key → number: filed, unfiled or moved to another folder here.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub filed: BTreeMap<String, u64>,
+    /// Kept-tab key → number: removed here (unsaved, unpinned, the cross,
+    /// moved to another space).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub removed: BTreeMap<String, u64>,
+    /// Folder id (uppercase) → number: deleted here.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dissolved: BTreeMap<String, u64>,
+    /// The last number given.
+    #[serde(default)]
+    pub seq: u64,
+}
+
+impl SpacesIntents {
+    pub fn is_empty(&self) -> bool {
+        self.filed.is_empty() && self.removed.is_empty() && self.dissolved.is_empty()
+    }
+
+    /// Forget every intent numbered `upto` or lower: the server has them.
+    pub fn settle(&mut self, upto: u64) {
+        for m in [&mut self.filed, &mut self.removed, &mut self.dissolved] {
+            m.retain(|_, n| *n > upto);
+        }
+    }
 }
 
 /// The last agreed version of one document (`CloudSync.Base`).

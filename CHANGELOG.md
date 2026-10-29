@@ -5,6 +5,23 @@ release dates.
 
 ## Unreleased
 
+### Fixed
+
+- **A computer can only overwrite what was changed on it (Copper Cloud
+  spaces; incident 2026-10-28, cu-2th).** One device whose state merely
+  lacked a filing — a copied session, folders made elsewhere — could win
+  the merge against an unchanged server and unfile every tab in a folder on
+  every device. Now each change made here to filing and kept tabs is
+  recorded as an intent (`copper_cloud::sync::intent`, kept in
+  `cloud-sync.json`), and where the base has an entry only an intent lets
+  this device's copy through. The first spaces sync after launch or a
+  reconnect pulls and applies the server's copy first. A publish or apply
+  that would unfile or remove more than 10 kept tabs (or drop a folder that
+  holds tabs, going out) is held and asked about — *Sync It* / *Undo Here*,
+  or *Accept* / *Keep Mine* — through the shell's own question, so Copper
+  for Windows asks too. Every spaces publish and apply is logged
+  (`copper_cloud::sync`, now on by default). Same semantics as the Mac.
+
 ## 0.5.0 — 2026-10-28
 
 Calendar peek on the Calendar pin, folder-aware dragging, and pins that

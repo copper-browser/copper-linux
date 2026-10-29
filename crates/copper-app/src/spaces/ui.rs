@@ -479,6 +479,11 @@ pub fn ask_delete(shell: &Shell, id: &str) {
     let id = id.to_string();
     dialog.connect_response(None, move |_, r| {
         let Some(s) = weak.upgrade() else { return };
+        // Confirmed here: its kept tabs leaving the space is no accident to
+        // hold on the way to the other devices.
+        if matches!(r, "keep" | "close") {
+            copper_shell_core::cloud::confirmed();
+        }
         match r {
             "keep" => {
                 s.remove_space(&id, true);

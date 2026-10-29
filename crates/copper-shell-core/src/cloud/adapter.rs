@@ -63,7 +63,8 @@ where
     rx.recv_timeout(Duration::from_secs(30)).ok().flatten()
 }
 
-/// A write from the cloud: run it, then count everything as seen.
+/// A write from the cloud: hand over what was edited here before it, run
+/// it, then count everything as seen.
 fn apply<P, R, F>(f: F) -> Option<R>
 where
     P: Platform,
@@ -71,6 +72,7 @@ where
     F: FnOnce(&Shell<P>) -> R + Send + 'static,
 {
     on_main::<P, _, _>(move |s| {
+        super::take_local_edits(s);
         let out = f(s);
         super::mark_seen(s);
         out
