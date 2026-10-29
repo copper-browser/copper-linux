@@ -110,6 +110,12 @@
       stop: function () { return call("agent.stop"); },
       clear: function () { return call("agent.clear"); }
     },
+    voice: {
+      state:  function () { return call("voice.state"); },
+      start:  function () { return call("voice.start"); },
+      stop:   function () { return call("voice.stop"); },
+      cancel: function () { return call("voice.cancel"); }
+    },
     on: function (name, fn) {
       if (typeof fn !== "function") throw new TypeError("copper.on needs a function");
       (listeners[name] = listeners[name] || []).push(fn);
@@ -122,6 +128,7 @@
     }
   };
   Object.freeze(copper.storage); Object.freeze(copper.oauth); Object.freeze(copper.page);
+  Object.freeze(copper.voice);
   Object.freeze(copper.ui); Object.freeze(copper.agent); Object.freeze(copper);
   Object.defineProperty(window, "copper", { value: copper, writable: false, configurable: false });
   try { window.dispatchEvent(new Event("copperready")); } catch (_) {}
