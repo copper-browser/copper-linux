@@ -51,7 +51,9 @@ pub const APP_ID: &str = "com.copperbrowser.Copper";
 pub fn main() -> std::process::ExitCode {
     use std::process::ExitCode;
     let filter = tracing_subscriber::EnvFilter::try_from_env("COPPER_LOG").unwrap_or_else(|_| {
-        tracing_subscriber::EnvFilter::new("warn,copper_app=info,copper_shell_core=info")
+        tracing_subscriber::EnvFilter::new(
+            "warn,copper_app=info,copper_shell_core=info,copper_cloud::sync=info",
+        )
     });
     let _ = tracing_subscriber::fmt()
         .with_env_filter(filter)

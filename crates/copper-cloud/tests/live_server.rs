@@ -286,6 +286,14 @@ fn history_keys(b: &MemoryBrowser) -> BTreeSet<String> {
     b.snapshot().visits.iter().map(|v| v.key.clone()).collect()
 }
 
+/// The person removes the kept tab at `url` here: the edit, and the intent
+/// the app's watch would hand the engine for it.
+fn remove_kept(engine: &SyncEngine, b: &MemoryBrowser, url: &str) {
+    let before = b.snapshot().kept;
+    b.edit(|s| s.kept.retain(|t| t.url != url));
+    engine.local_edit(&before, &b.snapshot().kept, &[], &[]);
+}
+
 fn kept_urls(b: &MemoryBrowser) -> BTreeSet<(String, String)> {
     b.snapshot()
         .kept
@@ -529,7 +537,7 @@ async fn kept_tabs_across_relaunch(
 
     // What the person then does to that tab still syncs, as that tab: B closes
     // the pin, the entry goes (and only it), and A's Mail pin closes.
-    browser_b.edit(|s| s.kept.retain(|t| t.url != "https://news.example.org/today"));
+    remove_kept(&engine_b, &browser_b, "https://news.example.org/today");
     engine_b.sync_now().await;
     let (after, now) = server_spaces(a).await;
     assert_eq!(after, version + 1);
@@ -930,7 +938,7 @@ async fn scenario(server: &Server) {
         Some("system")
     );
     // A closes a kept tab; B loses it.
-    browser_a.edit(|s| s.kept.retain(|t| t.url != "https://docs.example.com/"));
+    remove_kept(&engine_a, &browser_a, "https://docs.example.com/");
     engine_a.sync_now().await;
     engine_b.sync_now().await;
     assert!(

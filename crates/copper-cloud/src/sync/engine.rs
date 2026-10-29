@@ -25,10 +25,21 @@
 //! launches wherever it was restored — a kept tab's synced address is the one
 //! it had when it first synced; neither a redirect nor browsing inside it
 //! ever replaces it.
+//!
+//! Spaces only overwrite what was changed here ([`super::intent`]): the
+//! changes made on this device to filing and kept tabs are recorded as
+//! intents (kept in `cloud-sync.json`), and where the base has an entry only
+//! an intent lets this device's copy through. The first spaces sync after
+//! launch or a reconnect pulls and applies the server's copy first, so a
+//! launch-time difference is never published. A publish or an apply that
+//! would unfile or remove more than [`super::intent::HOLD_OVER`] kept tabs
+//! (or drop a folder still holding tabs, going out) is held
+//! ([`SyncStatus::held`]) until [`SyncEngine::resolve_hold`].
 
 use super::adapter::{BrowserState, LiveKept};
 use super::delete::{self, Here, Outcome, Selector};
 use super::history::{self, Upload, Visit};
+use super::intent::{self, Loss};
 use super::merge;
 use crate::client::{Account, CloudClient, CloudStatus, wire_id};
 use crate::error::Failure;
@@ -44,7 +55,7 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
@@ -155,6 +166,61 @@ pub struct DeviceTabs {
     pub tabs: Vec<OpenTab>,
 }
 
+/// A spaces publish or apply waiting for the person to say yes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Held {
+    /// Another device's copy, not applied here (else: this device's, not sent).
+    pub incoming: bool,
+    pub loss: Loss,
+}
+
+impl Held {
+    /// The question, in the Mac's words.
+    pub fn title(&self) -> String {
+        let n = self.loss.unfiled + self.loss.removed;
+        let tabs = if n == 1 { "tab" } else { "tabs" };
+        let (unfile, remove) = if self.incoming {
+            ("unfiled", "removed")
+        } else {
+            ("unfile", "remove")
+        };
+        let what = match (self.loss.unfiled, self.loss.removed) {
+            (_, 0) => format!("{unfile} {n} {tabs}"),
+            (0, _) => format!("{remove} {n} {tabs}"),
+            _ => format!("{unfile} or {remove} {n} {tabs}"),
+        };
+        if self.incoming {
+            format!("Another device {what}")
+        } else if n == 0 {
+            let folders = match self.loss.folders {
+                1 => "a folder that holds tabs".to_string(),
+                k => format!("{k} folders that hold tabs"),
+            };
+            format!("This computer is about to delete {folders} on all your devices")
+        } else {
+            format!("This computer is about to {what} on all your devices")
+        }
+    }
+
+    /// The words under it.
+    pub fn detail(&self) -> &'static str {
+        if self.incoming {
+            "Accept takes the other device's change. Keep Mine keeps your folders and tabs here and sends them to your other devices."
+        } else {
+            "Sync It sends the change. Undo Here puts this computer back the way your other devices have it."
+        }
+    }
+
+    /// The accepting button, then the refusing one (also what closing means).
+    pub fn buttons(&self) -> (&'static str, &'static str) {
+        if self.incoming {
+            ("Accept", "Keep Mine")
+        } else {
+            ("Sync It", "Undo Here")
+        }
+    }
+}
+
 /// Everything the settings page and the MCP show about sync.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SyncStatus {
@@ -171,6 +237,8 @@ pub struct SyncStatus {
     /// Unix seconds the next history push waits for, after a failure.
     pub history_retry_at: Option<f64>,
     pub other_devices: Vec<DeviceTabs>,
+    /// A spaces publish or apply held for the person ([`SyncEngine::resolve_hold`]).
+    pub held: Option<Held>,
 }
 
 impl SyncStatus {
@@ -187,6 +255,7 @@ impl SyncStatus {
             "historyRetryAt": self.history_retry_at.map(history::stamp),
             "historyPulledSeq": self.history_pulled_seq,
             "devices": self.other_devices.iter().map(|d| json!({"name": d.name, "tabs": d.tabs.len(), "domain": d.domain})).collect::<Vec<_>>(),
+            "held": self.held.map(|h| json!({"incoming": h.incoming, "unfiled": h.loss.unfiled, "removed": h.loss.removed, "folders": h.loss.folders})),
         })
     }
 }
@@ -213,6 +282,14 @@ struct EState {
     forgotten: BTreeMap<String, f64>,
     applying: bool,
     tasks: Vec<JoinHandle<()>>,
+    /// The server's spaces come first: at launch, on reconnect, after a reset.
+    fresh: bool,
+    held: Option<Held>,
+    /// A held publish may go until then (Sync It, or a bulk change the
+    /// person already confirmed).
+    pass_out: Option<Instant>,
+    /// The held apply may go, once (Accept).
+    pass_in: bool,
 }
 
 struct EngineInner {
@@ -301,12 +378,16 @@ struct Ops<T> {
     build: fn(&SyncEngine, Option<&T>) -> T,
     merge: fn(Option<&T>, &T, &T) -> T,
     apply: fn(&SyncEngine, &T, Option<&T>),
+    /// May this document be applied here (`true`) or sent (`false`), at this
+    /// version, over this base? Logged; `false` holds it.
+    admit: fn(&SyncEngine, bool, i64, Option<&T>, &T) -> bool,
 }
 
 const SPACES: Ops<SpacesDoc> = Ops {
-    build: |e, base| e.build_spaces(base),
+    build: |e, base| e.outgoing_spaces(base),
     merge: merge::spaces,
     apply: |e, doc, base| e.apply_spaces(doc, base),
+    admit: |e, incoming, version, base, doc| e.admit_spaces(incoming, version, base, doc),
 };
 const SETTINGS: Ops<SettingsDoc> = Ops {
     build: |e, _| SettingsDoc {
@@ -315,6 +396,7 @@ const SETTINGS: Ops<SettingsDoc> = Ops {
         extra: Default::default(),
     },
     merge: merge::settings,
+    admit: |_, _, _, _, _| true,
     apply: |e, doc, _| {
         e.inner
             .browser
@@ -328,6 +410,7 @@ const BOOKMARKS: Ops<BookmarksDoc> = Ops {
         extra: Default::default(),
     },
     merge: merge::bookmarks,
+    admit: |_, _, _, _, _| true,
     apply: |e, doc, _| {
         if e.inner.browser.bookmarks() != doc.roots {
             e.inner.browser.replace_bookmarks(&doc.roots);
@@ -412,6 +495,7 @@ impl SyncEngine {
             enabled,
             saved,
             account,
+            fresh: true,
             ..Default::default()
         };
         let (status, _) = watch::channel(SyncStatus::default());
@@ -492,6 +576,7 @@ impl SyncEngine {
             history_pulled_seq: prefs.pulled_seq,
             history_retry_at: s.history_hold.map(|h| h.0),
             other_devices: s.other_devices.clone(),
+            held: s.held,
         });
         self.inner.status.send_if_modified(|old| {
             if *old == status {
@@ -552,7 +637,10 @@ impl SyncEngine {
         self.with(|s| {
             s.saved.docs.clear();
             s.saved.remote.clear();
+            s.saved.intents = Default::default();
             s.saved.owner = s.account.clone();
+            s.fresh = true;
+            s.held = None;
         });
         self.inner.client.update_sync_prefs(|p| {
             p.pushed_through = None;
@@ -804,6 +892,8 @@ impl SyncEngine {
         let me = self.clone();
         match kind {
             "ready" | "resync" => {
+                // Connected again: the server's spaces first.
+                self.with(|s| s.fresh = true);
                 tokio::spawn(async move { me.pull_all().await });
             }
             "doc" => {
@@ -988,7 +1078,11 @@ impl SyncEngine {
                     continue;
                 }
                 let server = list.iter().find(|m| m.domain == d.as_str());
-                if server.is_none() || server.map(|m| m.version) != me.base_version(d.as_str()) {
+                let first = d == Domain::Spaces && me.with(|s| s.fresh);
+                if first
+                    || server.is_none()
+                    || server.map(|m| m.version) != me.base_version(d.as_str())
+                {
                     me.pull(d).await;
                 }
             }
@@ -1059,12 +1153,17 @@ impl SyncEngine {
         let me = self.clone();
         let name = domain.as_str();
         self.work(name, || async move {
+            // The first spaces pull of a run (or a connection) applies the
+            // server's copy even at the base's version: whatever this device
+            // has that it didn't change here is taken back to the server's.
+            let first = domain == Domain::Spaces && me.with(|s| s.fresh);
             let path = format!("/v1/sync/docs/{name}");
             let doc: WireDoc = match me.inner.client.request_json("GET", &path, None, &[]).await {
                 Ok(d) => d,
                 Err(f) if f.status == 404 => {
                     // Nothing there yet: this device's copy goes up as the first.
                     me.set_base(name, None);
+                    me.pulled(domain);
                     return Ok(());
                 }
                 Err(f) => return Err(f),
@@ -1072,7 +1171,7 @@ impl SyncEngine {
             if !me.active(domain) {
                 return Ok(());
             }
-            if Some(doc.version) == me.base_version(name) {
+            if Some(doc.version) == me.base_version(name) && !first {
                 return Ok(());
             }
             let Some(server) = decode_payload::<T>(doc.payload.as_deref()) else {
@@ -1082,26 +1181,35 @@ impl SyncEngine {
                     format!("The cloud's {name} didn't read — left alone"),
                 ));
             };
+            let upto = me.intents_upto();
             let base = me.base::<T>(name);
             let local = (ops.build)(&me, base.as_ref()).normalized();
             let merged = match &base {
                 Some(b) if local == *b => server.clone(),
                 _ => (ops.merge)(base.as_ref(), &local, &server),
             };
-            if merged != local {
+            if merged != local || first {
+                if !(ops.admit)(&me, true, doc.version, base.as_ref(), &merged) {
+                    // Held: nothing applied, the base left as it was, so
+                    // the next pull asks again.
+                    return Ok(());
+                }
                 me.applying(|| (ops.apply)(&me, &merged, base.as_ref()));
             }
             me.set_base(
                 name,
                 Some(SyncBase::from_doc(doc.version, &server).map_err(encode_failure)?),
             );
+            me.pulled(domain);
             me.note(format!(
                 "Pulled {name} v{}{}",
                 doc.version,
                 if merged == local { "" } else { " — applied" }
             ));
             if merged != server {
-                me.put(domain, merged, &ops).await?;
+                me.put(domain, merged, &ops, upto).await?;
+            } else {
+                me.intents_sent(domain, upto);
             }
             Ok(())
         })
@@ -1109,21 +1217,39 @@ impl SyncEngine {
     }
 
     async fn push_doc<T: Doc>(&self, domain: Domain, ops: Ops<T>) {
+        if domain == Domain::Spaces && self.with(|s| s.fresh) {
+            // Never a launch-time difference: the server's copy first; only
+            // intents go up with it.
+            return self.pull_doc(domain, ops).await;
+        }
         let _lane = self.lane(domain.as_str()).await;
         let name = domain.as_str();
+        let upto = self.intents_upto();
         let base = self.base::<T>(name);
         let local = (ops.build)(self, base.as_ref()).normalized();
         if base.as_ref() == Some(&local) {
+            self.unhold(false);
+            self.intents_sent(domain, upto);
             return;
         }
         let me = self.clone();
-        self.work(name, || async move { me.put(domain, local, &ops).await })
-            .await;
+        self.work(
+            name,
+            || async move { me.put(domain, local, &ops, upto).await },
+        )
+        .await;
     }
 
     /// PUT against the base's version; on 409 merge with the server's copy,
-    /// apply, and try again (three times at most).
-    async fn put<T: Doc>(&self, domain: Domain, first: T, ops: &Ops<T>) -> Result<(), Failure> {
+    /// apply, and try again (three times at most). `upto`: the last intent
+    /// the document was built with.
+    async fn put<T: Doc>(
+        &self,
+        domain: Domain,
+        first: T,
+        ops: &Ops<T>,
+        upto: u64,
+    ) -> Result<(), Failure> {
         let name = domain.as_str();
         let path = format!("/v1/sync/docs/{name}");
         let mut doc = first;
@@ -1132,6 +1258,9 @@ impl SyncEngine {
                 return Ok(());
             }
             let version = self.base_version(name).unwrap_or(0);
+            if !(ops.admit)(self, false, version, self.base::<T>(name).as_ref(), &doc) {
+                return Ok(());
+            }
             let payload = encode_doc(&doc).map_err(encode_failure)?;
             let body = json!({"base_version": version, "payload": encode_base64(&payload)});
             match self
@@ -1149,6 +1278,7 @@ impl SyncEngine {
                             extra: Default::default(),
                         }),
                     );
+                    self.intents_sent(domain, upto);
                     self.note(format!("Pushed {name} v{}", answer.version));
                     return Ok(());
                 }
@@ -1180,6 +1310,9 @@ impl SyncEngine {
                     let local = (ops.build)(self, base.as_ref()).normalized();
                     let merged = (ops.merge)(base.as_ref(), &local, &server);
                     if merged != local {
+                        if !(ops.admit)(self, true, current.version, base.as_ref(), &merged) {
+                            return Ok(());
+                        }
                         self.applying(|| (ops.apply)(self, &merged, base.as_ref()));
                     }
                     self.set_base(
@@ -1191,6 +1324,7 @@ impl SyncEngine {
                         current.version
                     ));
                     if merged == server {
+                        self.intents_sent(domain, upto);
                         return Ok(());
                     }
                     doc = merged;
@@ -1206,6 +1340,219 @@ impl SyncEngine {
                 domain.title()
             ),
         ))
+    }
+
+    // MARK: intents and holds
+
+    /// The last intent recorded so far.
+    fn intents_upto(&self) -> u64 {
+        self.with(|s| s.saved.intents.seq)
+    }
+
+    /// The server has this device's spaces as built with intents up to `upto`.
+    fn intents_sent(&self, domain: Domain, upto: u64) {
+        if domain != Domain::Spaces {
+            return;
+        }
+        let changed = self.with(|s| {
+            let before = s.saved.intents.clone();
+            s.saved.intents.settle(upto);
+            s.saved.intents != before
+        });
+        if changed {
+            self.save_state();
+        }
+    }
+
+    /// A pull went through: the server's copy is here.
+    fn pulled(&self, domain: Domain) {
+        if domain == Domain::Spaces {
+            self.with(|s| s.fresh = false);
+            self.unhold(true);
+        }
+    }
+
+    /// Nothing held that way any more.
+    fn unhold(&self, incoming: bool) {
+        let gone = self.with(|s| {
+            let held = s.held.is_some_and(|h| h.incoming == incoming);
+            if held {
+                s.held = None;
+            }
+            held
+        });
+        if gone {
+            self.publish();
+        }
+    }
+
+    /// The person changed kept tabs or folders here: from `before` to
+    /// `after` (the shell's two looks, either side of the edit; never a
+    /// cloud apply). Recorded as intents ([`intent::record`]).
+    pub fn local_edit(
+        &self,
+        before: &[LiveKept],
+        after: &[LiveKept],
+        folders_before: &[String],
+        folders_after: &[String],
+    ) {
+        let changed = self.with(|s| {
+            let keys = s.tab_keys.clone();
+            intent::record(
+                &mut s.saved.intents,
+                before,
+                after,
+                |t| keys.get(&t.tab_id).cloned().or_else(|| t.key.clone()),
+                folders_before,
+                folders_after,
+            )
+        });
+        if changed {
+            self.save_state();
+        }
+    }
+
+    /// The spaces publish or apply held for the person, if any.
+    pub fn held(&self) -> Option<Held> {
+        self.with(|s| s.held)
+    }
+
+    /// The person just confirmed a bulk change to kept tabs here (deleting
+    /// a space with its tabs, say): its publish is not held.
+    pub fn confirmed(&self) {
+        self.with(|s| s.pass_out = Some(Instant::now() + Duration::from_secs(60)));
+    }
+
+    /// The brake on spaces, both ways, and the log line for every publish
+    /// and apply (`cloud publish|apply doc=spaces v=… unfiled=N removed=M
+    /// folders-=K held=…`).
+    fn admit_spaces(
+        &self,
+        incoming: bool,
+        version: i64,
+        base: Option<&SpacesDoc>,
+        doc: &SpacesDoc,
+    ) -> bool {
+        // Applying: what this device has now, against what it would get.
+        // Sending: the server's copy (the base), against what would replace it.
+        let before = if incoming {
+            Some(self.build_spaces(base))
+        } else {
+            base.cloned()
+        };
+        let loss = before.map(|b| Loss::between(&b, doc)).unwrap_or_default();
+        let hold = if incoming {
+            loss.holds_in()
+        } else {
+            loss.holds_out()
+        };
+        let go = !hold
+            || self.with(|s| {
+                if incoming {
+                    std::mem::take(&mut s.pass_in)
+                } else {
+                    s.pass_out.take().is_some_and(|t| t > Instant::now())
+                }
+            });
+        self.note(format!(
+            "cloud {} doc=spaces v={version} {} held={}",
+            if incoming { "apply" } else { "publish" },
+            loss.line(),
+            if go { "no" } else { "yes" }
+        ));
+        if go {
+            self.unhold(incoming);
+        } else {
+            self.with(|s| s.held = Some(Held { incoming, loss }));
+            self.publish();
+        }
+        go
+    }
+
+    /// The person's answer to [`SyncStatus::held`]: `go` — Sync It, or
+    /// Accept; else Undo Here (this device takes the server's copy, its
+    /// intents dropped), or Keep Mine (this device's filing and tabs go up).
+    pub async fn resolve_hold(&self, go: bool) {
+        let Some(held) = self.with(|s| s.held.take()) else {
+            return;
+        };
+        self.publish();
+        match (held.incoming, go) {
+            (false, true) => {
+                self.with(|s| s.pass_out = Some(Instant::now() + Duration::from_secs(60)));
+                self.push(Domain::Spaces).await;
+            }
+            (false, false) => {
+                self.with(|s| {
+                    s.saved.intents = Default::default();
+                    s.fresh = true;
+                });
+                self.save_state();
+                self.note("Held spaces publish undone here");
+                self.pull(Domain::Spaces).await;
+            }
+            (true, true) => {
+                self.with(|s| s.pass_in = true);
+                self.pull(Domain::Spaces).await;
+            }
+            (true, false) => self.keep_mine().await,
+        }
+    }
+
+    /// Keep Mine: take the server's copy as the base without applying it,
+    /// mark every kept tab it would unfile here as filed here, and send.
+    /// The tabs it would remove, and its missing folders, are new to that
+    /// base and go up as they are.
+    async fn keep_mine(&self) {
+        if !self.active(Domain::Spaces) {
+            return;
+        }
+        let _lane = self.lane(Domain::Spaces.as_str()).await;
+        let me = self.clone();
+        self.work("spaces", || async move {
+            let doc: WireDoc = me
+                .inner
+                .client
+                .request_json("GET", "/v1/sync/docs/spaces", None, &[])
+                .await?;
+            let Some(server) = decode_payload::<SpacesDoc>(doc.payload.as_deref()) else {
+                return Err(Failure::new(
+                    0,
+                    "decode",
+                    "The cloud's spaces didn't read — left alone".to_string(),
+                ));
+            };
+            let base = me.base::<SpacesDoc>("spaces");
+            let mine = me.build_spaces(base.as_ref());
+            let theirs: HashMap<&str, &KeptTab> =
+                server.tabs.iter().map(|t| (t.key.as_str(), t)).collect();
+            me.with(|s| {
+                let i = &mut s.saved.intents;
+                for t in &mine.tabs {
+                    if t.group.is_some()
+                        && theirs
+                            .get(t.key.as_str())
+                            .is_some_and(|x| x.group.is_none())
+                    {
+                        i.seq += 1;
+                        i.filed.insert(t.key.clone(), i.seq);
+                    }
+                }
+            });
+            me.set_base(
+                "spaces",
+                Some(SyncBase::from_doc(doc.version, &server).map_err(encode_failure)?),
+            );
+            me.pulled(Domain::Spaces);
+            me.note(format!("Kept this device's spaces over v{}", doc.version));
+            let upto = me.intents_upto();
+            let out = me.outgoing_spaces(Some(&server)).normalized();
+            if out != server {
+                me.put(Domain::Spaces, out, &SPACES, upto).await?;
+            }
+            Ok(())
+        })
+        .await;
     }
 
     // MARK: spaces, built and applied
@@ -1230,6 +1577,15 @@ impl SyncEngine {
         if let Some(base) = self.base::<SpacesDoc>(Domain::Spaces.as_str()) {
             self.build_spaces(Some(&base));
         }
+    }
+
+    /// The spaces document this device may send: [`Self::build_spaces`],
+    /// where the base has an entry, this device's only where an intent says
+    /// it changed it here ([`intent::outgoing`]).
+    fn outgoing_spaces(&self, base: Option<&SpacesDoc>) -> SpacesDoc {
+        let local = self.build_spaces(base);
+        let intents = self.with(|s| s.saved.intents.clone());
+        intent::outgoing(base, local, &intents)
     }
 
     /// This device's spaces document. `base` is the last one synced: a tab it
@@ -2806,5 +3162,111 @@ mod tests {
             },
         );
         assert_eq!(merged.groups, doc.groups);
+    }
+
+    /// The 2026-10-28 incident, end to end on one device: 36 kept tabs filed
+    /// in the base (and on the server); this device restored them unfiled
+    /// and its folder file empty, and changed nothing here.
+    #[test]
+    fn a_device_missing_its_filing_keeps_and_gets_back_every_folder() {
+        use copper_core::cloud::CloudFolder;
+        let dir = tempfile::tempdir().unwrap();
+        let apps = "F0000000-0000-4000-8000-0000000000A2";
+        let urls: Vec<String> = (0..36).map(|n| format!("https://app{n}.test/")).collect();
+        let b = browser(
+            urls.iter()
+                .enumerate()
+                .map(|(n, u)| tab(&format!("t{n}"), WORK, u, None, None))
+                .collect(),
+        );
+        b.edit(|s| s.groups = Some(vec![]));
+        let e = launch(dir.path(), &b);
+        let mut filed = build(&e);
+        for t in &mut filed.tabs {
+            t.group = Some(apps.into());
+        }
+        filed.groups = Some(vec![CloudFolder {
+            id: apps.into(),
+            name: "Exowatt › Apps".into(),
+            ..Default::default()
+        }]);
+        synced(&e, 7, &filed);
+        // Out: every folder and filing stays the base's.
+        let out = e.outgoing_spaces(Some(&filed)).normalized();
+        assert_eq!(out, filed);
+        let merged = merge::spaces(Some(&filed), &out, &filed);
+        assert_eq!(merged, filed);
+        assert!(e.admit_spaces(false, 7, Some(&filed), &merged));
+        assert!(e.status().held.is_none());
+        // In (the first pull of the run applies the server's copy): filed again here.
+        assert!(e.admit_spaces(true, 7, Some(&filed), &filed));
+        e.apply_spaces(&filed, Some(&filed));
+        let now = b.snapshot();
+        assert!(now.kept.iter().all(|t| t.group.as_deref() == Some(apps)));
+        assert_eq!(now.groups.map(|g| g.len()), Some(1));
+    }
+
+    #[test]
+    fn edits_made_here_are_kept_across_a_relaunch_and_mass_changes_hold() {
+        let dir = tempfile::tempdir().unwrap();
+        let apps = "F0000000-0000-4000-8000-0000000000A2";
+        let kept: Vec<LiveKept> = (0..12)
+            .map(|n| {
+                let mut t = tab(
+                    &format!("t{n}"),
+                    WORK,
+                    &format!("https://app{n}.test/"),
+                    None,
+                    None,
+                );
+                t.group = Some(apps.into());
+                t
+            })
+            .collect();
+        let b = browser(kept.clone());
+        b.edit(|s| {
+            s.groups = Some(vec![copper_core::cloud::CloudFolder {
+                id: apps.into(),
+                name: "Apps".into(),
+                ..Default::default()
+            }])
+        });
+        let e = launch(dir.path(), &b);
+        let filed = build(&e);
+        synced(&e, 3, &filed);
+        let before = b.snapshot().kept;
+        // One tab unfiled here: recorded, and kept in cloud-sync.json.
+        b.edit(|s| s.kept[0].group = None);
+        let ids = vec![apps.to_string()];
+        e.local_edit(&before, &b.snapshot().kept, &ids, &ids);
+        let e = launch(dir.path(), &b);
+        let out = e.outgoing_spaces(Some(&filed)).normalized();
+        assert_eq!(out.tabs.iter().filter(|t| t.group.is_none()).count(), 1);
+        assert!(e.admit_spaces(false, 3, Some(&filed), &out));
+        // Eleven more: held, and the status says so.
+        let before = b.snapshot().kept;
+        b.edit(|s| s.kept.iter_mut().for_each(|t| t.group = None));
+        e.local_edit(&before, &b.snapshot().kept, &ids, &ids);
+        let out = e.outgoing_spaces(Some(&filed)).normalized();
+        assert!(!e.admit_spaces(false, 3, Some(&filed), &out));
+        let held = e.status().held.expect("held");
+        assert!(!held.incoming);
+        assert_eq!(held.loss.unfiled, 12);
+        assert_eq!(
+            held.title(),
+            "This computer is about to unfile 12 tabs on all your devices"
+        );
+        // A bulk change the person confirmed goes through.
+        e.confirmed();
+        assert!(e.admit_spaces(false, 3, Some(&filed), &out));
+        assert!(e.status().held.is_none());
+        // Another device unfiling all twelve here: held too.
+        let b2 = browser(kept);
+        let e2 = launch(tempfile::tempdir().unwrap().path(), &b2);
+        assert!(!e2.admit_spaces(true, 4, Some(&filed), &out));
+        let held = e2.status().held.expect("held");
+        assert!(held.incoming);
+        assert_eq!(held.title(), "Another device unfiled 12 tabs");
+        assert_eq!(held.buttons(), ("Accept", "Keep Mine"));
     }
 }

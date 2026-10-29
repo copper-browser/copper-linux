@@ -11,7 +11,14 @@
 //! * Local edits reach the engine as [`SyncEngine::changed`]: a one-second
 //!   watch compares the browser's, history's and bookmarks' generations and
 //!   the cloud settings values with what was last seen (remote applies mark
-//!   themselves seen, so they are never pushed back as local edits).
+//!   themselves seen, so they are never pushed back as local edits). The
+//!   same watch hands the engine every change made here to kept tabs and
+//!   folders ([`SyncEngine::local_edit`]): its intents, the only changes
+//!   this device may publish over the base. A remote apply first hands over
+//!   what was edited before it, then marks itself seen.
+//! * A spaces publish or apply the engine holds (many tabs unfiled or
+//!   removed at once) is asked about with [`crate::view::ShellView::ask`],
+//!   drawn the way each shell draws a question.
 //! * At launch the client, the engine and the intelligence fetch start when
 //!   `cloud.json` holds a link; otherwise when a link is first made. Before
 //!   that, before any restored page loads, the engine keys the kept tabs
@@ -32,6 +39,7 @@ pub mod sso;
 use crate::Platform;
 use crate::main_loop::MainLoop;
 use crate::shell::Shell;
+use crate::view::ShellView;
 use copper_cloud::{CanvasApi, CloudClient, CloudIntelligence, Domain, SyncEngine};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -214,6 +222,9 @@ struct Seen {
     history: u64,
     bookmarks: u64,
     settings: BTreeMap<String, String>,
+    /// The kept tabs and the folder ids, for the intents.
+    kept: Vec<copper_cloud::sync::LiveKept>,
+    folders: Vec<String>,
 }
 
 fn snapshot<P: Platform>(shell: &Shell<P>) -> Seen {
@@ -222,6 +233,11 @@ fn snapshot<P: Platform>(shell: &Shell<P>) -> Seen {
         history: shell.history().generation(),
         bookmarks: shell.bookmarks().generation(),
         settings: adapter::cloud_settings(shell),
+        kept: adapter::kept(shell),
+        folders: crate::agents::groups::all(shell)
+            .into_iter()
+            .map(|g| g.id)
+            .collect(),
     }
 }
 
@@ -229,6 +245,33 @@ fn snapshot<P: Platform>(shell: &Shell<P>) -> Seen {
 pub fn mark_seen<P: Platform>(shell: &Shell<P>) {
     let now = snapshot(shell);
     SEEN.with(|s| *s.borrow_mut() = Some(now));
+}
+
+/// Before a remote apply: whatever was changed here since the last look
+/// goes to the engine as intents first, so the apply's own marking-seen
+/// never swallows an edit made here.
+pub(crate) fn take_local_edits<P: Platform>(shell: &Shell<P>) {
+    let now = snapshot(shell);
+    let before = SEEN.with(|s| s.borrow_mut().replace(now.clone()));
+    if let (Some(before), Some(cloud)) = (before, get()) {
+        intents(cloud, &before, &now);
+    }
+}
+
+fn intents(cloud: &Cloud, before: &Seen, now: &Seen) {
+    if before.kept != now.kept || before.folders != now.folders {
+        cloud
+            .sync
+            .local_edit(&before.kept, &now.kept, &before.folders, &now.folders);
+    }
+}
+
+/// The person just confirmed a bulk change to kept tabs (deleting a space
+/// with its tabs): its publish goes through without being held.
+pub fn confirmed() {
+    if let Some(c) = get() {
+        c.sync.confirmed();
+    }
 }
 
 fn watch_local<P: Platform>(shell: &Shell<P>) {
@@ -247,6 +290,9 @@ fn poll_local<P: Platform>(shell: &Shell<P>) {
     let before = SEEN.with(|s| s.borrow_mut().replace(now.clone()));
     let Some(before) = before else { return };
     let Some(cloud) = get() else { return };
+    // Recorded signed in or not: an edit made offline still goes up later.
+    intents(cloud, &before, &now);
+    ask_held(shell, cloud);
     if !cloud.client.is_signed_in() || !cloud.sync.is_on() {
         return;
     }
@@ -263,6 +309,49 @@ fn poll_local<P: Platform>(shell: &Shell<P>) {
     if now.settings != before.settings {
         cloud.changed(Domain::Settings);
     }
+}
+
+// MARK: held
+
+thread_local! {
+    /// The hold last asked about, and whether its question is still up.
+    static ASKED: RefCell<(Option<copper_cloud::sync::Held>, bool)> = const { RefCell::new((None, false)) };
+}
+
+/// A held spaces publish or apply: ask once (a new question only once the
+/// last is answered and the hold changed), and hand the answer back.
+fn ask_held<P: Platform>(shell: &Shell<P>, cloud: &Cloud) {
+    let held = cloud.sync.held();
+    let ask = ASKED.with(|a| {
+        let mut a = a.borrow_mut();
+        if a.1 || a.0 == held {
+            return false;
+        }
+        a.0 = held;
+        a.1 = held.is_some();
+        a.1
+    });
+    let Some(held) = held.filter(|_| ask) else {
+        return;
+    };
+    let (allow, deny) = held.buttons();
+    let question = crate::view::Question {
+        title: held.title(),
+        detail: Some(held.detail().to_string()),
+        deny: deny.to_string(),
+        allow: allow.to_string(),
+    };
+    shell.view().ask(
+        shell,
+        question,
+        Box::new(|go| {
+            ASKED.with(|a| a.borrow_mut().1 = false);
+            if let Some(c) = get() {
+                let sync = c.sync.clone();
+                spawn(async move { sync.resolve_hold(go).await });
+            }
+        }),
+    );
 }
 
 // MARK: words
