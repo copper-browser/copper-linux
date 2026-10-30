@@ -698,6 +698,12 @@ async fn forms_login(h: &H) -> Res {
     h.add_user_script(&forms::relay());
     h.load("login.html").await?;
     h.message(messages::FORMS, |m| m["kind"] == "form").await?;
+    // Its code box is told once ("Fill two-step codes").
+    let otp = h.message(messages::FORMS, |m| m["kind"] == "otp").await?;
+    ensure_eq!(
+        serde_json::from_value::<messages::FormsMessage>(otp).map_err(|e| e.to_string())?,
+        messages::FormsMessage::Otp
+    );
     ensure_eq!(h.run(&forms::has_password()).await?, true);
     ensure_eq!(h.run(&forms::has_otp()).await?, true);
     ensure_eq!(

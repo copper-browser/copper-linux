@@ -98,6 +98,7 @@ const CSS: &str = r#"
 /// Called once from `actions::register_lanes`.
 pub fn register(shell: &Shell) {
     copper_shell_core::forms::start::<GtkForms>(shell, keyring::look);
+    copper_shell_core::forms::autolock(shell);
 
     let css = gtk4::CssProvider::new();
     css.load_from_string(CSS);

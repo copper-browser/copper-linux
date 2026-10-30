@@ -7,7 +7,9 @@
 //!   password — the sign-in took ([`copper_creds::offer`]).
 //! * The caret landing in a name or password box offers that site's saved
 //!   accounts in a list under the box; a code box offers the one-time codes.
-//!   Nothing is filled until a row is clicked.
+//!   Nothing is filled until a row is clicked — except the two-step code on
+//!   the page that asks for it right after a picked sign-in ("Fill two-step
+//!   codes", [`auto_code_due`]).
 
 use super::view::{FormsUi, OfferData, OfferView, PickerView, Row, RowKind};
 use super::{Forms, rt, site_host, site_origin};
@@ -45,6 +47,10 @@ pub(crate) struct TabForms<U: FormsUi> {
     picked_into: bool,
     /// The account last filled here (its code goes first on the next page).
     pub signed_with: Option<Credential>,
+    /// When a login was last picked into this tab from the list, and the
+    /// pick whose code already went in (once per pick).
+    signed_at: Option<f64>,
+    auto_coded: Option<f64>,
     /// The field the list is up for (`kind|label`).
     anchor: Option<String>,
     /// Bumped on every caret move: an answer for an older one is dropped.
@@ -190,6 +196,8 @@ impl<U: FormsUi> Forms<U> {
             picker: None,
             picked_into: false,
             signed_with: None,
+            signed_at: None,
+            auto_coded: None,
             anchor: None,
             focus_gen: 0,
             lowering: None,
@@ -218,6 +226,7 @@ impl<U: FormsUi> Forms<U> {
                         self.on_submit(tab, user, password)
                     }
                     Ok(FormsMessage::Settled) => self.settle(tab, false),
+                    Ok(FormsMessage::Otp) => self.code_box_appeared(tab),
                     Ok(FormsMessage::Focus {
                         typing,
                         rect,
@@ -674,9 +683,16 @@ impl<U: FormsUi> Forms<U> {
                 return;
             }
             let c = row.credential.clone();
+            let now = f.now();
             f.with_tab(&tab, |t| {
                 t.picked_into = !code;
                 t.signed_with = Some(c.clone());
+                if code {
+                    // A code picked by hand: none goes in on its own after it.
+                    t.auto_coded = t.signed_at;
+                } else {
+                    t.signed_at = Some(now);
+                }
             });
             let v = f.vault.clone();
             rt::run(async move { v.touch(&c).await }).await;
@@ -735,10 +751,98 @@ impl<U: FormsUi> Forms<U> {
         });
     }
 
+    /// The page asking for a two-step code, right after a sign-in picked
+    /// from the list with an account that keeps one (`Browser.swift`
+    /// `codeBoxAppeared`): the code goes into the box on its own — once per
+    /// pick, only on a page the account would be offered on anyway, and
+    /// never sent. A sign-in the page merely reports doesn't count: any
+    /// script on the page can report one, and would be handed the code.
+    fn code_box_appeared(self: &Rc<Self>, tab: &TabId) {
+        let Some((shell, slot)) = self.page_of(tab) else {
+            return;
+        };
+        let on = {
+            let s = shell.settings();
+            s.fills_passwords() && s.fills_codes()
+        } && !self.is_private(tab);
+        let now = self.now();
+        let Some((picked, stamp)) = self
+            .with_tab(tab, |t| {
+                let stamp =
+                    auto_code_due(on, t.signed_with.as_ref(), t.signed_at, t.auto_coded, now)?;
+                t.auto_coded = Some(stamp);
+                Some((t.signed_with.clone()?, stamp))
+            })
+            .flatten()
+        else {
+            return;
+        };
+        let page = slot.page.clone();
+        let page_url = page.url();
+        let Some(host) = page_url.as_deref().and_then(site_host) else {
+            return;
+        };
+        let origin = page_url.as_deref().and_then(site_origin);
+        let v = self.vault.clone();
+        let weak = Rc::downgrade(self);
+        let tab = tab.clone();
+        Loop::<U>::spawn_local(async move {
+            let id = picked.id.clone();
+            let code = rt::run(async move {
+                let here = v.candidates(&host, origin.as_deref()).await;
+                here.iter().find(|c| c.id == id && c.has_totp)?;
+                v.totp_at(&id, origin.as_deref()).await.ok()
+            })
+            .await
+            .flatten();
+            let Some(code) = code else { return };
+            let filled = call(&page, &copper_pagejs::forms::fill_otp(&code)).await;
+            drop(code);
+            let Some(f) = weak.upgrade() else { return };
+            if filled.ok().flatten() != Some(true)
+                || f.with_tab(&tab, |t| t.signed_at) != Some(Some(stamp))
+            {
+                return;
+            }
+            f.lower_now(&tab);
+            shell.toast(&format!(
+                "Two-step code filled for {}",
+                if picked.user.is_empty() {
+                    &picked.host
+                } else {
+                    &picked.user
+                }
+            ));
+        });
+    }
+
     /// Remember the account an agent signed in with (its code comes next).
     pub(crate) fn signed_in_with(&self, tab: &TabId, c: &Credential) {
-        self.with_tab(tab, |t| t.signed_with = Some(c.clone()));
+        self.with_tab(tab, |t| {
+            t.signed_with = Some(c.clone());
+            // Not picked from the list: its code isn't filled on its own.
+            t.signed_at = None;
+        });
     }
+}
+
+/// How long after a picked sign-in its code still goes in on its own
+/// (`Browser.swift` `autoCodeCredential`: ten minutes).
+const AUTO_CODE_WINDOW: f64 = 600.0;
+
+/// "Fill two-step codes": the stamp of the pick whose code goes into the
+/// code box that just appeared, if one does — the setting on, a login
+/// picked from the list within [`AUTO_CODE_WINDOW`] whose account keeps a
+/// code, and that pick's code not filled yet.
+fn auto_code_due(
+    on: bool,
+    signed: Option<&Credential>,
+    at: Option<f64>,
+    done: Option<f64>,
+    now: f64,
+) -> Option<f64> {
+    let at = at?;
+    (on && signed?.has_totp && now - at <= AUTO_CODE_WINDOW && done != Some(at)).then_some(at)
 }
 
 /// What the box with the caret asks for (`Browser.swift` `suggestions`,
@@ -769,7 +873,34 @@ impl Want {
 
 #[cfg(test)]
 mod tests {
-    use super::Want;
+    use super::{Want, auto_code_due};
+
+    #[test]
+    fn a_picked_sign_in_fills_its_code_once_within_ten_minutes() {
+        let mut c = copper_creds::Login {
+            host: "example.com".into(),
+            user: "me".into(),
+            used: None,
+        }
+        .credential();
+        c.has_totp = true;
+        let at = Some(100.0);
+        assert_eq!(auto_code_due(true, Some(&c), at, None, 160.0), Some(100.0));
+        // The setting off, nothing picked, or the pick too long ago.
+        assert_eq!(auto_code_due(false, Some(&c), at, None, 160.0), None);
+        assert_eq!(auto_code_due(true, None, at, None, 160.0), None);
+        assert_eq!(auto_code_due(true, Some(&c), None, None, 160.0), None);
+        assert_eq!(auto_code_due(true, Some(&c), at, None, 701.0), None);
+        // Once per pick; a new pick fills again.
+        assert_eq!(auto_code_due(true, Some(&c), at, at, 160.0), None);
+        assert_eq!(
+            auto_code_due(true, Some(&c), Some(200.0), at, 260.0),
+            Some(200.0)
+        );
+        // An account without a code key.
+        c.has_totp = false;
+        assert_eq!(auto_code_due(true, Some(&c), at, None, 160.0), None);
+    }
 
     #[test]
     fn the_box_decides_the_rows() {

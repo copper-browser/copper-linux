@@ -238,6 +238,48 @@ async fn all(run: &Rc<Run>) {
     settings_page(run).await;
     bitwarden_otp_and_agents(run).await;
     chrome_import(run).await;
+    csv_in_and_out(run).await;
+}
+
+/// A passwords CSV in, and every password out (the dialogs aside).
+async fn csv_in_and_out(run: &Rc<Run>) {
+    use copper_shell_core::forms::csv;
+    let input = run.out.join("import.csv");
+    let _ = std::fs::write(
+        &input,
+        "name,url,username,password,note\ncsv.example,https://www.csv.example/login,carol,csv-pw-1,\nnosite,,dave,pw,\n",
+    );
+    let (said, ok) = csv::import_file(input, "the keyring").await;
+    let v = run.forms.vault.clone();
+    let secret = rt::run(async move {
+        v.secret(&copper_creds::CredentialId::Keychain {
+            host: "csv.example".into(),
+            user: "carol".into(),
+        })
+        .await
+    })
+    .await
+    .and_then(Result::ok);
+    run.check(
+        "csv: import keeps the rows with a site and a password",
+        ok && secret.as_deref() == Some("csv-pw-1"),
+        said,
+    );
+    let output = run.out.join("Copper Passwords.csv");
+    let (said, ok) = csv::export_file(output.clone(), "the keyring").await;
+    let text = std::fs::read_to_string(&output).unwrap_or_default();
+    let mode = {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(&output).map(|m| m.permissions().mode() & 0o777)
+    };
+    run.check(
+        "csv: export writes every password, readable by you only",
+        ok && text.starts_with("name,url,username,password,note\n")
+            && text.contains("csv.example,https://csv.example/,carol,csv-pw-1,")
+            && mode.is_ok_and(|m| m == 0o600),
+        said,
+    );
+    let _ = std::fs::remove_file(&output);
 }
 
 /// A failed sign-in is not offered; one that worked is, and Save keeps it.
@@ -524,6 +566,11 @@ async fn settings_page(run: &Rc<Run>) {
         Run::sleep(400).await;
         run.shots("05c-settings-1password-agents").await;
     }
+    if let Some(g) = find_group(&root, "Import and export") {
+        scroll_to(&g);
+        Run::sleep(400).await;
+        run.shots("05d-settings-import-export").await;
+    }
     dialog.close();
     Run::sleep(300).await;
 }
@@ -564,7 +611,7 @@ async fn bitwarden_otp_and_agents(run: &Rc<Run>) {
     );
     // Scroll down to Bitwarden for the picture.
     if let Some(r) = find_row(&root, "Unlocked") {
-        r.grab_focus();
+        scroll_to(r.upcast_ref());
     }
     Run::sleep(300).await;
     run.shots("07-settings-bitwarden").await;
@@ -604,6 +651,57 @@ async fn bitwarden_otp_and_agents(run: &Rc<Run>) {
         code.as_str()
             .is_some_and(|s| s.len() == 6 && s.chars().all(|c| c.is_ascii_digit())),
         "",
+    );
+    run.shell.close(&tab);
+
+    // Fill two-step codes: pick the account that keeps a code, and the
+    // next page's code box fills itself, once per pick.
+    let tab = run.open("login.html").await;
+    run.click(&tab, "#username").await;
+    let at = {
+        let mut at = None;
+        run.until(8, || {
+            at = run
+                .forms
+                .picker_rows(&tab)
+                .and_then(|r| r.iter().position(|u| u == "dev"));
+            at.is_some()
+        })
+        .await;
+        at
+    };
+    if let Some(i) = at {
+        run.forms.with_picker(&tab, |p| p.press(i));
+    }
+    run.until(5, || run.forms.picker_rows(&tab).is_none()).await;
+    let otp = || run.js(&tab, "document.getElementById('otp').value");
+    let six = |v: &Value| {
+        v.as_str()
+            .is_some_and(|s| s.len() == 6 && s.chars().all(|c| c.is_ascii_digit()))
+    };
+    run.js(&tab, "location.reload(); true").await;
+    run.loaded(&tab).await;
+    let mut code = Value::Null;
+    for _ in 0..50 {
+        code = otp().await;
+        if six(&code) {
+            break;
+        }
+        Run::sleep(100).await;
+    }
+    run.check(
+        "auto-codes: after a pick, the code page fills itself",
+        at.is_some() && six(&code),
+        format!("row {at:?}"),
+    );
+    run.js(&tab, "location.reload(); true").await;
+    run.loaded(&tab).await;
+    Run::sleep(1500).await;
+    let again = otp().await;
+    run.check(
+        "auto-codes: once per pick",
+        again == json!(""),
+        format!("{again}"),
     );
     run.shell.close(&tab);
 

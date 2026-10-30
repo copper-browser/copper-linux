@@ -11,6 +11,8 @@
 //!   Manager), Bitwarden (`bw`), 1Password (`op`) and BotPass
 //!   ([`copper_botpass`]), on the lane's own Tokio runtime ([`rt`]).
 //! * [`mcp`] — `browser_sign_in` / `browser_autofill` for the agents lane.
+//! * [`csv`] — passwords in and out as CSV, the dialogs left to the app.
+//! * [`autolock`] — Bitwarden locked after the minutes chosen in Settings.
 //!
 //! The app adds Settings › Passwords, the "Bring in from Chrome" sheet and
 //! the widgets (GTK: `copper-app`'s `forms`).
@@ -26,6 +28,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+pub mod csv;
 pub mod mcp;
 pub mod rt;
 pub mod vault;
@@ -42,6 +45,9 @@ pub mod keys {
     pub const ALLOWED: &str = "agent.credentials.allowed";
     pub const BW_STAY: &str = "bitwarden.stayUnlocked";
     pub const BW_SERVER: &str = "bitwarden.server";
+    /// Minutes without use before Copper locks Bitwarden: 0 (never, the
+    /// default), 5, 15 or 60 (`Bitwarden.autolockMinutes`).
+    pub const BW_AUTOLOCK: &str = "bitwarden.autolockMinutes";
     pub const OP_STAY: &str = "onepassword.stayUnlocked";
     pub const OP_MODE: &str = "onepassword.mode";
     pub const OP_ACCOUNT: &str = "onepassword.account";
@@ -85,9 +91,11 @@ pub fn start<U: FormsUi>(shell: &Shell<U::Platform>, look: vault::Look) -> Rc<Fo
             email: s.string(keys::OP_EMAIL).map(str::to_string),
             url: s.string(keys::OP_URL).map(str::to_string),
         };
+        // Stay unlocked is on until it is turned off (`Bitwarden.swift`,
+        // `OnePassword.swift` `stayUnlocked`).
         (
-            s.bool_or(keys::BW_STAY, false),
-            s.bool_or(keys::OP_STAY, false),
+            s.bool_or(keys::BW_STAY, true),
+            s.bool_or(keys::OP_STAY, true),
             rem,
         )
     };
@@ -112,6 +120,34 @@ pub fn start<U: FormsUi>(shell: &Shell<U::Platform>, look: vault::Look) -> Rc<Fo
 
     watch::start(&forms, shell);
     forms
+}
+
+/// How often Bitwarden's idle time is looked at.
+const IDLE_CHECK: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Lock Bitwarden after the minutes chosen in Settings without use
+/// (`Bitwarden.autolockMinutes`; 0: never). Once, after [`start`].
+pub fn autolock<P: Platform>(shell: &Shell<P>) {
+    let weak = shell.downgrade();
+    P::Loop::spawn_local(async move {
+        loop {
+            P::Loop::sleep(IDLE_CHECK).await;
+            let Some(s) = weak.upgrade() else { return };
+            let minutes = s.settings().number(keys::BW_AUTOLOCK).unwrap_or(0.0);
+            drop(s);
+            if minutes <= 0.0 {
+                continue;
+            }
+            let Some(v) = vault() else { continue };
+            rt::run(async move {
+                // Never wait behind a sign-in or a sync under way.
+                if let Ok(mut bw) = v.bw.try_lock() {
+                    bw.check_idle(minutes).await;
+                }
+            })
+            .await;
+        }
+    });
 }
 
 // MARK: settings helpers
