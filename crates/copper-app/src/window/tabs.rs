@@ -95,6 +95,13 @@ pub fn menu(shell: &Shell, id: &TabId) -> gio::Menu {
             place.append_submenu(Some("Move to Space"), &to);
         }
     }
+    // Out of a folder in one click (Mac: `GroupMenu`).
+    if t.group.is_some() {
+        place.append(
+            Some("Remove from Folder"),
+            Some(&format!("win.tab-take-out::{id}")),
+        );
+    }
     menu.append_section(None, &place);
 
     let close = gio::Menu::new();

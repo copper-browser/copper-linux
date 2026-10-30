@@ -5,14 +5,23 @@
 //!
 //! Nothing here has a border. The live row is a paper pill a shade stronger
 //! than the column; everything else is spacing.
+//!
+//! Saved and Today are drawn as folders and rows (`folders::plan`, Mac:
+//! `Fork/GroupsUI.swift`): a folder's line, then its tabs stepped in under
+//! it; a shut folder hides them. A dragged row lands where
+//! [`sidedrop::target`] reads it off those lines, in or out of a folder.
 
-use super::dropzone::{self, Band, Landing, Layout};
 use super::{Nav, tabs};
 use crate::palette::Mode;
 use crate::shell::GtkShell;
 use crate::shell::{Shell, TabView};
+use crate::spaces::colour::{Rgb, Tint};
 use copper_core::TabId;
+use copper_core::groups::TabGroup;
 use copper_core::settings::keys;
+use copper_shell_core::agents::groups;
+use copper_shell_core::folders::{self, FolderRow};
+use copper_shell_core::sidedrop::{self, Kind, Line, Target};
 use gtk4 as gtk;
 use gtk4::prelude::*;
 use std::cell::RefCell;
@@ -21,6 +30,11 @@ use std::rc::Rc;
 
 /// Default column width (points, like the Mac's `sidebar.width`).
 pub const WIDTH: f64 = 256.0;
+
+/// How far a folder's rows step in (Windows: `FOLDER_STEP`).
+const FOLDER_STEP: i32 = 20;
+/// The room between two lines (the blocks' spacing).
+const GAP: f32 = 2.0;
 
 struct Row {
     root: gtk::Box,
@@ -48,8 +62,12 @@ pub struct Column {
     marker: gtk::Box,
     chips: gtk::Box,
     rows: RefCell<HashMap<TabId, Row>>,
-    /// The Saved and Today rows as drawn, in order.
-    order: RefCell<(Vec<TabId>, Vec<TabId>)>,
+    /// Saved's then Today's lines as drawn, in order: in Saved, the widget,
+    /// and the line a drag reads (its place filled in when it asks).
+    lines: RefCell<Vec<(bool, gtk::Widget, Line)>>,
+    /// Each folder mark's colour (`.folder-mark.f-<n>`), rewritten with
+    /// the rows.
+    folder_css: gtk::CssProvider,
     /// The tab being dragged, from the moment its row is picked up.
     dragging: RefCell<Option<TabId>>,
 }
@@ -184,6 +202,13 @@ impl Column {
         foot.append(&menu);
         widget.append(&foot);
 
+        let folder_css = gtk::CssProvider::new();
+        gtk::style_context_add_provider_for_display(
+            &WidgetExt::display(&widget),
+            &folder_css,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 2,
+        );
+
         let me = Rc::new(Column {
             widget,
             nav,
@@ -199,7 +224,8 @@ impl Column {
             marker,
             chips,
             rows: RefCell::default(),
-            order: RefCell::default(),
+            lines: RefCell::default(),
+            folder_css,
             dragging: RefCell::default(),
         });
         me.wire_drop(shell);
@@ -207,15 +233,17 @@ impl Column {
     }
 
     /// One drop target for the whole body: the header, Saved, the seam,
-    /// New Tab and Today. The marker shows where the tab will land, and the
-    /// drop puts it exactly there ([`dropzone::land`]).
+    /// New Tab and Today. The marker shows where the tab will land, stepped
+    /// in as a folder's rows are, and the drop puts it exactly there
+    /// ([`sidedrop::target`], [`Shell::drop_at_spot`]).
     fn wire_drop(self: &Rc<Self>, shell: &Shell) {
         let drop = gtk::DropTarget::new(glib::types::Type::STRING, gtk::gdk::DragAction::MOVE);
         let weak = Rc::downgrade(self);
+        let weak_shell = shell.downgrade();
         drop.connect_motion(move |_, _, y| {
-            if let Some(me) = weak.upgrade() {
-                let landing = me.landing(y);
-                me.show_marker(&landing);
+            if let (Some(me), Some(s)) = (weak.upgrade(), weak_shell.upgrade()) {
+                let target = me.target(&s, y);
+                me.show_marker(target.as_ref());
             }
             gtk::gdk::DragAction::MOVE
         });
@@ -238,12 +266,15 @@ impl Column {
             }
             let id = TabId(id);
             me.dragging.replace(Some(id.clone()));
-            let landing = me.landing(y);
+            let target = me.target(&s, y);
             me.drag_ended();
-            tracing::debug!(tab = %id, saved = landing.saved, before = ?landing.before, "tab dropped in the column");
+            tracing::debug!(tab = %id, ?target, "tab dropped in the column");
             // Not now: the rows under the drop are about to be rebuilt.
-            glib::idle_add_local_once(move || {
-                s.drop_at(&id, landing.saved, landing.before.as_ref())
+            glib::idle_add_local_once(move || match target {
+                Some(Target::Pins) => s.drop_on_pins(&id),
+                Some(Target::Spot(spot)) => s.drop_at_spot(&id, &spot),
+                // Over its own place: it stays.
+                None => {}
             });
             true
         });
@@ -261,51 +292,70 @@ impl Column {
     }
 
     /// The column as a drop sees it, in the body's coordinates.
-    fn layout(&self) -> Layout {
-        let rows = self.rows.borrow();
-        let band = |id: &TabId| -> Option<Band> {
-            let b = rows.get(id)?.root.compute_bounds(&self.body)?;
-            Some(Band {
-                id: id.clone(),
-                top: b.y() as f64,
-                bottom: (b.y() + b.height()) as f64,
-            })
+    fn layout(&self) -> sidedrop::Layout {
+        let bounds = |w: &gtk::Widget| {
+            w.compute_bounds(&self.body)
+                .map(|b| (b.y(), b.y() + b.height()))
         };
-        let order = self.order.borrow();
-        let new_tab = self
-            .new_tab
-            .compute_bounds(&self.body)
-            .map(|b| (b.y() as f64, (b.y() + b.height()) as f64))
-            .unwrap_or_default();
-        let saved_top = self
-            .head
-            .compute_bounds(&self.body)
-            .map(|b| (b.y() + b.height()) as f64)
-            .unwrap_or_default();
-        Layout {
-            saved: order.0.iter().filter_map(band).collect(),
-            today: order.1.iter().filter_map(band).collect(),
-            saved_top,
-            new_tab,
+        let (head_top, head_bottom) = bounds(self.head.upcast_ref()).unwrap_or_default();
+        let mut layout = sidedrop::Layout {
+            pins: head_top,
+            saved_top: head_bottom,
+            new_tab: bounds(self.new_tab.upcast_ref()).unwrap_or_default(),
+            gap: GAP,
+            ..Default::default()
+        };
+        for (saved, widget, line) in self.lines.borrow().iter() {
+            let Some((top, bottom)) = bounds(widget) else {
+                continue;
+            };
+            let line = Line {
+                top,
+                bottom,
+                ..line.clone()
+            };
+            if *saved {
+                layout.saved.push(line);
+            } else {
+                layout.today.push(line);
+            }
         }
+        layout
     }
 
-    fn landing(&self, y: f64) -> Landing {
+    /// Where the dragged tab would land with the pointer at `y`; `None`
+    /// over its own place, where nothing opens (Mac: `SavedDrop`).
+    fn target(&self, shell: &Shell, y: f64) -> Option<Target> {
         let dragged = self
             .dragging
             .borrow()
             .clone()
             .unwrap_or_else(|| TabId(String::new()));
-        dropzone::land(&self.layout(), y, &dragged)
+        let Target::Spot(spot) = sidedrop::target(&self.layout(), y as f32) else {
+            return Some(Target::Pins);
+        };
+        let all = groups::all(shell);
+        let b = shell.browser();
+        let row: Vec<(TabId, bool)> = b
+            .row(b.current_space_id())
+            .iter()
+            .map(|t| (t.id.clone(), t.saved))
+            .collect();
+        let group = b.tab(&dragged).and_then(|t| t.group.clone());
+        let in_folder = |t: &TabId, folder: &str| {
+            groups::in_folder(&all, b.tab(t).and_then(|t| t.group.as_deref()), folder)
+        };
+        let stays = sidedrop::stays(&spot, &dragged, group.as_deref(), &row, in_folder);
+        (!stays).then_some(Target::Spot(spot))
     }
 
-    fn show_marker(&self, landing: &Landing) {
-        if landing.stays {
+    fn show_marker(&self, target: Option<&Target>) {
+        // Over the favourites they show the drop themselves.
+        let Some(Target::Spot(spot)) = target else {
             self.hide_marker();
             return;
-        }
-        let armed = landing.saved && landing.empty && self.slot.reveals_child();
-        if armed {
+        };
+        if spot.saved && self.slot.reveals_child() {
             // The slot itself lights up; no line over it.
             self.slot.add_css_class("armed");
             self.marker.set_visible(false);
@@ -313,7 +363,9 @@ impl Column {
         }
         self.slot.remove_css_class("armed");
         self.marker
-            .set_margin_top((landing.line - 1.5).max(0.0).round() as i32);
+            .set_margin_top((spot.y - 1.5).max(0.0).round() as i32);
+        self.marker
+            .set_margin_start(spot.depth as i32 * FOLDER_STEP);
         self.marker.set_visible(true);
     }
 
@@ -327,7 +379,13 @@ impl Column {
     /// somewhere visible to drop it.
     pub fn drag_began(&self, id: &TabId) {
         self.dragging.replace(Some(id.clone()));
-        let empty = self.order.borrow().0.iter().all(|t| t == id);
+        // Nothing in Saved but this row (a folder's line counts).
+        let empty = self
+            .lines
+            .borrow()
+            .iter()
+            .filter(|(saved, _, _)| *saved)
+            .all(|(_, _, l)| matches!(&l.kind, Kind::Tab(t) if t == id));
         let shown = self.widget.get_visible();
         self.slot.set_reveal_child(empty && shown);
         let pinned = self.rows.borrow().get(id).is_some_and(|r| r.pin);
@@ -367,6 +425,7 @@ impl Column {
     pub fn rebuild_tabs(&self, shell: &Shell) {
         if !self.widget.get_visible() {
             self.rows.borrow_mut().clear();
+            self.lines.borrow_mut().clear();
             return;
         }
         let v = shell.visible();
@@ -388,22 +447,45 @@ impl Column {
             }
             rows.insert(t.id.clone(), row);
         }
-        for t in &v.saved {
-            let row = tab_row(shell, t);
-            self.saved.append(&row.root);
-            rows.insert(t.id.clone(), row);
+        let all = groups::all(shell);
+        let tint = Tint::of(shell.browser().current_space(), shell.is_dark());
+        let mut css = String::new();
+        let mut lines = Vec::new();
+        for (saved, block, views) in [
+            (true, &self.saved, &v.saved),
+            (false, &self.today, &v.today),
+        ] {
+            let filed: Vec<(&TabId, Option<&str>)> =
+                views.iter().map(|t| (&t.id, t.group.as_deref())).collect();
+            for (drawn, line) in plan_lines(&filed, &all) {
+                let widget: gtk::Widget = match &drawn {
+                    FolderRow::Head { hue, .. } => {
+                        let class = format!("f-{}", lines.len());
+                        if let Some(c) = folder_colour(hue.or(tint.hue), tint.dark) {
+                            css.push_str(&format!(
+                                ".folder-mark.{class} {{ color: {}; }}\n",
+                                c.hex()
+                            ));
+                        }
+                        folder_head(shell, &drawn, &class).upcast()
+                    }
+                    FolderRow::Tab { index, depth } => {
+                        let t = &views[*index];
+                        let row = tab_row(shell, t);
+                        row.root.set_margin_start(*depth as i32 * FOLDER_STEP);
+                        let w = row.root.clone().upcast();
+                        rows.insert(t.id.clone(), row);
+                        w
+                    }
+                };
+                block.append(&widget);
+                lines.push((saved, widget, line));
+            }
         }
+        self.folder_css.load_from_string(&css);
         self.rule.set_visible(!v.saved.is_empty());
-        for t in &v.today {
-            let row = tab_row(shell, t);
-            self.today.append(&row.root);
-            rows.insert(t.id.clone(), row);
-        }
         drop(rows);
-        self.order.replace((
-            v.saved.iter().map(|t| t.id.clone()).collect(),
-            v.today.iter().map(|t| t.id.clone()).collect(),
-        ));
+        self.lines.replace(lines);
         self.reveal_live(shell);
     }
 
@@ -464,6 +546,141 @@ fn clear(b: &gtk::Box) {
     while let Some(c) = b.first_child() {
         b.remove(&c);
     }
+}
+
+/// A block's lines: what to draw (`folders::plan`) and what a drag reads
+/// off it (`sidedrop::Line`; its place is filled in when the drag asks).
+/// `rows` are the block's tabs, in order, each with its folder's id.
+fn plan_lines(rows: &[(&TabId, Option<&str>)], groups: &[TabGroup]) -> Vec<(FolderRow, Line)> {
+    let filed: Vec<Option<&str>> = rows.iter().map(|r| r.1).collect();
+    // The folders open above the line, outermost first.
+    let mut open: Vec<String> = Vec::new();
+    folders::plan(&filed, groups)
+        .into_iter()
+        .map(|drawn| {
+            let (kind, depth, group) = match &drawn {
+                FolderRow::Head {
+                    id,
+                    depth,
+                    collapsed,
+                    ..
+                } => {
+                    open.truncate(*depth);
+                    let parent = open.last().cloned();
+                    open.push(id.clone());
+                    let kind = Kind::Folder {
+                        id: id.clone(),
+                        collapsed: *collapsed,
+                    };
+                    (kind, *depth, parent)
+                }
+                FolderRow::Tab { index, depth } => {
+                    let group = depth.checked_sub(1).and_then(|d| open.get(d)).cloned();
+                    (Kind::Tab(rows[*index].0.clone()), *depth, group)
+                }
+            };
+            let line = Line {
+                kind,
+                top: 0.0,
+                bottom: 0.0,
+                depth,
+                group,
+            };
+            (drawn, line)
+        })
+        .collect()
+}
+
+/// A folder's colour, or the space's when it has none (`GroupHead.colour`):
+/// deeper than the column either way round. `None`: grey, the muted ink.
+fn folder_colour(hue: Option<f64>, dark: bool) -> Option<Rgb> {
+    hue.map(|h| {
+        if dark {
+            Rgb::hsv(h, 0.52, 0.82)
+        } else {
+            Rgb::hsv(h, 0.82, 0.66)
+        }
+    })
+}
+
+/// A folder's line (`GroupHead`): a row like the tabs', the folder in the
+/// mark's place — shut or open, in its colour (`class`) — its name, and,
+/// under the pointer, how many tabs a shut one holds. A click (or Return,
+/// Space) opens or shuts it.
+fn folder_head(shell: &Shell, line: &FolderRow, class: &str) -> gtk::Box {
+    let root = tabs::focusable_button(gtk::Orientation::Horizontal, 9);
+    root.add_css_class("copper-row");
+    root.add_css_class("folder-head");
+    let FolderRow::Head {
+        id,
+        label,
+        depth,
+        count,
+        collapsed,
+        ..
+    } = line
+    else {
+        return root;
+    };
+    root.set_margin_start(*depth as i32 * FOLDER_STEP);
+    let mark = gtk::Image::from_icon_name(if *collapsed {
+        "folder-symbolic"
+    } else {
+        "folder-open-symbolic"
+    });
+    mark.set_pixel_size(16);
+    mark.add_css_class("folder-mark");
+    mark.add_css_class("muted");
+    mark.add_css_class(class);
+    root.append(&mark);
+    let title = gtk::Label::new(Some(label));
+    title.add_css_class("title");
+    title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    title.set_xalign(0.0);
+    title.set_hexpand(true);
+    title.set_width_chars(1);
+    title.set_max_width_chars(8);
+    root.append(&title);
+    if *collapsed && *count > 0 {
+        let n = gtk::Label::new(Some(&count.to_string()));
+        n.add_css_class("count");
+        n.add_css_class("faint");
+        root.append(&n);
+    }
+    let tabs = if *count == 1 { "tab" } else { "tabs" };
+    root.update_property(&[gtk::accessible::Property::Label(&format!(
+        "{label}, folder, {count} {tabs}"
+    ))]);
+    root.update_state(&[gtk::accessible::State::Expanded(Some(!*collapsed))]);
+    let toggle = {
+        let weak = shell.downgrade();
+        let id = id.clone();
+        move || {
+            let Some(s) = weak.upgrade() else { return };
+            let id = id.clone();
+            // Not now: this line is about to be rebuilt.
+            glib::idle_add_local_once(move || groups::toggle(&s, &id));
+        }
+    };
+    let click = gtk::GestureClick::new();
+    let t = toggle.clone();
+    click.connect_released(move |_, n, _, _| {
+        if n == 1 {
+            t();
+        }
+    });
+    root.add_controller(click);
+    let keys = gtk::EventControllerKey::new();
+    keys.connect_key_pressed(move |_, key, _, _| {
+        use gtk::gdk::Key;
+        if matches!(key, Key::Return | Key::KP_Enter | Key::space) {
+            toggle();
+            return glib::Propagation::Stop;
+        }
+        glib::Propagation::Proceed
+    });
+    root.add_controller(keys);
+    root
 }
 
 /// A row: mark, title, a quiet badge, the cross under the pointer.
@@ -677,4 +894,77 @@ fn new_tab_row(shell: &Shell) -> gtk::Box {
     // A tab dropped on it lands through the column's own target: its upper
     // half ends Saved, its lower half starts Today.
     root
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn g(id: &str, name: &str, collapsed: bool) -> TabGroup {
+        TabGroup {
+            id: id.into(),
+            name: name.into(),
+            collapsed,
+            ..Default::default()
+        }
+    }
+
+    fn drawn(lines: &[(FolderRow, Line)]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|(_, l)| {
+                let what = match &l.kind {
+                    Kind::Tab(t) => t.0.clone(),
+                    Kind::Folder { id, collapsed } => {
+                        format!("[{id}{}]", if *collapsed { " shut" } else { "" })
+                    }
+                };
+                format!("{}:{what} in {:?}", l.depth, l.group.as_deref())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_blocks_plan_becomes_lines_a_drag_reads() {
+        // Mac-synced: Work holds Work › Docs; Misc is shut.
+        let groups = [
+            g("W", "Work", false),
+            g("D", "Work › Docs", false),
+            g("M", "Misc", true),
+        ];
+        let (a, b, c, d, e) = (
+            TabId("a".into()),
+            TabId("b".into()),
+            TabId("c".into()),
+            TabId("d".into()),
+            TabId("e".into()),
+        );
+        let rows = [
+            (&a, None),
+            (&b, Some("d")),
+            (&c, Some("W")),
+            (&d, Some("M")),
+            (&e, None),
+        ];
+        let lines = plan_lines(&rows, &groups);
+        assert_eq!(
+            drawn(&lines),
+            [
+                "0:a in None",
+                "0:[W] in None",
+                "1:[D] in Some(\"W\")",
+                "2:b in Some(\"D\")",
+                "1:c in Some(\"W\")",
+                // Shut: its line, not its tab.
+                "0:[M shut] in None",
+                "0:e in None",
+            ]
+        );
+        // Each line keeps what the column draws for it.
+        assert!(matches!(
+            &lines[2].0,
+            FolderRow::Head { label, count: 1, .. } if label == "Docs"
+        ));
+        assert!(matches!(lines[3].0, FolderRow::Tab { index: 1, depth: 2 }));
+    }
 }
