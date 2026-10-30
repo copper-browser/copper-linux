@@ -5,6 +5,10 @@ release dates.
 
 ## Unreleased
 
+## 0.6.1 — 2026-10-30
+
+The Mac's keys and small touches: fold the column, stop sound, print, full screen, space keys, Recently Closed, the Clear seam, camera choices remembered.
+
 ### Added
 
 - **The Mac's and Windows' missing keys.** `Ctrl+S` hides or shows the
