@@ -227,21 +227,22 @@ pub fn register_core(shell: &Shell) {
     register_action(shell, "undo-clear", &[], |s| {
         s.undo_clear();
     });
+    register_action(shell, "next-tab", &["<Control>Page_Down"], |s| {
+        s.cycle_tab(true)
+    });
+    register_action(shell, "previous-tab", &["<Control>Page_Up"], |s| {
+        s.cycle_tab(false)
+    });
+    // Ctrl+Tab follows Settings › Tabs (the row, or most recent); the
+    // window ends a most-recent walk when Ctrl is let go (window/mod.rs).
+    register_action(shell, "switch-tab", &["<Control>Tab"], |s| {
+        s.switch_tab(true)
+    });
     register_action(
         shell,
-        "next-tab",
-        &["<Control>Tab", "<Control>Page_Down"],
-        |s| s.cycle_tab(true),
-    );
-    register_action(
-        shell,
-        "previous-tab",
-        &[
-            "<Control><Shift>Tab",
-            "<Control><Shift>ISO_Left_Tab",
-            "<Control>Page_Up",
-        ],
-        |s| s.cycle_tab(false),
+        "switch-tab-back",
+        &["<Control><Shift>Tab", "<Control><Shift>ISO_Left_Tab"],
+        |s| s.switch_tab(false),
     );
     for n in 1..=9u32 {
         let accel = format!("<Control>{n}");

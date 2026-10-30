@@ -5,6 +5,24 @@ release dates.
 
 ## Unreleased
 
+### Added
+
+- **Ctrl+Tab in most-recent order works.** With Settings › Tabs ›
+  Ctrl+Tab switches to › "The tab you were on before", Ctrl+Tab goes to
+  the tab you used last; keep Ctrl held and each Tab goes one further back,
+  and the order only changes when you let go, as on the Mac. Ctrl+Page
+  Up/Down still walk the row. (shell-core `recent.rs`, `Shell::switch_tab`,
+  `tab_cycle_ended`; `window/mod.rs`, `actions.rs`.)
+- **Archive Today after 12h / 24h / 48h / Never** (Settings › Tabs › Tabs
+  you leave). Today rows nobody has looked at for that long close
+  themselves and wait in Reopen Closed Tab — never the tab on screen, a
+  pin, a Saved row or a canvas. Swept at launch, every half hour, and when
+  you switch to a space. Same setting as the Mac's, synced by Copper Cloud.
+  (shell-core `archive.rs`, `Shell::archive_today`.)
+- **Zoom is remembered per site.** Ctrl+= on a site, and its pages open at
+  that size from then on; Ctrl+0 forgets it. Kept as the Mac keeps it
+  (`zoom.<host>`), never from a private tab. (`Shell::zoom`, `pages.rs`.)
+
 ## 0.5.2 — 2026-10-30
 
 Settings has the Mac's pages, in the Mac's order, and is shorter.

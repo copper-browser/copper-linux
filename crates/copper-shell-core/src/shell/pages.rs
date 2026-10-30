@@ -490,6 +490,18 @@ impl<P: Platform> Shell<P> {
                 // a wake cover comes off once it has had time to paint.
                 slot.capture.set(false);
                 self.uncover(id, crate::cover::AFTER_COMMIT);
+                // Whatever you last set this site to, before it draws a
+                // frame at the wrong size (Mac `applyRememberedZoom`).
+                let host = url
+                    .clone()
+                    .or_else(|| self.browser().tab(id).map(|t| t.url.clone()))
+                    .and_then(|u| super::zoom_host(&u));
+                if let Some(host) = host {
+                    let kept = self.settings().zoom_for(&host);
+                    if (kept - slot.page.zoom()).abs() > 0.004 {
+                        slot.page.set_zoom(kept);
+                    }
+                }
                 if let Some(url) = url
                     && !slot.private
                 {

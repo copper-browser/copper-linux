@@ -190,7 +190,7 @@ column or a row), `glyph`, `tabs.switching`, `tabs.sleep`, `spaces.swipe`,
 `shield`, `autocorrect` and `sections.archive`.
 
 **Settings that never sync:** passwords and passkeys, the downloads folder,
-the sidebar width, everything in `agent.json`, model keys, Bitwarden and
+the sidebar width, the zoom kept for each site (`zoom.<host>`), everything in `agent.json`, model keys, Bitwarden and
 1Password, and extensions.
 
 **Passwords never sync through Copper Cloud.** On Linux they stay in your
