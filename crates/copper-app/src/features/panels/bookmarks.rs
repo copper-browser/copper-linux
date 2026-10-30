@@ -1,4 +1,4 @@
-//! Bookmarks (Ctrl+Shift+O; Mac: `Bookmarks.swift` `BookmarksPanel`): the
+//! Bookmarks (Mac: `Bookmarks.swift` `BookmarksPanel`): the
 //! whole tree, folders opening in place, searchable by title or address;
 //! a line can go. Ctrl+D keeps the page in front (Mac ⇧⌘B,
 //! `bookmarkCurrent`).

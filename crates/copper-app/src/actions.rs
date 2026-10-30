@@ -245,13 +245,18 @@ pub fn register_core(shell: &Shell) {
         |s| s.switch_tab(false),
     );
     for n in 1..=9u32 {
-        let accel = format!("<Control>{n}");
-        let alt = format!("<Alt>{n}");
         register_action(
             shell,
             &format!("select-tab-{n}"),
-            &[&accel, &alt],
+            &[&format!("<Control>{n}")],
             move |s| s.select_nth(if n == 9 { None } else { Some(n as usize - 1) }),
+        );
+        // The Mac's ⌃1…⌃9 (Alt, as on Windows: Ctrl+Alt is AltGr).
+        register_action(
+            shell,
+            &format!("space-{n}"),
+            &[&format!("<Alt>{n}")],
+            move |s| s.switch_space_nth(n as usize - 1),
         );
     }
     register_action(shell, "pin-tab", &["<Control><Shift>d"], |s| {
@@ -278,6 +283,10 @@ pub fn register_core(shell: &Shell) {
         |s| s.hard_reload_active(),
     );
     register_action(shell, "stop", &[], |s| s.stop_active());
+    register_action(shell, "pause-media", &["<Control><Shift>m"], |s| {
+        s.pause_media()
+    });
+    register_action(shell, "print", &["<Control>p"], print);
     register_action(shell, "back", &["<Control>bracketleft", "<Alt>Left"], |s| {
         s.back()
     });
@@ -322,7 +331,12 @@ pub fn register_core(shell: &Shell) {
     register_action(shell, "previous-space", &["<Control><Alt>Left"], |s| {
         s.cycle_space(false)
     });
-    register_action(shell, "new-space", &[], crate::spaces::ui::new_space);
+    register_action(
+        shell,
+        "new-space",
+        &["<Alt>n"],
+        crate::spaces::ui::new_space,
+    );
     register_action(shell, "edit-space", &[], |s| {
         let id = s.browser().current_space_id().to_string();
         crate::spaces::ui::edit_space(s, &id);
@@ -340,6 +354,12 @@ pub fn register_core(shell: &Shell) {
         };
         s.set_tabs_position(next);
     });
+    register_action(shell, "toggle-sidebar", &["<Control>s"], |s| {
+        if s.tabs_position() == TabsPosition::Left {
+            s.ui().toggle_fold(s);
+        }
+    });
+    register_action(shell, "fullscreen", &["F11"], toggle_fullscreen);
     register_action(
         shell,
         "settings",
@@ -533,6 +553,17 @@ pub fn register_core(shell: &Shell) {
         )
         .shortcut("Ctrl+Shift+R")
         .when(|s| s.active_page().is_some()),
+        Command::new(
+            "pause-media",
+            "Stop Sound in Tab",
+            "audio-volume-muted-symbolic",
+            |s| s.pause_media(),
+        )
+        .shortcut("Ctrl+Shift+M")
+        .when(|s| s.active_page().is_some()),
+        Command::new("print", "Print…", "printer-symbolic", print)
+            .shortcut("Ctrl+P")
+            .when(|s| s.active_page().is_some()),
         Command::new("copy-address", "Copy Address", "edit-copy-symbolic", |s| {
             if let Some(t) = s.browser().active() {
                 s.window().clipboard().set_text(&t.url);
@@ -542,7 +573,8 @@ pub fn register_core(shell: &Shell) {
         .when(|s| s.active_id().is_some()),
         Command::new("new-space", "New Space", "list-add-symbolic", |s| {
             crate::spaces::ui::new_space(s)
-        }),
+        })
+        .shortcut("Alt+N"),
         Command::new("edit-space", "Edit Space", "document-edit-symbolic", |s| {
             let id = s.browser().current_space_id().to_string();
             crate::spaces::ui::edit_space(s, &id);
@@ -584,6 +616,21 @@ pub fn register_core(shell: &Shell) {
         )
         .shortcut("Ctrl+Shift+S"),
         Command::new(
+            "toggle-sidebar",
+            "Hide or Show Sidebar",
+            "sidebar-show-symbolic",
+            |s| s.ui().toggle_fold(s),
+        )
+        .shortcut("Ctrl+S")
+        .when(|s| s.tabs_position() == TabsPosition::Left),
+        Command::new(
+            "fullscreen",
+            "Enter or Exit Full Screen",
+            "view-fullscreen-symbolic",
+            toggle_fullscreen,
+        )
+        .shortcut("F11"),
+        Command::new(
             "look-light",
             "Light Appearance",
             "weather-clear-symbolic",
@@ -622,6 +669,23 @@ pub fn register_core(shell: &Shell) {
     }
 }
 
+/// Ctrl+P: the page's print dialog.
+fn print(s: &Shell) {
+    if let Some(p) = s.active_page() {
+        p.print(Some(s.window().upcast_ref()));
+    }
+}
+
+/// F11: the window takes the screen, or gives it back.
+fn toggle_fullscreen(s: &Shell) {
+    let w = s.window();
+    if w.is_fullscreen() {
+        w.unfullscreen();
+    } else {
+        w.fullscreen();
+    }
+}
+
 fn layout_name(p: TabsPosition) -> &'static str {
     match p {
         TabsPosition::Left => "left",
@@ -635,17 +699,23 @@ pub fn space_commands(shell: &Shell) -> Vec<Command> {
     let b = shell.browser();
     let current = b.current_space_id().to_string();
     b.spaces()
-        .filter(|sp| sp.id != current)
-        .map(|sp| {
+        .enumerate()
+        .filter(|(_, sp)| sp.id != current)
+        .map(|(i, sp)| {
             let id = sp.id.clone();
-            Command::new(
+            let c = Command::new(
                 &format!("space-{}", sp.id),
                 &format!("Switch to {}", sp.name),
                 "view-grid-symbolic",
                 move |s| {
                     s.switch_space(&id);
                 },
-            )
+            );
+            if i < 9 {
+                c.shortcut(&format!("Alt+{}", i + 1))
+            } else {
+                c
+            }
         })
         .collect()
 }

@@ -20,6 +20,9 @@ pub enum Action {
     Switch(TabId),
     /// Run this command.
     Command(String),
+    /// Bring back the closed tab at this index of
+    /// [`copper_core::Browser::closed_tabs`].
+    Reopen(usize),
 }
 
 /// What a row is, for its mark.
@@ -39,6 +42,7 @@ pub enum Kind {
 /// open, the places you have been, your bookmarks, the browser's commands
 /// (`Ctrl+K` only), and last what Return does with the text itself (the
 /// search, or the address typed). Tab and Shift-Tab move between them.
+/// `Closed` is the empty `Ctrl+T`'s only group (Mac `Launcher.resting`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Section {
     Tabs,
@@ -46,6 +50,7 @@ pub enum Section {
     Bookmarks,
     Commands,
     Search,
+    Closed,
 }
 
 impl Section {
@@ -58,6 +63,7 @@ impl Section {
             Section::Commands => "Commands",
             Section::Search if first == Kind::Address => "Go To",
             Section::Search => "Search",
+            Section::Closed => "Recently Closed",
         }
     }
 }
@@ -140,11 +146,17 @@ pub struct Inputs<'a> {
     pub commands: Vec<CommandRow>,
     /// Empty field in the palette: every open tab.
     pub open: Vec<OpenRow>,
+    /// Tabs closed this session as `(title, url)`, oldest first
+    /// ([`copper_core::Browser::closed_tabs`] order).
+    pub closed: Vec<(String, String)>,
 }
 
 /// How many open tabs the palette lists for an empty field (Mac:
 /// `CommandBar.limit`).
 pub const LIMIT: usize = 8;
+
+/// How many closed tabs the empty `Ctrl+T` offers (Mac: `Launcher.Cap.closed`).
+pub const CLOSED: usize = 2;
 
 /// How many rows each group may bring, so the card stays something you
 /// glance at.
@@ -181,6 +193,7 @@ impl Caps {
             Section::Bookmarks => self.bookmarks,
             Section::Commands => self.commands,
             Section::Search => 1,
+            Section::Closed => CLOSED,
         }
     }
 }
@@ -203,6 +216,9 @@ pub fn rows(purpose: Purpose, inputs: &Inputs<'_>) -> Vec<Row> {
 pub fn offers(purpose: Purpose, inputs: &Inputs<'_>) -> Offers {
     let typed = inputs.typed.trim();
     if typed.is_empty() {
+        if purpose == Purpose::Launch {
+            return closed_offers(&inputs.closed);
+        }
         if purpose != Purpose::Palette {
             return Offers::default();
         }
@@ -307,6 +323,37 @@ pub fn offers(purpose: Purpose, inputs: &Inputs<'_>) -> Offers {
         out.push(row);
     }
     Offers { rows: out, default }
+}
+
+/// The empty `Ctrl+T`: the tabs you closed, newest first, a Return away.
+fn closed_offers(closed: &[(String, String)]) -> Offers {
+    let rows: Vec<Row> = closed
+        .iter()
+        .enumerate()
+        .rev()
+        .take(CLOSED)
+        .map(|(i, (title, url))| {
+            let place = address::pretty_str(url);
+            let label = if title.trim().is_empty() {
+                place.clone()
+            } else {
+                title.clone()
+            };
+            Row {
+                kind: Kind::Command,
+                title: format!("Reopen \u{201C}{label}\u{201D}"),
+                // The address, unless the title already says it.
+                detail: if label == place { String::new() } else { place },
+                hint: "Reopen".into(),
+                action: Action::Reopen(i),
+                url: None,
+                icon: Some("edit-undo-symbolic".into()),
+                section: Some(Section::Closed),
+            }
+        })
+        .collect();
+    let default = (!rows.is_empty()).then_some(0);
+    Offers { rows, default }
 }
 
 /// A row's identity for folding duplicates: its address, else its title.
@@ -629,6 +676,38 @@ mod tests {
 
     fn rows_empty_for_launch() -> bool {
         rows(Purpose::Launch, &Inputs::default()).is_empty()
+    }
+
+    #[test]
+    fn empty_launch_offers_the_two_newest_closed_tabs() {
+        let inputs = Inputs {
+            closed: vec![
+                ("Old".into(), "https://old.com/".into()),
+                ("Newer".into(), "https://newer.com/".into()),
+                (String::new(), "https://newest.com/".into()),
+            ],
+            ..Default::default()
+        };
+        let o = offers(Purpose::Launch, &inputs);
+        let titles: Vec<&str> = o.rows.iter().map(|r| r.title.as_str()).collect();
+        assert_eq!(
+            titles,
+            [
+                "Reopen \u{201C}newest.com\u{201D}",
+                "Reopen \u{201C}Newer\u{201D}"
+            ]
+        );
+        assert_eq!(o.rows[0].detail, "");
+        assert_eq!(o.rows[1].detail, "newer.com");
+        assert_eq!(o.rows[0].action, Action::Reopen(2));
+        assert_eq!(o.rows[1].action, Action::Reopen(1));
+        assert_eq!(
+            o.rows[0].section.unwrap().title(Kind::Command),
+            "Recently Closed"
+        );
+        assert_eq!(o.default, Some(0));
+        // Typing leaves them for the usual groups; Edit never has them.
+        assert!(rows(Purpose::Edit, &inputs).is_empty());
     }
 
     fn open_tab(title: &str, url: &str, id: &TabId) -> Suggestion {

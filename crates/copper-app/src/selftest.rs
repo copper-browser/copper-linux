@@ -377,6 +377,37 @@ async fn fresh(run: &Run) {
     run.shot("03-card-launch").await;
     s.ui().card.close(s);
 
+    // Ctrl+T with nothing typed: Recently Closed, Return reopens.
+    let gone = run.open("/design", false);
+    s.close(&gone);
+    s.ui().card.open(s, Mode::Launch);
+    run.shot("03-card-closed").await;
+    s.ui().card_text().emit_by_name::<()>("activate", &[]);
+    let back = s.active_id();
+    run.check(
+        back.as_ref()
+            .and_then(|id| s.browser().tab(id).map(|t| t.url.clone()))
+            == Some(run.url("/design")),
+        "Ctrl+T's Recently Closed reopens the tab",
+    );
+    if let Some(id) = back {
+        s.close(&id);
+    }
+    s.select(&notes);
+
+    // Ctrl+S: the column goes and comes back with its rows.
+    s.ui().toggle_fold(s);
+    run.check(
+        !s.ui().column.widget.is_visible(),
+        "Ctrl+S hides the column",
+    );
+    run.shot("03-folded").await;
+    s.ui().toggle_fold(s);
+    run.check(
+        s.ui().column.widget.is_visible() && s.ui().column.pin(&s.browser().pins()[0].id).is_some(),
+        "Ctrl+S again shows it, drawn",
+    );
+
     // Ctrl+K: open tabs, then commands; Return switches.
     s.ui().card.open(s, Mode::Palette);
     run.shot("04-palette").await;

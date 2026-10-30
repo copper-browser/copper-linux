@@ -131,9 +131,10 @@ to bookmark, Alt+← to go back, F5 to reload), Copper uses that key.
 | | |
 |---|---|
 | `Ctrl+L` (or `Alt+D`, `F6`) address · `Ctrl+K` tabs and commands · `Ctrl+T` new tab · `Ctrl+W` close (a Saved tab sleeps) · `Ctrl+Shift+T` reopen | `Alt+←` `Alt+→` (or `Ctrl+[` `Ctrl+]`) back, forward · `Ctrl+Tab` `Ctrl+Shift+Tab` next, previous tab · `Ctrl+1`–`Ctrl+9` jump |
-| `Ctrl+Shift+N` private tab · `Ctrl+Shift+D` pin · `Ctrl+Shift+S` tabs in a column or a row | `Ctrl+R` reload · `Ctrl+Shift+R` hard reload · `Ctrl+Shift+I` (or `F12`) inspector |
-| `Ctrl+F` find · `Ctrl+G` `Ctrl+Shift+G` next, previous match · `Ctrl+=` `Ctrl+-` `Ctrl+0` zoom | `Ctrl+Alt+R` reading mode · `Ctrl+Shift+H` hide something |
-| `Ctrl+D` bookmark · `Ctrl+Shift+O` bookmarks · `Ctrl+Y` history · `Ctrl+Shift+Y` downloads | `Ctrl+Alt+←` `Ctrl+Alt+→` previous, next space · `Ctrl+Shift+E` new canvas · `Ctrl+E` Agent sidebar · `Ctrl+,` settings · `Ctrl+Q` quit |
+| `Ctrl+Shift+N` private tab · `Ctrl+Shift+D` pin · `Ctrl+Shift+S` tabs in a column or a row · `Ctrl+S` hide or show the column · `F11` full screen | `Ctrl+R` reload · `Ctrl+Shift+R` hard reload · `Ctrl+Shift+I` (or `F12`) inspector · `Ctrl+P` print · `Ctrl+Shift+M` stop sound |
+| `Ctrl+F` find · `Ctrl+G` `Ctrl+Shift+G` next, previous match · `Ctrl+=` `Ctrl+-` `Ctrl+0` zoom | `Ctrl+Alt+R` reading mode · `Ctrl+Shift+H` hide something · `Ctrl+Shift+U` hidden on this site · `Ctrl+Shift+K` clear tabs |
+| `Ctrl+D` bookmark · `Ctrl+Y` history · `Ctrl+Shift+Y` downloads | `Alt+1`–`Alt+9` jump to a space · `Alt+N` new space · `Ctrl+Alt+←` `Ctrl+Alt+→` previous, next space |
+| `Ctrl+Shift+E` new canvas · `Ctrl+Shift+O` your Personal canvas | `Ctrl+E` Agent sidebar · `Ctrl+,` settings · `Ctrl+Q` quit |
 
 ## Known gaps
 

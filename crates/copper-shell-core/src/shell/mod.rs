@@ -758,6 +758,11 @@ impl<P: Platform> Shell<P> {
         id
     }
 
+    /// The closed tab at `index` of `closed_tabs` (Recently Closed).
+    pub fn reopen_at(&self, index: usize) -> Option<TabId> {
+        self.with_browser(|b| b.reopen_closed_at(index))
+    }
+
     pub fn pin(&self, id: &TabId) -> bool {
         self.with_browser(|b| b.pin(id, None))
     }
@@ -961,6 +966,20 @@ impl<P: Platform> Shell<P> {
         if let Some(p) = self.active_page() {
             p.stop();
         }
+    }
+
+    /// ⇧⌘M (Mac `Browser.pauseMedia`): whatever is playing in this tab
+    /// stops — its own frames and any it can reach.
+    pub fn pause_media(&self) {
+        const PAUSE: &str = "(() => { const all = (d) => { for (const m of d.querySelectorAll('video, audio')) { try { m.pause(); } catch (_) {} } for (const f of d.querySelectorAll('iframe')) { try { if (f.contentDocument) all(f.contentDocument); } catch (_) {} } }; all(document); })()";
+        let Some(page) = self.active_page() else {
+            return;
+        };
+        let done = page.eval(PAUSE, &copper_engine::World::isolated("copper-media"));
+        P::Loop::spawn_local(async move {
+            let _ = done.await;
+        });
+        self.toast("Paused");
     }
 
     /// Zoom the selected page one step (`Some(true)` in, `Some(false)`

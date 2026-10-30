@@ -45,6 +45,8 @@ pub struct Ui {
     tint: gtk::CssProvider,
     tint_key: RefCell<String>,
     layout: Cell<TabsPosition>,
+    /// Ctrl+S put the column away (this session only, like the Mac's fold).
+    folded: Cell<bool>,
 }
 
 impl Ui {
@@ -125,6 +127,7 @@ impl Ui {
             tint,
             tint_key: RefCell::default(),
             layout: Cell::new(TabsPosition::Left),
+            folded: Cell::new(false),
         }
     }
 
@@ -144,10 +147,19 @@ impl Ui {
     pub fn set_layout(&self, shell: &Shell, p: TabsPosition) {
         self.layout.set(p);
         let left = p == TabsPosition::Left;
-        self.column.widget.set_visible(left);
+        self.column.widget.set_visible(left && !self.folded.get());
         self.header.widget.set_visible(left);
         self.topbar.widget.set_visible(!left);
         let _ = shell;
+    }
+
+    /// Ctrl+S (Mac ⌘S `toggleFold`): the column goes, the page takes its room;
+    /// again, it comes back. The field stays over the page.
+    pub fn toggle_fold(&self, shell: &Shell) {
+        self.folded.set(!self.folded.get());
+        self.set_layout(shell, self.layout.get());
+        // A hidden column draws nothing: catch up now it shows.
+        self.column.rebuild_tabs(shell);
     }
 
     pub fn layout(&self) -> TabsPosition {
@@ -256,10 +268,15 @@ impl Ui {
         self.stage.find.text()
     }
 
-    /// One quiet line at the foot of the window.
+    /// One quiet line at the foot of the window, for as long as it takes
+    /// to read (1.7–6 s, [`copper_shell_core::view::toast_time`]).
     pub fn toast(&self, text: &str) {
         let t = adw::Toast::new(text);
-        t.set_timeout(2);
+        // adw counts whole seconds (and starts them when a queued toast shows).
+        let secs = copper_shell_core::view::toast_time(text)
+            .as_secs_f64()
+            .round();
+        t.set_timeout(secs as u32);
         self.toasts.add_toast(t);
     }
 

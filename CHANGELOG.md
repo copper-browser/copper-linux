@@ -5,6 +5,36 @@ release dates.
 
 ## Unreleased
 
+### Added
+
+- **The Mac's and Windows' missing keys.** `Ctrl+S` hides or shows the
+  column (for this session; the field stays over the page), `Ctrl+Shift+M`
+  stops the sound in the tab, `Ctrl+Shift+U` opens Hidden on This Site,
+  `Ctrl+P` prints, `F11` is full screen, `Alt+1`–`Alt+9` jump to a space and
+  `Alt+N` makes one, and `Ctrl+Shift+O` opens your Personal canvas, as on
+  Windows. Each shows its key in Ctrl+K, and "Switch to …" rows show their
+  space's `Alt` digit. (`actions.rs`, `canvas/mod.rs`, `features/curtain.rs`.)
+- **Recently Closed in the empty Ctrl+T.** The two tabs closed last, newest
+  first; Return brings the first back where it was
+  (`copper_shell_core::palette::complete`, `Browser::reopen_closed_at`).
+- **"↓ Clear" on the seam (Copper#96).** Hovering the hairline between
+  Saved and Today shows a small round button at its end that clears the
+  space's loose tabs; at rest it is the plain hairline, same height.
+- **Camera and microphone answers are remembered per site**, as on the Mac:
+  a site you allowed or refused is not asked again (never in a private
+  tab). Settings › Privacy › Permissions › Camera and microphone has
+  **Forget choices** (`copper_shell_core::permit`, the same `capture.` keys
+  as Copper for Windows).
+
+### Changed
+
+- **`Alt+1`–`Alt+9` pick a space, not a tab** (`Ctrl+1`–`Ctrl+9` still pick
+  tabs), and **`Ctrl+Shift+O` is the Personal canvas**: Bookmarks is in
+  Ctrl+K, as on the Mac and Windows.
+- **Toasts stay as long as they take to read**: 2–6 s by their length (the
+  Mac's 1.7–6 s rule, `copper_shell_core::view::toast_time`, in whole
+  seconds), instead of always 2 s.
+
 ## 0.6.0 — 2026-10-30
 
 Catching up with the Mac: folders in the column, Ctrl+Tab in most-recent order, Archive Today, Settings › Intelligence, two-step codes that fill themselves, Jev's Fast mode, and Clear History that reaches Copper Cloud.

@@ -378,6 +378,11 @@ impl WebKitPage {
         })
     }
 
+    /// The print dialog for this page, over `parent` (Ctrl+P).
+    pub fn print(&self, parent: Option<&gtk4::Window>) {
+        webkit6::PrintOperation::new(&self.inner.view).run_dialog(parent);
+    }
+
     /// The profile this page belongs to.
     pub fn profile(&self) -> &WebKitProfile {
         &self.inner.profile

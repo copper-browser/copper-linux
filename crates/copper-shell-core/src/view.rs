@@ -9,6 +9,7 @@
 
 use std::path::Path;
 use std::rc::Rc;
+use std::time::Duration;
 
 use copper_core::TabId;
 use copper_core::settings::{Look, TabsPosition};
@@ -132,7 +133,7 @@ pub trait ShellView<P: Platform>: 'static {
     fn apply_look(&self, look: Look);
     /// The window is dark right now.
     fn is_dark(&self) -> bool;
-    /// One short line at the foot of the window.
+    /// One short line at the foot of the window, for [`toast_time`].
     fn toast(&self, text: &str);
     /// Ask `question`; `answer` gets `true` for allow. Never called back
     /// re-entrantly from inside `ask`.
@@ -165,4 +166,22 @@ pub trait ShellView<P: Platform>: 'static {
     fn decode_icon(&self, png: &[u8]) -> Option<P::Icon>;
     /// A favicon kept on disk; `None` when it is missing or unreadable.
     fn load_icon(&self, path: &Path) -> Option<P::Icon>;
+}
+
+/// How long a toast stays: long enough to read, 1.7–6 s by its length
+/// (Mac `Fork/Announcements.swift`).
+pub fn toast_time(text: &str) -> Duration {
+    Duration::from_secs_f64((text.chars().count() as f64 / 15.0).clamp(1.7, 6.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reading_time_is_bounded() {
+        assert_eq!(toast_time("Paused"), Duration::from_secs_f64(1.7));
+        assert_eq!(toast_time(&"x".repeat(45)), Duration::from_secs_f64(3.0));
+        assert_eq!(toast_time(&"x".repeat(400)), Duration::from_secs_f64(6.0));
+    }
 }

@@ -47,6 +47,7 @@ pub mod forms;
 pub mod main_loop;
 pub mod options;
 pub mod palette;
+pub mod permit;
 pub mod private;
 pub mod recent;
 pub mod session;

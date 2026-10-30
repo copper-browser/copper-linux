@@ -1,6 +1,7 @@
 //! Settings › Privacy (Mac: `Settings.swift` `privacy`,
 //! `Fork/PrivacySettings.swift`): the ad blocker (everywhere, and for the
-//! site in front), and clearing browsing data — history and sign-ins ask
+//! site in front), the camera and microphone answers sites were given, and
+//! clearing browsing data — history and sign-ins ask
 //! first; the cache is harmless and goes at once. Cookies and caches go
 //! from every jar: the shared one and each space profile's.
 
@@ -62,6 +63,22 @@ pub fn page(shell: &Shell) -> adw::PreferencesPage {
         blocker.add(&r);
     }
     page.add(&blocker);
+
+    let permissions = group(Some("Permissions"));
+    let capture = line(
+        "Camera and microphone",
+        "What each site was allowed or refused",
+    );
+    let b = button("Forget choices", false);
+    let weak = shell.downgrade();
+    b.connect_clicked(move |_| {
+        if let Some(s) = weak.upgrade() {
+            s.forget_capture_choices();
+        }
+    });
+    capture.add_suffix(&b);
+    permissions.add(&capture);
+    page.add(&permissions);
 
     let clear = group(Some("Clear browsing data"));
     let history = line("History", "Every address you have been to");

@@ -1,5 +1,5 @@
-//! The side panels: History (Ctrl+Y), Bookmarks (Ctrl+Shift+O; Ctrl+D keeps
-//! the page in front), Downloads (Ctrl+Shift+Y). Each is searchable where
+//! The side panels: History (Ctrl+Y), Bookmarks (from Ctrl+K, as on the Mac
+//! and Windows; Ctrl+D keeps the page in front), Downloads (Ctrl+Shift+Y). Each is searchable where
 //! the Mac's is, built once, and redrawn whenever it comes on screen.
 
 pub mod bookmarks;
@@ -50,9 +50,8 @@ pub fn register(shell: &Shell) {
     register_action(shell, "show-history", &["<Control>y"], |s| {
         toggle(s, "history")
     });
-    register_action(shell, "show-bookmarks", &["<Control><Shift>o"], |s| {
-        toggle(s, "bookmarks")
-    });
+    // Ctrl+Shift+O is the Personal canvas (Mac ⇧⌘O), as on Windows.
+    register_action(shell, "show-bookmarks", &[], |s| toggle(s, "bookmarks"));
     register_action(shell, "show-downloads", &["<Control><Shift>y"], |s| {
         toggle(s, "downloads")
     });
@@ -80,12 +79,6 @@ pub fn register(shell: &Shell) {
             "History",
             "document-open-recent-symbolic",
             "Ctrl+Y",
-        ),
-        (
-            "bookmarks",
-            "Bookmarks",
-            "user-bookmarks-symbolic",
-            "Ctrl+Shift+O",
         ),
         (
             "downloads",
