@@ -31,6 +31,8 @@ use serde_json::{Map, Value, json};
 
 use crate::host::IntelligenceSource;
 
+pub mod check;
+
 /// Where the model comes from.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Lane {

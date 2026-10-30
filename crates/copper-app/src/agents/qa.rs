@@ -7,7 +7,8 @@
 //!   first three.
 //! * `COPPER_SELFTEST=agents` (out dir `COPPER_SELFTEST_OUT`, default
 //!   `/tmp/copper-agents-selftest`) — Settings › Agents (light, dark, a busy
-//!   port), the switch starting and stopping the listener, token rotation,
+//!   port), Add key opening Settings › Intelligence (Check, the Jev key
+//!   saved), the switch starting and stopping the listener, token rotation,
 //!   and the capsule / tab square / Stop; screenshots, PASS/FAIL lines,
 //!   then quit (exit 1 on a failure).
 
@@ -170,6 +171,26 @@ mod debug {
         }
     }
 
+    /// Text boxes whose placeholder is `hint`.
+    fn entries(w: &gtk::Widget, hint: &str, out: &mut Vec<gtk::Editable>) {
+        let shown = w.find_property("placeholder-text").and_then(|_| {
+            w.property_value("placeholder-text")
+                .get::<Option<String>>()
+                .ok()
+                .flatten()
+        });
+        if shown.as_deref() == Some(hint)
+            && let Ok(e) = w.clone().downcast::<gtk::Editable>()
+        {
+            out.push(e);
+        }
+        let mut c = w.first_child();
+        while let Some(child) = c {
+            entries(&child, hint, out);
+            c = child.next_sibling();
+        }
+    }
+
     fn scroll_to_end(w: &gtk::Widget) {
         let mut all = Vec::new();
         scrollers(w, &mut all);
@@ -312,6 +333,69 @@ mod debug {
             "Copy config and Copy stdio config put the HTTP and stdio configs on the clipboard",
         );
         d.close();
+
+        // Jev on with no key: Agents points to Intelligence, whose Check
+        // says where a key comes from without asking anyone; a key typed
+        // there lands in intelligence.json (0600) and the pointer goes.
+        a.set_jev(true);
+        let d = super::super::settings::present(s);
+        glib::timeout_future(Duration::from_millis(300)).await;
+        scroll_to_end(d.upcast_ref());
+        run.shot("agents-settings-jev").await;
+        let mut add = Vec::new();
+        buttons(d.upcast_ref(), "Add key", &mut add);
+        if let Some(b) = add.first() {
+            b.emit_clicked();
+        }
+        run.check(
+            d.visible_page_name().as_deref() == Some("intelligence"),
+            "Agents › Jev key › Add key opens Intelligence",
+        );
+        let mut test = Vec::new();
+        buttons(d.upcast_ref(), "Test", &mut test);
+        if let Some(b) = test.first() {
+            b.emit_clicked();
+        }
+        glib::timeout_future(Duration::from_millis(500)).await;
+        let mut again = Vec::new();
+        buttons(d.upcast_ref(), "Test again", &mut again);
+        run.check(
+            !again.is_empty(),
+            "Intelligence › Check answers with no keys",
+        );
+        run.shot("intelligence-settings-light").await;
+        s.set_look(Look::Dark);
+        run.shot("intelligence-settings-dark").await;
+        s.set_look(Look::Light);
+        let mut fields = Vec::new();
+        entries(d.upcast_ref(), "ts-…", &mut fields);
+        if let Some(e) = fields.first() {
+            e.set_text("ts-selftest");
+        }
+        let typed = s
+            .store()
+            .load::<copper_core::intelligence::IntelligenceKeys>()
+            .ok()
+            .and_then(|l| l.value.jev_key);
+        let mode = std::fs::metadata(s.store().path(copper_core::DataFile::Intelligence))
+            .map(|m| std::os::unix::fs::PermissionsExt::mode(&m.permissions()) & 0o777)
+            .unwrap_or(0);
+        run.check(
+            typed.as_deref() == Some("ts-selftest") && mode == 0o600,
+            "the Jev key typed on Intelligence is in intelligence.json, 0600",
+        );
+        d.close();
+        let d = super::super::settings::present(s);
+        glib::timeout_future(Duration::from_millis(300)).await;
+        let mut add = Vec::new();
+        buttons(d.upcast_ref(), "Add key", &mut add);
+        run.check(
+            add.iter().all(|b| !b.is_mapped()),
+            "with a key, Agents no longer points to Intelligence",
+        );
+        d.close();
+        crate::features::settings::intelligence::edit(s, |k| k.jev_key = None);
+        a.set_jev(false);
 
         // A new token takes effect in the file and the listener.
         let before = a.token();

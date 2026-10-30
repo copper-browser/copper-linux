@@ -204,13 +204,22 @@ the server's instructions tell the agent to reach for them first:
 | `jev_observe` | What Jev sees: every visible control as `[3] combobox  Where to? · London`, plus the visible text. |
 | `jev_extract` | Takes an `instruction` (+ `schema`, `full`) and returns one JSON object drawn from the page. |
 
-Jev needs a Jev key (`ts-…`). It comes from `intelligence.json` in Copper's
-data folder (the same file the Mac uses), or from your Copper Cloud if it
-provides one; while Jev mode is on and the key is missing, Settings › Agents
-says where it goes. Typing and `jev_extract` also need a text model, configured in
-the same file (or, for a headless Copper, with `COPPER_ROUTER_URL` and
-`COPPER_ROUTER_KEY`: [headless.md](headless.md#model-keys)). DONE is the
-model's own claim, so check the page.
+Jev needs a Jev key (`ts-…`, made at https://console.typesafe.ai). Paste it
+in **Settings › Intelligence › Jev** (Get a key opens that page), or let your
+Copper Cloud provide one; while Jev mode is on and the key is missing,
+Settings › Agents has an Add key button that goes there. Typing and
+`jev_extract` also need a model behind an OpenAI-compatible gateway: its API
+key, address, size (Haiku, Sonnet, Opus) and, under Advanced, the names your
+gateway uses are on the same page, with **Check**, which asks Jev and the
+gateway one small question each and says in plain words what came back. A
+key or address Copper Cloud provides says so, and its box fades. Agents ›
+Jev mode › Advanced names a smaller **Text model** for what Jev types (empty
+uses the chosen size). All of it is kept in `intelligence.json` (0600) in
+Copper's data folder, the same file the Mac uses, and is used from the next
+call on. A headless Copper can name its gateway with `COPPER_ROUTER_URL` and
+`COPPER_ROUTER_KEY` instead ([headless.md](headless.md#model-keys)). There
+is no Claude account sign-in on Linux yet: the API key is the only lane.
+DONE is the model's own claim, so check the page.
 
 ## The command line
 
