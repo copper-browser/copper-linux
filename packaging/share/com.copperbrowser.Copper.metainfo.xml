@@ -51,6 +51,16 @@
   </requires>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.5.2" date="2026-10-30">
+      <description>
+        <p>Settings has the Mac's pages, in the Mac's order, and is shorter.</p>
+        <ul>
+          <li>Appearance is on General, and tabs left or top on Tabs › Layout.</li>
+          <li>Addons is called Extensions, and Updates is About.</li>
+          <li>Agents folds its port and token under Advanced, with one row of Copy buttons.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.5.1" date="2026-10-29">
       <description>
         <p>Copper Cloud: a computer can only overwrite what was changed on it.</p>
