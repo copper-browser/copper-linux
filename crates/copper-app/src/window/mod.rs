@@ -90,6 +90,21 @@ impl Ui {
         shortcuts.set_scope(gtk::ShortcutScope::Global);
         shell.window().add_controller(shortcuts.clone());
 
+        // Ctrl let go, wherever the keyboard is (a page included): a
+        // most-recent Ctrl+Tab walk lands where it stopped.
+        let ctrl = gtk::EventControllerKey::new();
+        ctrl.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak = shell.downgrade();
+        ctrl.connect_key_released(move |_, key, _, _| {
+            use gtk::gdk::Key;
+            if (key == Key::Control_L || key == Key::Control_R)
+                && let Some(s) = weak.upgrade()
+            {
+                s.tab_cycle_ended();
+            }
+        });
+        shell.window().add_controller(ctrl);
+
         // Escape belongs to whatever is on top (card, find, field); only
         // when nothing claims it does it stop a loading page.
         let esc = gtk::ShortcutController::new();

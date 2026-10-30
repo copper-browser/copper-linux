@@ -24,7 +24,7 @@ use crate::palette::Mode;
 use crate::shell::GtkShell;
 use crate::shell::{OpenTab, Shell};
 use copper_core::TabId;
-use copper_core::settings::{Look, TabsPosition};
+use copper_core::settings::{Look, TabSwitching, TabsPosition};
 use copper_engine::PageView;
 use gtk4 as gtk;
 use gtk4::prelude::*;
@@ -231,6 +231,44 @@ async fn fresh(run: &Run) {
     run.check(
         s.active_id() == before,
         "Ctrl+Tab then Ctrl+Shift+Tab come back",
+    );
+    // Most recent: held, each Tab goes one deeper; let go, it lands there.
+    s.update_settings(|st| st.set_tab_switching(TabSwitching::Recent));
+    s.select(&weather);
+    s.select(&rust);
+    s.select(&notes);
+    s.switch_tab(true);
+    let first = s.active_id();
+    s.switch_tab(true);
+    let second = s.active_id();
+    s.tab_cycle_ended();
+    s.switch_tab(true);
+    s.tab_cycle_ended();
+    run.check(
+        first.as_ref() == Some(&rust)
+            && second.as_ref() == Some(&weather)
+            && s.active_id().as_ref() == Some(&notes),
+        "Ctrl+Tab in most-recent order walks back through the tabs used",
+    );
+    s.update_settings(|st| st.set_tab_switching(TabSwitching::Row));
+    // Zoom is kept for the site and put back when a page of it loads.
+    s.select(&notes);
+    run.wait_loaded(&notes).await;
+    s.zoom(Some(true));
+    let kept = s.settings().zoom_for("127.0.0.1");
+    if let Some(p) = s.page(&notes) {
+        p.set_zoom(1.0);
+    }
+    s.reload(&notes);
+    glib::timeout_future(Duration::from_millis(300)).await;
+    run.wait_loaded(&notes).await;
+    let back = s.page(&notes).map(|p| p.zoom());
+    s.zoom(None);
+    run.check(
+        (kept - 1.1).abs() < 0.001
+            && back.is_some_and(|z| (z - 1.1).abs() < 0.01)
+            && s.settings().get("zoom.127.0.0.1").is_none(),
+        "zoom is remembered per site, and forgotten at 100%",
     );
     s.select_nth(Some(0));
     run.check(

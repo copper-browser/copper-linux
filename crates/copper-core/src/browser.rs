@@ -744,6 +744,7 @@ impl Browser {
         if self.row_of(id).is_none() || self.current == id {
             return false;
         }
+        self.leave();
         self.current = id.to_string();
         self.ensure_active();
         self.changed(BrowserEvent::SpaceSwitched(id.to_string()));
@@ -816,9 +817,11 @@ impl Browser {
     /// Select a tab, switching space if it lives in another one. Wakes it
     /// and stamps `seen`.
     pub fn select(&mut self, id: &TabId) -> bool {
-        let Some(tab) = self.tabs.get(id) else {
+        if !self.tabs.contains_key(id) {
             return false;
-        };
+        }
+        self.leave();
+        let tab = &self.tabs[id];
         if !tab.is_pinned() && tab.space != self.current {
             let space = tab.space.clone();
             self.current = space.clone();
@@ -1331,6 +1334,15 @@ impl Browser {
         v
     }
 
+    /// The tab being left is the tab just looked at: its `seen` counts from
+    /// now, not from when it was picked (Mac `Browser.activeID` didSet,
+    /// `Spaces.select`), so sleep and the Today archive count from here.
+    fn leave(&mut self) {
+        if let Some(t) = self.active_id().and_then(|a| self.tabs.get_mut(&a)) {
+            t.seen = UnixTime::now();
+        }
+    }
+
     fn set_active(&mut self, id: Option<TabId>) {
         let current = self.current.clone();
         if let Some(row) = self.row_mut(&current) {
@@ -1380,7 +1392,8 @@ fn tab_from_entry(e: &SessionEntry, space: &str) -> Tab {
         space: space.to_string(),
         group: e.group.clone(),
         saved: e.saved.unwrap_or(true),
-        seen: e.seen.unwrap_or_default(),
+        // No date in the file: its clock starts now (Mac `Sections.restore`).
+        seen: e.seen.unwrap_or_else(UnixTime::now),
         split: e.split.clone(),
         sleeping: true,
         private: false,

@@ -64,6 +64,10 @@ pub mod keys {
     pub const AUTOCORRECT: &str = "autocorrect";
     /// `h12` | `h24` | `h48` | `never`. Default `h24`.
     pub const SECTIONS_ARCHIVE: &str = "sections.archive";
+    /// `zoom.<host>`: a site's zoom (number; absent = 100%; Mac
+    /// `Tab.rememberZoom`, host as `URL.host()` gives it, `www.` and all).
+    /// Not synced (not in `CloudSettingsKeys` on the Mac).
+    pub const ZOOM_PREFIX: &str = "zoom.";
     /// Last open settings page.
     pub const SETTINGS_PAGE: &str = "settings.page";
     /// Linux only: search engine id (see [`crate::address::ENGINES`]).
@@ -146,6 +150,18 @@ string_enum!(Look { Light = "light", Dark = "dark", System = "system" });
 string_enum!(Glyph { Letters = "letters", Icons = "icons" });
 string_enum!(TabSwitching { Row = "row", Recent = "recent" });
 string_enum!(ArchiveAfter { H12 = "h12", H24 = "h24", H48 = "h48", Never = "never" });
+
+impl ArchiveAfter {
+    /// The window in hours; `None` for never (`Sections.Archive.hours`).
+    pub fn hours(self) -> Option<f64> {
+        match self {
+            ArchiveAfter::H12 => Some(12.0),
+            ArchiveAfter::H24 => Some(24.0),
+            ArchiveAfter::H48 => Some(48.0),
+            ArchiveAfter::Never => None,
+        }
+    }
+}
 
 /// The settings object. Mutations bump [`Settings::generation`]; persist
 /// [`Settings::values`].
@@ -363,6 +379,24 @@ impl Settings {
             .and_then(ArchiveAfter::parse)
             .unwrap_or_default()
     }
+    pub fn set_archive_after(&mut self, v: ArchiveAfter) {
+        self.set(keys::SECTIONS_ARCHIVE, v.as_str());
+    }
+
+    /// The zoom kept for `host` (1.0 when none).
+    pub fn zoom_for(&self, host: &str) -> f64 {
+        self.number(&format!("{}{host}", keys::ZOOM_PREFIX))
+            .unwrap_or(1.0)
+    }
+    /// Keep `zoom` for `host`; 100% forgets it (Mac `Tab.rememberZoom`).
+    pub fn set_zoom_for(&mut self, host: &str, zoom: f64) {
+        let key = format!("{}{host}", keys::ZOOM_PREFIX);
+        if (zoom - 1.0).abs() < 0.01 {
+            self.remove(&key);
+        } else {
+            self.set(&key, zoom);
+        }
+    }
 
     /// The search engine (Linux addition; Google by default).
     pub fn search_engine(&self) -> &'static crate::address::SearchEngine {
@@ -467,5 +501,20 @@ mod tests {
         assert!(!s.shield());
         assert!(s.get("passkeys").is_none());
         assert_eq!(s.cloud_values()["look"], "dark");
+    }
+
+    #[test]
+    fn zoom_is_kept_per_host_and_forgotten_at_100() {
+        let mut s = Settings::default();
+        assert_eq!(s.zoom_for("www.example.com"), 1.0);
+        s.set_zoom_for("www.example.com", 1.25);
+        assert_eq!(s.number("zoom.www.example.com"), Some(1.25));
+        assert_eq!(s.zoom_for("www.example.com"), 1.25);
+        assert_eq!(s.zoom_for("example.com"), 1.0);
+        assert!(!s.cloud_values().contains_key("zoom.www.example.com"));
+        s.set_zoom_for("www.example.com", 1.0);
+        assert!(s.get("zoom.www.example.com").is_none());
+        assert_eq!(ArchiveAfter::H48.hours(), Some(48.0));
+        assert_eq!(ArchiveAfter::Never.hours(), None);
     }
 }

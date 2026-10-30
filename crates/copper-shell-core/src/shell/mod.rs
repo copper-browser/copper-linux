@@ -28,7 +28,7 @@ use crate::view::{Refresh, ShellView};
 use crate::{PageOf, Platform};
 use copper_core::browser::{BrowserEvent, CloseOutcome, Closing};
 use copper_core::history::Suggestion;
-use copper_core::settings::{Look, TabsPosition, keys};
+use copper_core::settings::{Look, TabSwitching, TabsPosition, keys};
 use copper_core::store::Store;
 use copper_core::{Bookmarks, Browser, History, OpenOptions, Saver, Settings, TabId, UnixTime};
 use copper_engine::{Engine, EnginePaths, PageView};
@@ -126,6 +126,8 @@ struct Inner<P: Platform> {
     shut: Cell<bool>,
     /// Sleeping tabs' pictures and the wake covers up now.
     covers: crate::cover::Covers<P>,
+    /// ⌃Tab's most-recent order ([`Shell::switch_tab`]).
+    recent: RefCell<crate::recent::Recent>,
 }
 
 /// How to open a tab.
@@ -243,6 +245,7 @@ impl<P: Platform> Shell<P> {
             timers: RefCell::default(),
             shut: Cell::new(false),
             covers: Default::default(),
+            recent: RefCell::default(),
         }));
         CURRENT.with(|c| *c.borrow_mut() = Some(Box::new(shell.downgrade())));
         shell
@@ -623,6 +626,39 @@ impl<P: Platform> Shell<P> {
         self.select(&id);
     }
 
+    /// ⌃Tab / ⌃⇧Tab: the next tab in the row ([`Shell::cycle_tab`]), or —
+    /// Settings › Tabs › "The tab you were on before" — one deeper into the
+    /// most-recent order, held still until Ctrl is let go
+    /// ([`Shell::tab_cycle_ended`]; Mac `Recent.step`).
+    pub fn switch_tab(&self, forward: bool) {
+        if self.settings().tab_switching() != TabSwitching::Recent {
+            return self.cycle_tab(forward);
+        }
+        let row: Vec<TabId> = {
+            let ids = self.visible_ids();
+            let b = self.browser();
+            ids.into_iter()
+                .filter(|id| b.tab(id).is_some_and(|t| !crate::clear::is_blank(&t.url)))
+                .collect()
+        };
+        let active = self.active_id();
+        let pick = self
+            .0
+            .recent
+            .borrow_mut()
+            .step(&row, active.as_ref(), forward);
+        if let Some(id) = pick {
+            self.select(&id);
+        }
+    }
+
+    /// The platform saw Ctrl let go: a most-recent ⌃Tab walk lands where it
+    /// stopped (Mac `Recent.end`). Harmless when there is no walk.
+    pub fn tab_cycle_ended(&self) {
+        let active = self.active_id();
+        self.0.recent.borrow_mut().end(active.as_ref());
+    }
+
     /// Close a tab the everyday way (⌘W, middle-click, an agent): a pin is
     /// put down and a Saved row unloaded — it stays saved, in its place,
     /// dimmed — instead (Arc; Mac `docs/sections.md`).
@@ -950,6 +986,16 @@ impl<P: Platform> Shell<P> {
                 .unwrap_or(0.5),
         };
         p.set_zoom(next);
+        // Kept for the site, not the tab (Mac `Tab.rememberZoom`); never
+        // from a private tab.
+        let site = self
+            .browser()
+            .active()
+            .filter(|t| !t.private)
+            .and_then(|t| zoom_host(&t.url));
+        if let Some(host) = site {
+            self.update_settings(|s| s.set_zoom_for(&host, next));
+        }
         if (next - 1.0).abs() > 0.001 {
             self.toast(&format!("{}%", (next * 100.0).round()));
         }
@@ -1068,6 +1114,32 @@ impl<P: Platform> Shell<P> {
         ok
     }
 
+    /// Close the current space's Today rows nobody has looked at inside
+    /// Settings › Tabs › "Archive Today after" ([`crate::archive`]; Mac
+    /// `Sections.sweep`), the ordinary way. Returns how many went.
+    pub fn archive_today(&self) -> usize {
+        let Some(hours) = self.settings().archive_after().hours() else {
+            return 0;
+        };
+        let now = UnixTime::now();
+        let stale: Vec<TabId> = {
+            let b = self.browser();
+            let active = b.active_id();
+            b.row(b.current_space_id())
+                .into_iter()
+                .filter(|t| crate::archive::stale(t, active.as_ref(), now, hours))
+                .map(|t| t.id.clone())
+                .collect()
+        };
+        for id in &stale {
+            self.close(id);
+        }
+        if !stale.is_empty() {
+            tracing::info!(count = stale.len(), "archived Today rows");
+        }
+        stale.len()
+    }
+
     /// How many loose tabs a space holds.
     pub fn space_tab_count(&self, id: &str) -> usize {
         self.browser().row(id).len()
@@ -1101,6 +1173,7 @@ impl<P: Platform> Shell<P> {
     fn apply_events(&self, events: &[BrowserEvent]) {
         let mut refresh = Refresh::default();
         let mut show = false;
+        let mut switched = false;
         for e in events {
             match e {
                 BrowserEvent::TabOpened(id) => {
@@ -1113,6 +1186,7 @@ impl<P: Platform> Shell<P> {
                 }
                 BrowserEvent::TabClosed(id) => {
                     refresh.tabs = true;
+                    self.0.recent.borrow_mut().forget(id);
                     self.drop_page(id);
                     self.forget_cover(id);
                     self.0.favicons.borrow_mut().remove(id);
@@ -1138,6 +1212,9 @@ impl<P: Platform> Shell<P> {
                 BrowserEvent::Selected(id) => {
                     refresh.selection = true;
                     show = true;
+                    if let Some(id) = id {
+                        self.0.recent.borrow_mut().touched(id);
+                    }
                     self.0.hub.send(ShellEvent::Selected(id.clone()));
                 }
                 BrowserEvent::SpaceSwitched(id) => {
@@ -1145,6 +1222,7 @@ impl<P: Platform> Shell<P> {
                     refresh.spaces = true;
                     refresh.selection = true;
                     show = true;
+                    switched = true;
                     self.0.hub.send(ShellEvent::SpaceSwitched(id.clone()));
                 }
                 BrowserEvent::SpacesChanged => {
@@ -1157,6 +1235,11 @@ impl<P: Platform> Shell<P> {
         self.view().refresh(self, &refresh);
         if show {
             self.show_active();
+        }
+        // The row that just came on screen is swept (Mac `Spaces.select`);
+        // its closes are folded into the running flush.
+        if switched && self.0.restored.get() {
+            self.archive_today();
         }
     }
 
@@ -1262,6 +1345,20 @@ impl<P: Platform> Shell<P> {
                 P::Loop::sleep(every).await;
                 let Some(s) = weak.upgrade() else { break };
                 s.sleep_idle_tabs();
+            }
+        });
+        self.0.timers.borrow_mut().push(t);
+
+        // Today rows left too long are archived: once the session is back,
+        // then every half hour (Mac `Sections.begin`).
+        let weak = self.downgrade();
+        let t = crate::main_loop::spawn::<P::Loop>(async move {
+            let mut wait = crate::archive::FIRST;
+            loop {
+                P::Loop::sleep(wait).await;
+                let Some(s) = weak.upgrade() else { break };
+                s.archive_today();
+                wait = crate::archive::EVERY;
             }
         });
         self.0.timers.borrow_mut().push(t);
@@ -1397,6 +1494,15 @@ pub fn host_of(url: &str) -> String {
     }
 }
 
+/// The host a site's zoom is kept under: the whole host, `www.` and all, as
+/// the Mac's `URL.host()` gives it (`zoom.<host>`).
+pub fn zoom_host(url: &str) -> Option<String> {
+    let u = url::Url::parse(url).ok()?;
+    u.host_str()
+        .filter(|h| !h.is_empty())
+        .map(|h| h.trim_matches(['[', ']']).to_string())
+}
+
 /// Ask tab `id`'s page whether it holds anything typed, then let it go —
 /// looking again after each step, since each takes a moment and the tab
 /// may have been picked meanwhile (Mac `Browser.sleep`).
@@ -1451,5 +1557,10 @@ mod tests {
         assert_eq!(host_of("https://www.example.com/a?b"), "example.com");
         assert_eq!(host_of("http://127.0.0.1:8080/x"), "127.0.0.1");
         assert_eq!(host_of("about:blank"), "about:blank");
+        assert_eq!(
+            super::zoom_host("https://www.example.com/a").as_deref(),
+            Some("www.example.com")
+        );
+        assert_eq!(super::zoom_host("about:blank"), None);
     }
 }

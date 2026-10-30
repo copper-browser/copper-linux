@@ -11,7 +11,7 @@ pub mod privacy;
 use crate::actions::{SettingsPage, register_settings_page};
 use crate::shell::GtkShell;
 use crate::shell::Shell;
-use copper_core::settings::{Glyph, TabSwitching, TabsPosition, keys};
+use copper_core::settings::{ArchiveAfter, Glyph, TabSwitching, TabsPosition, keys};
 use gtk4 as gtk;
 use gtk4::prelude::*;
 use libadwaita as adw;
@@ -270,6 +270,26 @@ fn tabs(shell: &Shell) -> adw::PreferencesPage {
         shell.settings().sleeps_tabs(),
         |s, on| s.update_settings(|st| st.set(keys::TABS_SLEEP, on)),
     ));
+    // Mac `ArchiveLine` (Fork/Sections.swift); the sweep is shell-core's.
+    let archive = line(
+        "Archive Today after",
+        "Untouched rows below the New Tab line close themselves, and wait in Reopen Closed Tab.",
+    );
+    const ARCHIVE: [ArchiveAfter; 4] = [
+        ArchiveAfter::H12,
+        ArchiveAfter::H24,
+        ArchiveAfter::H48,
+        ArchiveAfter::Never,
+    ];
+    let now = shell.settings().archive_after();
+    let at = ARCHIVE.iter().position(|a| *a == now).unwrap_or(1);
+    archive.add_suffix(&segmented(
+        shell,
+        &["12h", "24h", "48h", "Never"],
+        at,
+        |s, i| s.update_settings(|st| st.set_archive_after(ARCHIVE[i])),
+    ));
+    leave.add(&archive);
     page.add(&leave);
     page.add(&calendar::group(shell));
     page

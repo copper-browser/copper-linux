@@ -30,6 +30,7 @@
 //! for how an app is put together and what is still to move here.
 
 pub mod agents;
+pub mod archive;
 pub mod calendar;
 pub mod canvas;
 pub mod chat;
@@ -47,6 +48,7 @@ pub mod main_loop;
 pub mod options;
 pub mod palette;
 pub mod private;
+pub mod recent;
 pub mod session;
 pub mod shell;
 pub mod shield;
