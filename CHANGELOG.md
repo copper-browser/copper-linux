@@ -5,6 +5,10 @@ release dates.
 
 ## Unreleased
 
+## 0.6.0 — 2026-10-30
+
+Catching up with the Mac: folders in the column, Ctrl+Tab in most-recent order, Archive Today, Settings › Intelligence, two-step codes that fill themselves, Jev's Fast mode, and Clear History that reaches Copper Cloud.
+
 ### Added
 
 - **Ctrl+Tab in most-recent order works.** With Settings › Tabs ›
@@ -33,19 +37,6 @@ release dates.
 - **Search in Settings.** The search button finds rows by their titles.
 - **The command palette offers "Install <addon> <version> for the Agent
   sidebar"** while an addon update waits, as the Mac's does.
-
-### Changed
-
-- **Addons: an unknown bridge method, or `voice.*` here, answers
-  `bad_request`** (`No bridge method "…"`), the Mac's code and words, not
-  `unavailable`. Addons still leave their mic out. (docs/addons.md.)
-
-### Fixed
-
-- **Clearing history, or removing a page from History, now reaches Copper
-  Cloud.** Docs said it did; only the Mac and Windows did. While history
-  syncs, Clear History deletes it on the cloud too and its question says
-  so, and a page removed in the History panel goes from the cloud as well.
 - **Folders in the column, as the Mac draws them (GroupsUI).** Saved and
   Today show their folders — yours and the ones synced from the Mac through
   Copper Cloud — as a line with the folder in its colour and its name, its
@@ -111,6 +102,19 @@ release dates.
 - **Open the Chrome guide.** When tabs or bookmarks come over from Chrome,
   the Bring In summary offers the "Switching from Chrome" canvas, as the
   Mac's move does.
+
+### Changed
+
+- **Addons: an unknown bridge method, or `voice.*` here, answers
+  `bad_request`** (`No bridge method "…"`), the Mac's code and words, not
+  `unavailable`. Addons still leave their mic out. (docs/addons.md.)
+
+### Fixed
+
+- **Clearing history, or removing a page from History, now reaches Copper
+  Cloud.** Docs said it did; only the Mac and Windows did. While history
+  syncs, Clear History deletes it on the cloud too and its question says
+  so, and a page removed in the History panel goes from the cloud as well.
 
 ## 0.5.2 — 2026-10-30
 
