@@ -53,7 +53,9 @@ pub struct Column {
     pins: gtk::FlowBox,
     head: gtk::Box,
     saved: gtk::Box,
-    rule: gtk::Box,
+    /// The hairline between Saved and Today, with "↓ Clear" over its end.
+    seam: gtk::Overlay,
+    clear: gtk::Button,
     /// While a tab is dragged and Saved is empty: where to drop it to save.
     slot: gtk::Revealer,
     new_tab: gtk::Box,
@@ -135,7 +137,37 @@ impl Column {
         body.append(&saved);
         let rule = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         rule.add_css_class("hairline");
-        body.append(&rule);
+        // Mac `ClearTabsDivider`: at rest the plain hairline, same height;
+        // hovering it shows a small round button over its end, so nothing
+        // moves. Ctrl+Shift+K does the same from the keyboard.
+        let clear = gtk::Button::new();
+        let arrow = gtk::Image::from_icon_name("go-down-symbolic");
+        arrow.set_pixel_size(8);
+        clear.set_child(Some(&arrow));
+        clear.add_css_class("clear-seam");
+        clear.set_action_name(Some("win.clear-tabs"));
+        clear.set_halign(gtk::Align::End);
+        clear.set_valign(gtk::Align::Center);
+        clear.set_margin_end(6);
+        clear.set_focusable(false);
+        clear.set_opacity(0.0);
+        clear.set_can_target(false);
+        let seam = gtk::Overlay::new();
+        seam.set_child(Some(&rule));
+        seam.add_overlay(&clear);
+        let hover = gtk::EventControllerMotion::new();
+        let c = clear.clone();
+        hover.connect_enter(move |_, _, _| {
+            c.set_opacity(1.0);
+            c.set_can_target(true);
+        });
+        let c = clear.clone();
+        hover.connect_leave(move |_| {
+            c.set_opacity(0.0);
+            c.set_can_target(false);
+        });
+        seam.add_controller(hover);
+        body.append(&seam);
         // Saved is empty and a tab is being dragged: the seam opens into a
         // slot that says what dropping there does.
         let slot = gtk::Revealer::new();
@@ -217,7 +249,8 @@ impl Column {
             pins,
             head,
             saved,
-            rule,
+            seam,
+            clear,
             slot,
             new_tab,
             today,
@@ -483,10 +516,26 @@ impl Column {
             }
         }
         self.folder_css.load_from_string(&css);
-        self.rule.set_visible(!v.saved.is_empty());
         drop(rows);
         self.lines.replace(lines);
+        self.update_seam(shell);
         self.reveal_live(shell);
+    }
+
+    /// The seam shows under Saved rows, or while there is something to
+    /// clear; its button only then.
+    fn update_seam(&self, shell: &Shell) {
+        let clearable = shell.clearable_tabs().len();
+        let saved = self.lines.borrow().iter().any(|(saved, ..)| *saved);
+        self.seam.set_visible(saved || clearable > 0);
+        self.clear.set_visible(clearable > 0);
+        let words = format!(
+            "Clear {clearable} tab{}",
+            if clearable == 1 { "" } else { "s" }
+        );
+        self.clear.set_tooltip_text(Some(&words));
+        self.clear
+            .update_property(&[gtk::accessible::Property::Label(&words)]);
     }
 
     /// Move the live pill without rebuilding.
@@ -508,6 +557,9 @@ impl Column {
         let Some(row) = rows.get(id) else { return };
         let Some(t) = shell.tab_view(id) else { return };
         fill(shell, row, &t);
+        drop(rows);
+        // A blank tab that loaded a page can now be cleared.
+        self.update_seam(shell);
     }
 
     /// Pin `id`'s square, while it is drawn.

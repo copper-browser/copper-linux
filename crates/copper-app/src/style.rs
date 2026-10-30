@@ -84,6 +84,10 @@ window.copper { background: transparent; }
 .space-head .name { font-size: 13px; font-weight: 600; }
 .space-head .count { font-size: 12px; }
 .hairline { min-height: 1px; margin: 6px 6px; }
+button.clear-seam {
+  min-width: 12px; min-height: 12px; padding: 0; border-radius: 99px;
+  box-shadow: none; transition: opacity 120ms ease-out;
+}
 
 .space-chip {
   min-width: 26px; min-height: 26px; padding: 0; border-radius: 7px;
@@ -300,6 +304,7 @@ fn surface(scope: &str, t: &Tint) -> String {
 {scope} .pin {{ background-color: {square}; }}
 {scope} .pin:hover {{ background-color: {hover2}; }}
 {scope} .pin.live {{ background-color: {pill}; box-shadow: inset 0 0 0 1px {rim}, 0 1px 2px {lift}; }}
+{scope} button.clear-seam {{ background-color: {hover}; color: {muted}; }}
 {scope} .new-tab-row {{ color: {faint}; }}
 {scope} .new-tab-row:hover {{ color: {muted}; background-color: {hover}; }}
 {scope} .drop-before {{ box-shadow: inset 0 2px {dot}; }}

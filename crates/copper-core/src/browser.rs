@@ -980,7 +980,16 @@ impl Browser {
 
     /// ⌘⇧T: the newest closed tab, back where it was, selected.
     pub fn reopen_closed(&mut self) -> Option<TabId> {
-        let ghost = self.closed.pop()?;
+        self.reopen_closed_at(self.closed.len().checked_sub(1)?)
+    }
+
+    /// The closed tab at `index` of [`Browser::closed_tabs`] (the empty
+    /// ⌘T's Recently Closed rows), back where it was, selected.
+    pub fn reopen_closed_at(&mut self, index: usize) -> Option<TabId> {
+        if index >= self.closed.len() {
+            return None;
+        }
+        let ghost = self.closed.remove(index);
         let space = if self.row_of(&ghost.space).is_some() {
             ghost.space.clone()
         } else {
@@ -1452,9 +1461,18 @@ mod tests {
             }
         );
         assert_eq!(b.closed_tabs().len(), 1);
+        assert_eq!(b.reopen_closed_at(1), None);
         let back = b.reopen_closed().unwrap();
         assert_eq!(b.visible()[0].id, back);
-        assert_eq!(b.active_id(), Some(back));
+        assert_eq!(b.active_id(), Some(back.clone()));
+        // An older one, by its place in the list; the newer one stays.
+        b.close_tab(&back, false);
+        b.close_tab(&m, false);
+        let older = b.reopen_closed_at(0).unwrap();
+        assert_eq!(b.tab(&older).unwrap().url, "https://a.test/");
+        assert_eq!(b.closed_tabs().len(), 1);
+        assert_eq!(b.closed_tabs()[0].url, "https://b.test/");
+        b.reopen_closed().unwrap();
         let p = b.open_tab(
             "https://p.test/",
             OpenOptions {

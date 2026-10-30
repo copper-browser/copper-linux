@@ -565,6 +565,13 @@ impl<P: Platform> Shell<P> {
             PermissionKind::Other(_) => "use a device",
         };
         let host = url.map(host_of).unwrap_or_else(|| "This page".into());
+        // The camera and the microphone: asked once per site (not in a
+        // private tab, which keeps nothing).
+        let keep = !slot.private && url.is_some();
+        if keep && let Some(allowed) = self.capture_choice(&kind, &host) {
+            slot.page.answer_permission(pid, allowed);
+            return;
+        }
         let question = Question {
             title: format!("Allow {host} to {what}?"),
             detail: None,
@@ -572,10 +579,14 @@ impl<P: Platform> Shell<P> {
             allow: "Allow".into(),
         };
         let page = slot.page.clone();
+        let weak = self.downgrade();
         self.view().ask(
             self,
             question,
             Box::new(move |allowed| {
+                if keep && let Some(s) = weak.upgrade() {
+                    s.keep_capture_choice(&kind, &host, allowed);
+                }
                 page.answer_permission(pid, allowed);
             }),
         );

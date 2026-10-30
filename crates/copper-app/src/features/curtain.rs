@@ -1,8 +1,8 @@
 //! Hide anything in the GTK window (Mac: `Curtain.swift`, `Hidden.swift`):
 //! Ctrl+Shift+H and its palette row, Esc and Ctrl+Z while picking, and the
-//! Hidden panel. What is hidden, the sheets on every page and the picker's
-//! messages are copper-shell-core's [`copper_shell_core::curtain`],
-//! re-exported here.
+//! Hidden panel (Ctrl+Shift+U). What is hidden, the sheets on every page and
+//! the picker's messages are copper-shell-core's
+//! [`copper_shell_core::curtain`], re-exported here.
 
 pub use copper_shell_core::curtain::*;
 
@@ -39,6 +39,20 @@ pub fn register(shell: &Shell) {
             icon: "view-conceal-symbolic".into(),
             build: Rc::new(HiddenPanel::build),
         },
+    );
+    // Mac ⇧⌘U: the panel, with its key in Ctrl+K.
+    register_action(shell, "show-hidden", &["<Control><Shift>u"], |s| {
+        s.ui().stage.toggle_panel(s, "hidden")
+    });
+    register_command(
+        shell,
+        Command::new(
+            "panel-hidden",
+            "Hidden on This Site",
+            "view-conceal-symbolic",
+            |s| s.ui().stage.toggle_panel(s, "hidden"),
+        )
+        .shortcut("Ctrl+Shift+U"),
     );
     keys(shell);
 }

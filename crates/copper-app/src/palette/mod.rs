@@ -759,6 +759,16 @@ fn inputs<'a>(shell: &Shell, typed: &'a str, full: &'a str, purpose: Purpose) ->
             open = open_rows(shell);
         }
     }
+    let closed = if purpose == Purpose::Launch && typed.trim().is_empty() {
+        shell
+            .browser()
+            .closed_tabs()
+            .iter()
+            .map(|c| (c.title.clone(), c.url.clone()))
+            .collect()
+    } else {
+        Vec::new()
+    };
     Inputs {
         typed,
         full,
@@ -770,6 +780,7 @@ fn inputs<'a>(shell: &Shell, typed: &'a str, full: &'a str, purpose: Purpose) ->
         bookmarks,
         commands,
         open,
+        closed,
     }
 }
 
@@ -829,6 +840,9 @@ pub fn perform(shell: &Shell, row: &Row, mode: Mode, new_tab: bool) {
                     }
                 }
             }
+        }
+        Action::Reopen(i) => {
+            shell.reopen_at(*i);
         }
         // Copper Cloud's own links before anything opens them as a page.
         Action::Go(url) if copper_shell_core::cloud::join::is_cloud_link(url) => {

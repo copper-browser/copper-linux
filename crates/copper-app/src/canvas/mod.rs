@@ -22,15 +22,20 @@ pub fn register(shell: &Shell) {
         })
         .shortcut("Ctrl+Shift+E"),
     );
+    register_action(shell, "personal-canvas", &["<Control><Shift>o"], personal);
     register_command(
         shell,
         Command::new(
             "personal-canvas",
             "Personal Canvas",
             "document-edit-symbolic",
-            |s| {
-                show(s, copper_core::canvas::PERSONAL_CANVAS_ID, true);
-            },
-        ),
+            personal,
+        )
+        .shortcut("Ctrl+Shift+O"),
     );
+}
+
+/// Ctrl+Shift+O (Mac ⇧⌘O): your Personal canvas.
+fn personal(s: &Shell) {
+    show(s, copper_core::canvas::PERSONAL_CANVAS_ID, true);
 }
