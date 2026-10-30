@@ -64,6 +64,7 @@ pub const USAGE: &str = "Usage: copper [--json] [--launch] [--tab ID] <command> 
                                             fill a shared Bitwarden or 1Password card, identity, or field
   observe [--no-text] [-n N]                fast Jev observation
   run \"GOAL…\" [--url URL] [--new-tab [--focus]] [--max N] [--no-elements]
+             [--model jev-1.14.0] [--strategy fast,literal,burst,lean,paste,watch|turbo|llm=haiku] [--json-run]
   step \"GOAL…\"                              supervise one Jev decision
   extract \"INSTRUCTION…\" [--full] [--schema JSON]
   snapshot [--interactive] [-n N] [--selector CSS]
@@ -280,6 +281,34 @@ pub fn make_request(command: &str, args: &[String]) -> Result<Spec, Early> {
                     }
                     "--no-elements" => {
                         arguments.insert("elements".into(), json!(false));
+                    }
+                    "--model" => {
+                        i += 1;
+                        match args.get(i).filter(|v| !v.is_empty()) {
+                            Some(v) => arguments.insert("model".into(), json!(v)),
+                            None => {
+                                return bad(
+                                    "run --model needs a Jev model name (jev-latest, jev-preview, jev-1.14.0)",
+                                );
+                            }
+                        };
+                    }
+                    "--json-run" => {
+                        arguments.insert("json".into(), json!(true));
+                    }
+                    "--strategy" => {
+                        i += 1;
+                        match args
+                            .get(i)
+                            .filter(|v| crate::ultrafast::Strategy::parse(v).is_some())
+                        {
+                            Some(v) => arguments.insert("strategy".into(), json!(v)),
+                            None => {
+                                return bad(
+                                    "run --strategy takes classic, fast, literal, burst, lean, paste, watch, turbo, llm or llm=<model>, comma-separated",
+                                );
+                            }
+                        };
                     }
                     other if other.starts_with('-') => {
                         return bad(format!("unknown run option: {other}"));
@@ -1023,6 +1052,25 @@ mod tests {
             args_of(&p),
             json!({"goal": "book a flight", "url": "x.com", "maxSteps": 5, "newTab": true})
         );
+        let p = parse(
+            &s(&[
+                "run",
+                "sign in",
+                "--strategy",
+                "fast,burst",
+                "--model",
+                "jev-1.14.0",
+                "--json-run",
+            ]),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            args_of(&p),
+            json!({"goal": "sign in", "strategy": "fast,burst", "model": "jev-1.14.0", "json": true})
+        );
+        assert!(parse(&s(&["run", "x", "--strategy", "warp"]), false).is_err());
+        assert!(parse(&s(&["run", "x", "--strategy"]), false).is_err());
         let p = parse(
             &s(&["type", "e3", "hello", "world", "--submit", "--tab", "1a2b"]),
             false,

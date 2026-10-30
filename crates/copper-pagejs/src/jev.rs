@@ -134,6 +134,12 @@ pub fn scroll_by(delta: f64) -> Call<bool> {
     Call::new(Script::JevScrollBy, json!({ "delta": delta }))
 }
 
+/// `watch`: true on the page's first change outside the trail's layer, false
+/// at `ms` (a navigation can leave it unresolved: the caller caps it too).
+pub fn wait_for_change(ms: u64) -> Call<bool> {
+    Call::new(Script::JevWaitChange, json!({ "ms": ms }))
+}
+
 /// The agent-only controls a page can offer besides its own elements.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Extras {

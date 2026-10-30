@@ -107,6 +107,8 @@ pub struct Keys {
     pub router_models: BTreeMap<String, String>,
     /// Jev mode's text writer; empty: the chosen model.
     pub text_model: String,
+    /// Jev mode's Fast mode (`jevFast`): runs take the shipped strategy.
+    pub jev_fast: bool,
 }
 
 impl Default for Keys {
@@ -123,6 +125,7 @@ impl Default for Keys {
             claude_models: default_claude_models(),
             router_models: default_router_models(),
             text_model: String::new(),
+            jev_fast: true,
         }
     }
 }
@@ -151,6 +154,7 @@ impl Keys {
             claude_models: fresh.claude_models,
             router_models: fresh.router_models,
             text_model: file.text_model.clone().unwrap_or_default(),
+            jev_fast: file.jev_fast(),
         };
         if let Some(saved) = &file.claude_models {
             k.claude_models
@@ -554,6 +558,8 @@ pub struct Answer {
     pub scores: BTreeMap<String, f64>,
     pub latency_ms: f64,
     pub input_tokens: i64,
+    /// The versioned model that answered (`jev-1.14.0`), when the API says.
+    pub model: String,
 }
 
 /// A Jev failure: `kind` is `not_configured`, `bad_endpoint`, `transport`,
@@ -590,6 +596,7 @@ pub fn parse_answer(body: &[u8], latency_ms: f64) -> Result<Answer, JevFailure> 
     let mut out = Answer {
         latency_ms,
         input_tokens: payload["usage"]["input_tokens"].as_i64().unwrap_or(0),
+        model: payload["model"].as_str().unwrap_or_default().to_string(),
         ..Answer::default()
     };
     for (name, raw) in answers {
@@ -802,6 +809,7 @@ mod tests {
         assert_eq!(k.router_model, "sonnet");
         assert_eq!(k.text_model, "haiku");
         assert_eq!(k.tier, Tier::Opus);
+        assert!(k.jev_fast, "Fast mode is on unless the file says off");
         assert_eq!(name_for(Tier::Opus, Lane::Claude, &k), "claude-opus-5-5");
         let legacy: IntelligenceKeys = serde_json::from_str(r#"{"routerModel":"gpt-4o"}"#).unwrap();
         assert_eq!(Keys::from_file(&legacy).router_models["sonnet"], "gpt-4o");

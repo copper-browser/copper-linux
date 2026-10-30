@@ -40,6 +40,10 @@ pub struct IntelligenceKeys {
     /// The small model Jev asks to write field values; empty = router model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_model: Option<String>,
+    /// Jev mode's Fast mode: the shipped strategy (on, the default) or the
+    /// classic loop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jev_fast: Option<bool>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -72,6 +76,10 @@ impl IntelligenceKeys {
     pub fn tier(&self) -> &str {
         self.tier.as_deref().unwrap_or("sonnet")
     }
+    /// Fast mode (on by default, as the Mac).
+    pub fn jev_fast(&self) -> bool {
+        self.jev_fast.unwrap_or(true)
+    }
 }
 
 /// `claude.json` (`ClaudeAccount.Credential`). `expires` is a Swift date.
@@ -88,4 +96,19 @@ pub struct ClaudeCredential {
     pub organization: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fast_mode_is_on_unless_the_file_says_off() {
+        let fresh: IntelligenceKeys = serde_json::from_str("{}").unwrap();
+        assert!(fresh.jev_fast());
+        let off: IntelligenceKeys = serde_json::from_str(r#"{"jevFast":false}"#).unwrap();
+        assert!(!off.jev_fast());
+        assert!(off.extra.is_empty());
+        assert_eq!(serde_json::to_string(&off).unwrap(), r#"{"jevFast":false}"#);
+    }
 }

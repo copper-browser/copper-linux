@@ -416,12 +416,13 @@ async fn tools_list_is_the_mac_catalogue_minus_voice() {
             // every tool is there (the fixture's 45 came to 32921 bytes;
             // 36024 with canvas_read's paging options, 2026-10-16; 36366 with
             // the integrated Mac build's canvas_read text, jev_run/jev_step
-            // kept at the options Linux implements).
+            // kept at the options Linux implements; 37493 with their model,
+            // strategy and json, 2026-10-30 — vision is still left out).
             let all: Vec<Value> = mac.values().cloned().collect();
             let wire = copper_pagejs::render::compact_json(
                 &json!({"jsonrpc": "2.0", "id": 2, "result": {"tools": all}}),
             );
-            assert_eq!(wire.len(), 36366);
+            assert_eq!(wire.len(), 37493);
         })
         .await;
 }
@@ -992,6 +993,55 @@ async fn jev_run_observes_asks_typesafe_and_acts() {
 
             let w = r.host.0.borrow();
             assert!(matches!(&w.inputs[0].1, InputEvent::Click { x, y, .. } if *x == 60.0 && *y == 35.0));
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn jev_run_takes_a_strategy_a_model_and_answers_json() {
+    local()
+        .run_until(async {
+            let (url, received) = fake_jev(vec![
+                json!({"model": "jev-1.14.0", "answers": {
+                    "operation": {"choice": "CLICK", "confidence": 0.9, "probabilities": {"CLICK": 0.9}},
+                    "click_target": {"choice": "1", "confidence": 0.8, "probabilities": {"1": 0.8}},
+                }, "usage": {"input_tokens": 100}}),
+                json!({"answers": {
+                    "operation": {"choice": "DONE", "confidence": 0.95, "probabilities": {"DONE": 0.95}},
+                }}),
+            ]);
+            let r = start(true);
+            r.host.0.borrow_mut().jev_endpoint = Some(url);
+            let port = r.server.port;
+
+            let (refused, error) =
+                tool(port, "jev_run", json!({"goal": "press search", "strategy": "warp"})).await;
+            assert!(error);
+            assert_eq!(
+                refused,
+                "strategy: classic, fast, literal, burst, lean, paste, watch, turbo, llm, llm=<model>"
+            );
+
+            let (text, error) = tool(
+                port,
+                "jev_run",
+                json!({"goal": "press search", "strategy": "fast,lean", "model": "jev-1.14.0", "json": true}),
+            )
+            .await;
+            assert!(!error, "{text}");
+            let run: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(run["status"], "done");
+            assert_eq!(run["asked_model"], "jev-1.14.0");
+            assert_eq!(run["totals"]["strategy"], "fast,lean");
+            assert_eq!(run["totals"]["model"], "jev-1.14.0");
+            assert_eq!(run["totals"]["input_tokens"], 100);
+            assert_eq!(run["steps"][0]["operation"], "CLICK");
+            assert_eq!(run["steps"][0]["burst"], false);
+            assert_eq!(run["page"]["url"], "https://home.test/");
+
+            let (_, first) = received.recv().unwrap();
+            assert_eq!(first["model"], "jev-1.14.0");
+            assert_eq!(first["state"]["recent_actions"], json!([]));
         })
         .await;
 }
