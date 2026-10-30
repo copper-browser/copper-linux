@@ -1,6 +1,7 @@
 //! Settings: the shell's own page (appearance, tabs, search), then every
 //! page a lane registered ([`crate::actions::register_settings_page`]), in
-//! the Mac's rail order ([`ORDER`]).
+//! the Mac's rail order ([`ORDER`]). It opens at the page it was last on
+//! (`settings.page`, the Mac's page ids); adw's search finds rows by title.
 
 use crate::shell::GtkShell;
 use crate::shell::Shell;
@@ -19,7 +20,7 @@ pub fn present(shell: &Shell) {
 pub fn dialog(shell: &Shell) -> adw::PreferencesDialog {
     let dialog = adw::PreferencesDialog::new();
     dialog.set_title("Settings");
-    dialog.set_search_enabled(false);
+    dialog.set_search_enabled(true);
     if !shell
         .registry()
         .borrow()
@@ -29,8 +30,16 @@ pub fn dialog(shell: &Shell) -> adw::PreferencesDialog {
     {
         dialog.add(&general(shell));
     }
+    // The page Settings was last on; one Linux lacks opens General (Mac:
+    // `SettingsPanel.Page(rawValue:) ?? .general`).
+    let last = shell
+        .settings()
+        .string(keys::SETTINGS_PAGE)
+        .map(str::to_string);
     let mut pages = shell.registry().borrow().settings_pages.clone();
     pages.sort_by_key(|p| rank(&p.id));
+    let names: Vec<&str> = pages.iter().map(|p| p.id.as_str()).collect();
+    let open_at = opening(last.as_deref(), &names).to_string();
     for p in pages {
         let page = (p.build)(shell);
         page.set_title(&p.title);
@@ -38,8 +47,27 @@ pub fn dialog(shell: &Shell) -> adw::PreferencesDialog {
         page.set_name(Some(&p.id));
         dialog.add(&page);
     }
+    dialog.set_visible_page_name(&open_at);
+    let weak = shell.downgrade();
+    dialog.connect_visible_page_name_notify(move |d| {
+        if let (Some(s), Some(name)) = (weak.upgrade(), d.visible_page_name()) {
+            let name = name.to_string();
+            if s.settings().string(keys::SETTINGS_PAGE) != Some(name.as_str()) {
+                s.update_settings(|st| st.set(keys::SETTINGS_PAGE, name));
+            }
+        }
+    });
     dialog.present(Some(shell.window()));
     dialog
+}
+
+/// The page to open at: the stored one if Settings has it (`names`, the
+/// registered pages), else General.
+fn opening<'a>(stored: Option<&'a str>, names: &[&str]) -> &'a str {
+    match stored {
+        Some(n) if names.contains(&n) => n,
+        _ => "general",
+    }
 }
 
 /// The Mac's rail (`SettingsPanel.Page`, Copper#115): Browsing, AI & agents,
@@ -72,6 +100,7 @@ fn combo(title: &str, items: &[&str], selected: usize) -> adw::ComboRow {
 
 fn general(shell: &Shell) -> adw::PreferencesPage {
     let page = adw::PreferencesPage::new();
+    page.set_name(Some("general"));
     page.set_title("General");
     page.set_icon_name(Some("preferences-system-symbolic"));
 
@@ -175,6 +204,14 @@ fn general(shell: &Shell) -> adw::PreferencesPage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opens_at_the_last_page() {
+        let names = ["general", "tabs", "cloud"];
+        assert_eq!(opening(Some("cloud"), &names), "cloud");
+        assert_eq!(opening(Some("spaces"), &names), "general");
+        assert_eq!(opening(None, &names), "general");
+    }
 
     #[test]
     fn pages_follow_the_mac_rail() {

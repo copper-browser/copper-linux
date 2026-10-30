@@ -8,12 +8,15 @@
 //!   <Addon name> <version> for the Agent sidebar" with **Install** — that
 //!   is there in the Flatpak too (Copper's own update rows are not);
 //! * a toast, once per pending version, with **Install**;
+//! * a palette row, "Install <Addon name> <version> for the Agent sidebar"
+//!   (Mac: `AddonCommands`), while one is pending;
 //! * **Install**: the staged bundle is unpacked and made current, and the
 //!   slot's view reloads with it. No relaunch.
 //!
 //! Settings › About's own "Check now" also asks the cloud for addons.
 
 use super::core_glue;
+use crate::actions::{Command, register_command};
 use crate::features::settings::{button, group, line};
 use crate::shell::{GtkShell, Shell};
 use gtk4 as gtk;
@@ -144,6 +147,17 @@ pub fn changed(shell: &Shell) {
     let Some(p) = core_glue::pending() else {
         return;
     };
+    // Named for this version; hidden once nothing is pending.
+    register_command(
+        shell,
+        Command::new(
+            "addon-install",
+            &format!("Install {} {} for the {}", p.name, p.version, p.slot_name),
+            "application-x-addon-symbolic",
+            install,
+        )
+        .when(|_| core_glue::pending().is_some()),
+    );
     let key = format!("{}@{}", p.id, p.version);
     if shell.settings().string(ANNOUNCED_KEY) == Some(key.as_str()) {
         return;

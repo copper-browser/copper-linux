@@ -22,6 +22,24 @@ release dates.
 - **Zoom is remembered per site.** Ctrl+= on a site, and its pages open at
   that size from then on; Ctrl+0 forgets it. Kept as the Mac keeps it
   (`zoom.<host>`), never from a private tab. (`Shell::zoom`, `pages.rs`.)
+- **Settings › Cloud › Delete history on cloud.** Pick a time range and,
+  if you like, one site; Copper asks before deleting it from Copper Cloud
+  for every device, as the Mac does. History here stays. The card's words
+  and choices are shared (`copper_shell_core::cloud::eraser`), so Copper
+  for Windows can draw the same card from them. (`cloud/page.rs`;
+  docs/cloud.md.)
+- **Settings reopens at the page you were last on** (`settings.page`, the
+  Mac's page names; a page Linux doesn't have opens General).
+- **Search in Settings.** The search button finds rows by their titles.
+- **The command palette offers "Install <addon> <version> for the Agent
+  sidebar"** while an addon update waits, as the Mac's does.
+
+### Fixed
+
+- **Clearing history, or removing a page from History, now reaches Copper
+  Cloud.** Docs said it did; only the Mac and Windows did. While history
+  syncs, Clear History deletes it on the cloud too and its question says
+  so, and a page removed in the History panel goes from the cloud as well.
 
 ## 0.5.2 — 2026-10-30
 

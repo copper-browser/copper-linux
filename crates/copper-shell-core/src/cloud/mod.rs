@@ -28,10 +28,14 @@
 //! Other lanes: [`history_cleared`] and [`history_forgot`] tell the cloud
 //! that history was cleared / a page forgotten here.
 //!
+//! Settings › Cloud › Delete history on cloud is [`eraser`]: its words and
+//! decisions, toolkit-free; each shell draws the card.
+//!
 //! Single sign-on ("Continue with Google") and `copper://cloud/join` links
 //! are [`sso`] and [`join`]: toolkit-free, each shell only draws them.
 
 pub mod adapter;
+pub mod eraser;
 pub mod join;
 pub mod mcp;
 pub mod sso;

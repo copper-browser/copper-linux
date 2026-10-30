@@ -70,7 +70,7 @@ pub fn register(shell: &Shell) {
             },
         ),
     );
-    // No search in Settings on Linux: the palette finds "join link", "sso".
+    // The palette finds "join link", "sso" too.
     register_command(
         shell,
         Command::new(

@@ -8,7 +8,9 @@
 //! link does are copper-shell-core's ([`copper_shell_core::cloud::sso`],
 //! [`copper_shell_core::cloud::join`]); this page draws their state. Once sync is on the page shows the
 //! status line with Sync now and Pause, the switches (each at once), the tabs
-//! open on the other devices, the account (rename this device, sign out),
+//! open on the other devices, Delete history on cloud (signed in, sync on or
+//! off; its words are [`copper_shell_core::cloud::eraser`]'s), the account
+//! (rename this device, sign out),
 //! Pair another device, the instance with its fingerprint and Disconnect, and
 //! the log.
 //!
@@ -21,8 +23,10 @@ use crate::platform::Gtk;
 use crate::shell::{OpenTab, Shell, WeakShell};
 use copper_cloud::client::MintedPairing;
 use copper_cloud::link::{is_bare_pairing_code, manual_link};
+use copper_cloud::sync::delete::Stop;
 use copper_cloud::sync::history::parse_stamp;
 use copper_cloud::{Code, Domain, JoinCode, SsoLink, parse_join_code};
+use copper_shell_core::cloud::eraser::{self, Span};
 use copper_shell_core::cloud::sso::{
     SsoDone, SsoState, SsoTarget, domain_hint, same_instance, sign_in,
 };
@@ -37,6 +41,20 @@ use std::time::Duration;
 
 thread_local! {
     static CURRENT: RefCell<Weak<CloudPage>> = const { RefCell::new(Weak::new()) };
+    /// Delete history on cloud: one at a time, kept here rather than on the
+    /// page so it goes on, and its result stays, when Settings closes (Mac:
+    /// `CloudHistoryEraser.shared`).
+    static ERASER: RefCell<Eraser> = RefCell::default();
+}
+
+#[derive(Default)]
+struct Eraser {
+    working: bool,
+    /// Looking through history here (a site was given): can be stopped.
+    looking: bool,
+    result: Option<String>,
+    problem: Option<String>,
+    stop: Option<Stop>,
 }
 
 /// The Cloud page on screen right now, if any.
@@ -132,6 +150,22 @@ struct Widgets {
     pair_revoke: Option<gtk::Button>,
     pair_copy: Option<gtk::Button>,
     pair_said: Option<gtk::Label>,
+    // Delete history on cloud.
+    erase: Option<EraseCard>,
+}
+
+/// Delete history on cloud's rows.
+struct EraseCard {
+    /// "Asking the cloud…" / unsupported, until the controls can show.
+    info: adw::ActionRow,
+    range: adw::ComboRow,
+    site_row: adw::ActionRow,
+    site: gtk::Entry,
+    status: adw::ActionRow,
+    spinner: gtk::Spinner,
+    stop: gtk::Button,
+    delete: gtk::Button,
+    problem: gtk::Label,
 }
 
 /// Settings › Cloud.
@@ -168,6 +202,8 @@ pub struct CloudPage {
     sso_done: RefCell<Option<SsoDone>>,
     /// The pasted code's row says something (hidden while signing in).
     said_shown: Cell<bool>,
+    /// The cloud was asked whether it can delete history.
+    erase_asked: Cell<bool>,
 }
 
 /// Build the page (the Settings dialog calls this each time it opens).
@@ -197,6 +233,7 @@ pub fn build(shell: &Shell) -> adw::PreferencesPage {
         sso_problem: RefCell::default(),
         sso_done: RefCell::new(sign_in().state().signed_in),
         said_shown: Cell::new(false),
+        erase_asked: Cell::new(false),
     });
     CURRENT.with(|c| *c.borrow_mut() = Rc::downgrade(&me));
     me.rebuild();
@@ -328,6 +365,42 @@ fn plain_row(title: &str, subtitle: &str) -> adw::ActionRow {
     r
 }
 
+/// Delete `span` of history on the cloud, maybe for one site only; history
+/// here stays.
+fn erase(span: Span, site: Option<&str>) {
+    let Some(c) = get() else { return };
+    let selector = eraser::selector(span, site, copper_core::date::now_unix());
+    let stop = Stop::new();
+    ERASER.with(|e| {
+        *e.borrow_mut() = Eraser {
+            working: true,
+            looking: selector.scans(),
+            stop: Some(stop.clone()),
+            ..Eraser::default()
+        }
+    });
+    if let Some(p) = current() {
+        p.draw_erase();
+    }
+    let sync = c.sync.clone();
+    run_then(
+        async move { sync.delete_history_until(&selector, &stop).await },
+        |r| {
+            ERASER.with(|e| {
+                let mut e = e.borrow_mut();
+                *e = Eraser::default();
+                match eraser::finished(r) {
+                    Ok(said) => e.result = Some(said),
+                    Err(problem) => e.problem = Some(problem),
+                }
+            });
+            if let Some(p) = current() {
+                p.draw_erase();
+            }
+        },
+    );
+}
+
 /// `ab:cd:…` cut to its first `pairs` pairs.
 fn short_fp(fp: &str, pairs: usize) -> String {
     let parts: Vec<&str> = fp.split(':').collect();
@@ -429,6 +502,7 @@ impl CloudPage {
             Phase::SignedIn => {
                 self.build_connected();
                 self.build_choose();
+                self.build_erase();
                 self.build_account();
                 self.build_pairing();
             }
@@ -436,6 +510,7 @@ impl CloudPage {
                 self.build_status();
                 self.build_switches();
                 self.build_devices();
+                self.build_erase();
                 self.build_account();
                 self.build_pairing();
                 self.build_instance();
@@ -484,6 +559,7 @@ impl CloudPage {
             });
         }
         drop(w);
+        self.draw_erase();
         self.refresh_devices(&status.other_devices);
         if let Some(entry) = &self.w.borrow().device_name
             && !entry.has_focus()
@@ -1949,6 +2025,172 @@ impl CloudPage {
         }
         g.add(&list);
         self.w.borrow_mut().device_rows.push(list.upcast());
+    }
+
+    // MARK: Delete history on cloud
+
+    /// The range, maybe a site, the button; asks the cloud first whether it
+    /// can delete history at all.
+    fn build_erase(self: &Rc<Self>) {
+        let Some(cloud) = get() else { return };
+        let g = group(eraser::TITLE, None);
+        let list = gtk::ListBox::new();
+        list.add_css_class("boxed-list");
+        list.set_selection_mode(gtk::SelectionMode::None);
+        let info = plain_row(eraser::TITLE, eraser::ASKING);
+        let range = adw::ComboRow::new();
+        range.set_title("Time range");
+        range.set_subtitle(eraser::RANGE_DETAIL);
+        let titles: Vec<&str> = Span::ALL.iter().map(|s| s.title()).collect();
+        range.set_model(Some(&gtk::StringList::new(&titles)));
+        let site_row = plain_row("Only this site", eraser::SITE_DETAIL);
+        let site = gtk::Entry::new();
+        site.set_placeholder_text(Some("example.com"));
+        site.set_width_chars(16);
+        site.set_valign(gtk::Align::Center);
+        site.update_property(&[gtk::accessible::Property::Label("Only this site")]);
+        site_row.add_suffix(&site);
+        site_row.set_activatable_widget(Some(&site));
+        let status = plain_row("", "");
+        let spinner = gtk::Spinner::new();
+        let stop = button("Stop", &["flat"]);
+        let delete = button("Delete history on cloud…", &["destructive-action"]);
+        status.add_suffix(&spinner);
+        status.add_suffix(&stop);
+        status.add_suffix(&delete);
+        for r in [
+            info.upcast_ref::<gtk::Widget>(),
+            range.upcast_ref(),
+            site_row.upcast_ref(),
+            status.upcast_ref(),
+        ] {
+            list.append(r);
+        }
+        g.add(&list);
+        let problem = error_label();
+        g.add(&problem);
+        self.add(g);
+        let weak = Rc::downgrade(self);
+        site.connect_changed(move |_| {
+            if let Some(me) = weak.upgrade() {
+                me.draw_erase();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        site.connect_activate(move |_| {
+            if let Some(me) = weak.upgrade() {
+                me.ask_erase();
+            }
+        });
+        stop.connect_clicked(|_| {
+            if let Some(s) = ERASER.with(|e| e.borrow().stop.clone()) {
+                s.stop();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        delete.connect_clicked(move |_| {
+            if let Some(me) = weak.upgrade() {
+                me.ask_erase();
+            }
+        });
+        self.w.borrow_mut().erase = Some(EraseCard {
+            info,
+            range,
+            site_row,
+            site,
+            status,
+            spinner,
+            stop,
+            delete,
+            problem,
+        });
+        if cloud.client.deletes_history().is_none() && !self.erase_asked.get() {
+            let client = cloud.client.clone();
+            let weak = Rc::downgrade(self);
+            run_then(async move { client.load_info(false).await }, move |_| {
+                if let Some(me) = weak.upgrade() {
+                    me.erase_asked.set(true);
+                    me.draw_erase();
+                }
+            });
+        }
+        self.draw_erase();
+    }
+
+    fn draw_erase(&self) {
+        let Some(cloud) = get() else { return };
+        let w = self.w.borrow();
+        let Some(c) = &w.erase else { return };
+        let can = cloud.client.deletes_history();
+        c.info.set_visible(can != Some(true));
+        c.info.set_subtitle(match can {
+            Some(false) => eraser::UNSUPPORTED,
+            _ if self.erase_asked.get() => eraser::UNREACHABLE,
+            _ => eraser::ASKING,
+        });
+        for r in [
+            c.range.upcast_ref::<gtk::Widget>(),
+            c.site_row.upcast_ref(),
+            c.status.upcast_ref(),
+        ] {
+            r.set_visible(can == Some(true));
+        }
+        let bad = eraser::typed_site(&c.site.text()).is_err();
+        ERASER.with(|e| {
+            let e = e.borrow();
+            c.status.set_title(&eraser::delete_status(
+                bad,
+                e.working,
+                e.looking,
+                e.result.as_deref(),
+            ));
+            if bad {
+                c.status.add_css_class("error");
+            } else {
+                c.status.remove_css_class("error");
+            }
+            c.spinner.set_visible(e.working);
+            c.spinner.set_spinning(e.working);
+            c.stop.set_visible(e.working && e.looking);
+            c.delete.set_sensitive(!e.working && !bad);
+            c.problem.set_text(e.problem.as_deref().unwrap_or(""));
+            c.problem.set_visible(e.problem.is_some());
+        });
+    }
+
+    /// Delete history on cloud, once the person has said yes to the exact
+    /// range and site.
+    fn ask_erase(self: &Rc<Self>) {
+        let (span, site) = {
+            let w = self.w.borrow();
+            let Some(c) = &w.erase else { return };
+            let span = Span::ALL
+                .get(c.range.selected() as usize)
+                .copied()
+                .unwrap_or_default();
+            (span, eraser::typed_site(&c.site.text()))
+        };
+        let Ok(site) = site else { return };
+        if ERASER.with(|e| e.borrow().working) {
+            return;
+        }
+        let dialog = adw::AlertDialog::new(
+            Some(&eraser::delete_question(span, site.as_deref())),
+            Some(eraser::DELETE_MESSAGE),
+        );
+        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("delete", "Delete");
+        dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+        dialog.set_default_response(Some("cancel"));
+        dialog.set_close_response("cancel");
+        dialog.connect_response(None, move |_, r| {
+            if r == "delete" {
+                erase(span, site.as_deref());
+            }
+        });
+        if let Some(p) = self.page() {
+            dialog.present(Some(&p));
+        }
     }
 
     /// The instance in one line, with Details (the fingerprint) and Disconnect.

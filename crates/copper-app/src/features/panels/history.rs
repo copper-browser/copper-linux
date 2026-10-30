@@ -169,6 +169,7 @@ impl HistoryPanel {
             if let Some(s) = weak.upgrade() {
                 if s.history_mut().forget(&key) {
                     s.history_changed();
+                    crate::cloud::history_forgot(&key);
                 }
                 p.draw(&s);
             }
