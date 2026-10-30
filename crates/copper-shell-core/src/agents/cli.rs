@@ -40,11 +40,11 @@ pub const VERBS: &[&str] = &[
     "health",
     "call",
     "cloud-history",
+    "intelligence",
     "help",
     "setup",
     "session",
     "link",
-    "intelligence",
     "claude",
     "bitwarden",
     "crashes",
@@ -160,6 +160,7 @@ mod tests {
             "health",
             "call",
             "cloud-history",
+            "intelligence",
         ] {
             // A verb copper_mcp::cli parses must route there, not open a tab.
             let parsed = copper_mcp::cli::make_request(verb, &[]);

@@ -8,16 +8,17 @@
 //! goes, it fades) so the page under it can be clicked; it comes back once
 //! the pointer has left the space it took.
 //!
-//! The model is `copper_mcp::drive::DriveEvent`s; the one thing that goes
-//! back is Stop ([`copper_shell_core::agents::Agents::stop_hand`]): a Jev
-//! run stops before its next action, any other agent has its next calls
-//! refused for 30 s.
+//! The model is `copper_mcp::drive::DriveEvent`s; what goes back is Stop
+//! ([`copper_shell_core::agents::Agents::stop_hand`]): a Jev run stops
+//! before its next action, any other agent has its next calls refused for
+//! 30 s — and, while they are, "Let it back in" (Mac `DriveCard`,
+//! [`copper_shell_core::agents::Agents::resume_hand`]) ends that early.
 
 use crate::shell::GtkShell;
 use crate::shell::{Shell, WeakShell};
 use copper_core::TabId;
 use copper_mcp::Who;
-use copper_mcp::drive::{DriveEvent, Status};
+use copper_mcp::drive::{DriveEvent, REFUSAL, Status};
 use gtk4 as gtk;
 use gtk4::prelude::*;
 use std::cell::{Cell, RefCell};
@@ -80,8 +81,15 @@ impl Hand {
         self.busy > 0 || self.last.elapsed() < BADGE_FOR
     }
 
+    /// A stopped hand stays on show while its calls are refused, so it can
+    /// be let back in.
     fn pill(&self) -> bool {
-        self.busy > 0 || self.last.elapsed() < PILL_FOR
+        self.busy > 0 || self.refused() || self.last.elapsed() < PILL_FOR
+    }
+
+    /// Stopped (not a Jev run, which just ends) and its calls still refused.
+    fn refused(&self) -> bool {
+        self.stopped && !self.jev && self.last.elapsed() < REFUSAL
     }
 }
 
@@ -92,6 +100,8 @@ struct Pill {
     name: gtk::Label,
     action: gtk::Label,
     stop: gtk::Button,
+    /// "Let it back in", while a stopped agent's calls are refused.
+    back: gtk::Button,
     /// Whose Stop the button is.
     key: Rc<RefCell<String>>,
     frame: glib::WeakRef<gtk::Overlay>,
@@ -166,6 +176,11 @@ const STYLE: &str = r#"
   background: transparent; box-shadow: none; opacity: .7;
 }
 .copper-agent-pill button.agent-stop:hover { opacity: 1; background-color: alpha(@window_fg_color, .08); }
+.copper-agent-pill button.agent-back {
+  min-height: 18px; padding: 0 7px; border-radius: 9px; font-size: 11px; font-weight: 500;
+  background: transparent; box-shadow: none;
+}
+.copper-agent-pill button.agent-back:hover { background-color: alpha(@window_fg_color, .08); }
 .copper-agent-pill.stopped .agent-action { opacity: .9; }
 .copper-row .badge.agent-mark { opacity: 1; }
 
@@ -306,7 +321,37 @@ impl Marks {
         };
         for id in tabs {
             self.redraw(&id);
-            self.later(&id, PILL_FOR);
+            self.later(&id, REFUSAL);
+        }
+    }
+
+    /// Whether "Let it back in" shows on this tab's capsule (QA).
+    pub fn back_visible(&self, id: &TabId) -> bool {
+        self.pills
+            .borrow()
+            .get(id)
+            .is_some_and(|p| p.root.is_visible() && p.back.is_visible())
+    }
+
+    /// "Let it back in": every stopped agent's calls are accepted again.
+    pub fn let_back_in(&self) {
+        if let Some(a) = super::agents() {
+            a.resume_hand();
+        }
+        let tabs: Vec<TabId> = {
+            let mut hands = self.hands.borrow_mut();
+            let mut tabs = Vec::new();
+            for (id, hs) in hands.iter_mut() {
+                for h in hs.iter_mut().filter(|h| h.stopped) {
+                    h.stopped = false;
+                    h.action.clear();
+                    tabs.push(id.clone());
+                }
+            }
+            tabs
+        };
+        for id in tabs {
+            self.redraw(&id);
         }
     }
 
@@ -547,6 +592,7 @@ impl Marks {
             p.root.remove_css_class("stopped");
         }
         p.stop.set_visible(!hand.stopped);
+        p.back.set_visible(hand.refused());
         p.stop.set_tooltip_text(Some(if hand.jev {
             "Stop the run"
         } else {
@@ -599,6 +645,18 @@ impl Marks {
             }
         });
         root.append(&stop);
+        let back = gtk::Button::with_label("Let it back in");
+        back.add_css_class("agent-back");
+        back.set_valign(gtk::Align::Center);
+        back.set_focusable(false);
+        back.set_tooltip_text(Some("Accept the agent's calls again now"));
+        back.set_visible(false);
+        back.connect_clicked(|_| {
+            if let Some(a) = super::agents() {
+                a.marks.let_back_in();
+            }
+        });
+        root.append(&back);
         root.set_visible(false);
         frame.add_overlay(&root);
         let tuck = Rc::new(Tuck::default());
@@ -609,6 +667,7 @@ impl Marks {
             name,
             action,
             stop,
+            back,
             key,
             frame: frame.downgrade(),
             tuck,

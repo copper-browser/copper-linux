@@ -115,13 +115,15 @@ tab again, and may sleep.
 | `browser_crashes` | Copper's own crash history on this computer, newest first. |
 | `browser_sign_in`, `browser_autofill` | Fill a saved sign-in, card, identity or custom field without the secret ever leaving Copper (below). |
 | `cloud_history_delete` | Deletes your history on Copper Cloud ([cloud.md](cloud.md)). History on this computer stays. Loopback clients only. |
-| `canvas_*` | Read and draw on your canvases: `canvas_list`, `canvas_open`, `canvas_read`, `canvas_apply`, `canvas_select`, `canvas_focus`, `canvas_create`, `canvas_invite`, `canvas_share_link`, `canvas_join`, `canvas_screenshot`, `canvas_chat`. A big canvas reads in pages: `canvas_read` with `overview` first, then `frame` or `region`, or follow `next` as `cursor`; `ids`, `types` and `query` narrow any read. A canvas that is closed, asleep or still loading is opened behind your tab and waited for (up to a minute for a huge one). |
+| `canvas_*` | Read and draw on your canvases: `canvas_list` (with the `invitations` waiting for your answer, `{canvas, from}`, when signed in to Copper Cloud), `canvas_open`, `canvas_read`, `canvas_apply`, `canvas_select`, `canvas_focus`, `canvas_create`, `canvas_invite`, `canvas_share_link`, `canvas_join`, `canvas_screenshot`, `canvas_chat`. A big canvas reads in pages: `canvas_read` with `overview` first, then `frame` or `region`, or follow `next` as `cursor`; `ids`, `types` and `query` narrow any read. A canvas that is closed, asleep or still loading is opened behind your tab and waited for (up to a minute for a huge one). |
 
 Each tool takes an optional `reason`: one short sentence on what the agent is
 doing and why. Copper never acts on it; it only shows it to you. While an
 agent works in a tab, that tab gets a small dot in the tab row, and a capsule
-over the page says who is driving and offers **Stop**. The capsule tucks
-itself away when your pointer comes near. You can turn these announcements
+over the page says who is driving and offers **Stop**. Stop ends a Jev run
+before its next action; any other agent has its calls refused for 30
+seconds, and while they are, the capsule offers **Let it back in** to accept
+them again now. The capsule tucks itself away when your pointer comes near. You can turn these announcements
 off with **Say what the agent does** in Settings › Agents.
 
 ### Saved sign-ins, cards and identities
@@ -250,6 +252,13 @@ reads, bursts) and one entry per step with where its time went
 `burst: true` for a field typed without a decision of its own) — for a
 harness.
 
+Jev can also choose **SIGN_IN** on a page with a password field when an
+account for the site is shared with agents, and **AUTOFILL_CARD** /
+**AUTOFILL_IDENTITY** when the page has card or address fields and a card or
+identity is shared (Settings › Passwords › Agent access). Copper fills them
+as `browser_sign_in` and `browser_autofill` do; the secret never reaches the
+model.
+
 ## The command line
 
 The `copper` binary is also a client for the running window. It never starts
@@ -265,6 +274,23 @@ copper shot page.png
 copper signin --otp
 copper call browser_navigate '{"url":"https://example.com"}'
 ```
+
+`copper intelligence` shows and sets the model keys in the running Copper,
+through its loopback server. It prints JSON and never a key:
+
+```sh
+copper intelligence                  # status: jevReady, routerReady, lane, tier, model, sources…
+copper intelligence sources          # where each key and address comes from: local | cloud | none | default
+copper intelligence refresh          # ask the linked Copper Cloud for its keys again now
+echo "$TS_KEY" | copper intelligence set --jev -     # - reads the value from stdin
+copper intelligence set --model opus --router-url https://llm.example.com
+```
+
+`set` takes `--lane key|claude`, `--model haiku|sonnet|opus`,
+`--haiku-model`, `--sonnet-model`, `--opus-model`, `--jev`, `--jev-model`,
+`--router-key`, `--router-url`, `--router-model` and `--text-model`, and
+writes `intelligence.json` (0600). It exits 1 when Copper refuses a value.
+`--jev-vision` and `--jev-fast` are Mac-only for now.
 
 `copper help` lists everything. `--json` prints the raw result, and
 `--tab ID` works in another tab for one call. With the Flatpak, the same
@@ -286,8 +312,9 @@ These Mac features aren't in the Linux build:
 - what Jev sees (`vision`: auto, screenshot, marks, box, pixels): Jev reads
   the element table only, and `jev_run` does not offer `vision`. No Fast
   mode switch in Settings yet either; it is `jevFast` in `intelligence.json`
-- the CLI's `setup`, `session`, `intelligence`, `claude`, `bitwarden`,
-  `crashes`, `listen` and `transcript` commands
+  (`copper intelligence set --jev-fast` / `--jev-vision` are refused)
+- the CLI's `setup`, `session`, `claude`, `bitwarden`, `crashes`, `listen`
+  and `transcript` commands
 
 ## What it is not
 

@@ -384,6 +384,12 @@ impl<P: Platform> Agents<P> {
         self.mcp.stop(key);
     }
 
+    /// Let it back in (Mac `DriveCard`): every stopped agent's calls are
+    /// accepted again now, before the 30 s refusal runs out.
+    pub fn resume_hand(&self) {
+        self.mcp.resume();
+    }
+
     /// What to paste into Claude Code's or phi's MCP settings.
     pub fn http_config(&self) -> String {
         http_config(&self.endpoint(), &self.token())

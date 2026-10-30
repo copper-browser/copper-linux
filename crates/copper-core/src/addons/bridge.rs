@@ -462,7 +462,8 @@ pub async fn handle_message<H: BridgeHost>(ctx: &Context, host: &H, text: &str) 
 }
 
 /// Answer one call (see the module docs). Unknown methods are
-/// `unavailable` (a newer shim on an older Copper).
+/// `bad_request`, as on the Mac (`AddonBridge.call`): a newer shim on an
+/// older Copper, or `voice.*` where there is no dictation.
 pub async fn dispatch<H: BridgeHost>(ctx: &Context, host: &H, req: BridgeRequest) -> Reply {
     let result = run(ctx, host, &req).await;
     Reply { id: req.id, result }
@@ -571,8 +572,8 @@ async fn run<H: BridgeHost>(
             };
             host.agent_call(call).await
         }
-        other => Err(BridgeError::unavailable(format!(
-            "{other} isn't a bridge v{BRIDGE_VERSION} method"
+        other => Err(BridgeError::bad_request(format!(
+            "No bridge method \"{other}\""
         ))),
     }
 }
@@ -1084,10 +1085,12 @@ mod tests {
                 .code,
             ErrorCode::Unavailable
         );
-        assert_eq!(
-            call(&c, &host, "nope.method", json!({})).unwrap_err().code,
-            ErrorCode::Unavailable
-        );
+        // Unknown, and voice.* without dictation: bad_request, the Mac's words.
+        for m in ["nope.method", "voice.start", "voice.state"] {
+            let e = call(&c, &host, m, json!({})).unwrap_err();
+            assert_eq!(e.code, ErrorCode::BadRequest);
+            assert_eq!(e.message, format!("No bridge method \"{m}\""));
+        }
         // Without the capability in the manifest: denied.
         let bare = ctx(tmp.path(), &[]);
         for (m, p) in [

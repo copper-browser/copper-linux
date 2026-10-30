@@ -87,6 +87,10 @@ bytes on every platform:
 | `copper.oauth.authorize({url, redirectPrefix})` | opens a "Sign in — <addon>" window with your normal browsing profile. It ends at the first address that starts with `redirectPrefix`. Closing the window gives `cancelled`; running past the time limit gives `timeout`. |
 | `copper.ui.close()` | puts the sidebar away |
 | `copper.agent.*` | `unavailable`: Copper for Linux has no native agent yet |
+| `copper.voice.*` | `bad_request`: there is no dictation on Linux, so an addon leaves its mic out |
+
+A method this Copper doesn't know answers `bad_request` (`No bridge method
+"…"`), as on the Mac.
 
 Events: `visibility` (the sidebar was shown or put away), `theme` (light or
 dark), `settings`, and `page` (the active tab changed). `page` needs the

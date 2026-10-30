@@ -11,6 +11,7 @@ use crate::{PageOf, Platform};
 use copper_core::TabId;
 use copper_creds::credential::{AutofillCard, AutofillIdentity, Credential, Source};
 use copper_engine::PageView;
+use copper_pagejs::jev::Extras;
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 
@@ -242,6 +243,47 @@ pub async fn sign_in<U: FormsUi>(
         "what": "otp",
         "submitted": submitted,
     }))
+}
+
+/// The agent-only controls Jev may offer on `tab` (`Ultrafast.availability`):
+/// SIGN_IN when the page has a password field and an account for its site
+/// is shared with agents; AUTOFILL_CARD / AUTOFILL_IDENTITY when it has
+/// such fields and a card / identity is shared. None in a private tab. The
+/// vault is asked only about what the page has fields for.
+pub async fn jev_extras<P: Platform>(shell: Shell<P>, tab: TabId) -> Extras {
+    let (Ok(Target { page, host, origin }), Some(vault)) =
+        (target(&shell, &tab, "Jev"), super::vault())
+    else {
+        return Extras::default();
+    };
+    let has = |c: copper_pagejs::Call<bool>| {
+        let page = page.clone();
+        async move { call(&page, &c).await.unwrap_or(false) }
+    };
+    let mut out = Extras::default();
+    if has(copper_pagejs::forms::has_password()).await {
+        let v = vault.clone();
+        let all = rt::run(async move { v.candidates(&host, origin.as_deref()).await })
+            .await
+            .unwrap_or_default();
+        out.sign_in = all.iter().any(|c| agent_allowed(&shell, c));
+    }
+    if has(copper_pagejs::forms::has_fields("card")).await {
+        let v = vault.clone();
+        let cards = rt::run(async move { v.cards().await })
+            .await
+            .unwrap_or_default();
+        out.autofill_card = cards
+            .iter()
+            .any(|c| agent_allowed_id(&shell, &stable(&c.id)));
+    }
+    if has(copper_pagejs::forms::has_fields("identity")).await {
+        let ids = rt::run(async move { vault.identities().await })
+            .await
+            .unwrap_or_default();
+        out.autofill_identity = ids.iter().any(|i| agent_allowed_id(&shell, &stable(&i.id)));
+    }
+    out
 }
 
 /// `bw:<id>` / `op:<id>`: the id a card, identity or field is shared under.

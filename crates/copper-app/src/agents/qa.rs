@@ -515,6 +515,15 @@ mod debug {
             a.marks.pill_visible(&tab),
             "Stop: the capsule says it stopped",
         );
+        run.check(
+            a.marks.back_visible(&tab),
+            "Stop: the capsule offers Let it back in",
+        );
+        a.marks.let_back_in();
+        run.check(
+            !a.marks.back_visible(&tab),
+            "Let it back in: the offer goes once its calls are accepted",
+        );
         a.set_enabled(false);
         let _ = s.window().is_active();
     }
