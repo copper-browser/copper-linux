@@ -5,6 +5,10 @@ release dates.
 
 ## Unreleased
 
+## 0.5.2 — 2026-10-30
+
+Settings has the Mac's pages, in the Mac's order, and is shorter.
+
 ### Changed
 
 - **Settings has the Mac's pages, in the Mac's order (Copper#115–#118).**
@@ -24,6 +28,9 @@ release dates.
   Ctrl+Tab and the agent rows take the Mac's shorter subtitles.
   (`window/settings.rs`, `features/settings/`, `features/updates.rs`,
   `agents/settings.rs`, `forms/settings.rs`; docs/agents.md, docs/addons.md.)
+- **Addons' bridge has `copper.voice` (Copper#119).** There is no native
+  voice on Linux, so `voice.*` answers "unknown method" and addons hide
+  their mic.
 
 ## 0.5.1 — 2026-10-29
 
