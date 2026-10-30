@@ -253,6 +253,17 @@ impl<P: Platform> Host for AppHost<P> {
         }
     }
 
+    fn jev_extras(&self, id: &TabId) -> impl Future<Output = copper_pagejs::jev::Extras> {
+        let shell = self.shell();
+        let id = id.clone();
+        async move {
+            match shell {
+                Some(shell) => crate::forms::mcp::jev_extras(shell, id).await,
+                None => Default::default(),
+            }
+        }
+    }
+
     fn canvas(
         &self,
         tool: &str,
@@ -283,6 +294,32 @@ impl<P: Platform> Host for AppHost<P> {
     fn crashes(&self, args: &Map<String, Value>) -> Result<String, String> {
         let shell = self.shell().ok_or("no window")?;
         crashes::answer(shell.store(), args)
+    }
+
+    fn control(&self, method: &str, params: &Map<String, Value>) -> impl Future<Output = Value> {
+        let answer = match self.shell() {
+            Some(shell) if method == "copper/intelligence" => {
+                let cloud = crate::cloud::get();
+                let fetch = cloud.map_or("never".into(), |c| c.intelligence.last_outcome());
+                copper_mcp::intelligence::control(
+                    params,
+                    shell.store(),
+                    self.claude_ready(),
+                    &fetch,
+                    || {
+                        if let Some(c) = cloud {
+                            let i = c.intelligence.clone();
+                            crate::cloud::spawn(async move { i.fetch().await });
+                        }
+                    },
+                )
+            }
+            // `copper/link`, `copper/claude`, `copper/bitwarden`: not here yet.
+            _ => {
+                serde_json::json!({ "error": format!("{method} is not available in this build yet") })
+            }
+        };
+        async move { answer }
     }
 
     fn intelligence(&self) -> IntelligenceSource {

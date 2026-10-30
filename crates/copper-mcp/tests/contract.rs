@@ -37,6 +37,8 @@ struct World {
     /// The fake page's state for Jev: clicked once → marker m2.
     clicked: bool,
     jev_endpoint: Option<String>,
+    /// Where `copper/intelligence` keeps its files, when the test gives one.
+    store: Option<copper_core::Store>,
 }
 
 #[derive(Clone)]
@@ -260,6 +262,16 @@ impl Host for FakeHost {
 
     fn announce(&self, text: &str) {
         self.0.borrow_mut().announced.push(text.to_string());
+    }
+
+    fn control(&self, method: &str, params: &Map<String, Value>) -> impl Future<Output = Value> {
+        let answer = match &self.0.borrow().store {
+            Some(store) if method == "copper/intelligence" => {
+                copper_mcp::intelligence::control(params, store, false, "never", || {})
+            }
+            _ => json!({ "error": format!("{method} is not available in this build yet") }),
+        };
+        async move { answer }
     }
 
     fn intelligence(&self) -> IntelligenceSource {
@@ -844,6 +856,44 @@ async fn cli_and_bridge_talk_to_the_running_server() {
             .unwrap();
             assert_eq!(code, 1);
             assert!(err.starts_with("copper: ref:e42: not found."), "{err}");
+
+            // `copper intelligence`: the CLI → copper/intelligence → Host::control.
+            let dir = tempfile::tempdir().unwrap();
+            let store = copper_core::Store::new(copper_core::Paths::new(dir.path(), dir.path()));
+            r.host.0.borrow_mut().store = Some(store.clone());
+            let cli = |args: &'static [&'static str]| {
+                let e = endpoint.clone();
+                tokio::task::spawn_blocking(move || {
+                    let (mut out, mut err) = (Vec::new(), Vec::new());
+                    let ep = || Some(e.clone());
+                    let launch = || Ok(());
+                    let mut env = copper_mcp::cli::Env {
+                        endpoint: &ep,
+                        launch: &launch,
+                        launch_env: false,
+                        out: &mut out,
+                        err: &mut err,
+                    };
+                    let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+                    let code = copper_mcp::cli::run_with(&args, &mut env);
+                    (code, String::from_utf8(out).unwrap(), String::from_utf8(err).unwrap())
+                })
+            };
+            let (code, out, err) = cli(&["intelligence", "set", "--jev", "ts-cli", "--model", "haiku"]).await.unwrap();
+            assert_eq!(code, 0, "{err}");
+            let answer: Value = serde_json::from_str(&out).unwrap();
+            assert_eq!(answer["applied"], json!(["tier", "jevKey"]));
+            assert_eq!(answer["jevReady"], true);
+            assert!(!out.contains("ts-cli"), "{out}");
+            let saved: IntelligenceKeys = store.load().unwrap().value;
+            assert_eq!(saved.jev_key.as_deref(), Some("ts-cli"));
+            let (code, _, err) = cli(&["intelligence", "set", "--lane", "bus"]).await.unwrap();
+            assert_eq!(code, 1);
+            assert_eq!(err, "copper: lane must be key or claude\n");
+            r.host.0.borrow_mut().store = None;
+            let (code, _, err) = cli(&["intelligence"]).await.unwrap();
+            assert_eq!(code, 1);
+            assert_eq!(err, "copper: copper/intelligence is not available in this build yet\n");
 
             let e = endpoint.clone();
             let out = tokio::task::spawn_blocking(move || {

@@ -406,8 +406,43 @@ pub fn present(shell: &Shell) {
     close.add_css_class("pill");
     close.add_css_class("suggested-action");
     close.set_halign(gtk::Align::Center);
-    summary.set_child(Some(&close));
+    // Mac Flow's "Open the Chrome guide": offered when tabs or bookmarks
+    // came over from Chrome.
+    let guide = gtk::Button::with_label("Open the Chrome guide");
+    guide.add_css_class("flat");
+    guide.set_halign(gtk::Align::Center);
+    guide.set_visible(false);
+    let guide_failed = gtk::Label::new(Some("Couldn't open the Chrome guide."));
+    guide_failed.add_css_class("dim-label");
+    guide_failed.set_visible(false);
+    let done_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    done_box.append(&close);
+    done_box.append(&guide);
+    done_box.append(&guide_failed);
+    summary.set_child(Some(&done_box));
     stack.add_named(&summary, Some("done"));
+    {
+        let (dialog, weak) = (dialog.clone(), shell.downgrade());
+        let failed = guide_failed.clone();
+        guide.connect_clicked(move |b| {
+            let Some(shell) = weak.upgrade() else { return };
+            b.set_label("Opening the guide…");
+            b.set_sensitive(false);
+            failed.set_visible(false);
+            let (b, dialog, failed) = (b.clone(), dialog.clone(), failed.clone());
+            glib::spawn_future_local(async move {
+                let landed = crate::canvas::land_chrome_canvas(&shell).await;
+                tracing::info!(?landed, "bring in: chrome guide");
+                if landed.is_some() {
+                    dialog.close();
+                } else {
+                    b.set_label("Open the Chrome guide");
+                    b.set_sensitive(true);
+                    failed.set_visible(true);
+                }
+            });
+        });
+    }
     {
         let dialog = dialog.clone();
         close.connect_clicked(move |_| {
@@ -436,8 +471,13 @@ pub fn present(shell: &Shell) {
             passwords: sw_passwords.is_active() && sw_passwords.is_sensitive(),
         };
         stack2.set_visible_child_name("working");
-        let (doing, bar, summary, stack) =
-            (doing.clone(), bar.clone(), summary.clone(), stack2.clone());
+        let (doing, bar, summary, stack, guide) = (
+            doing.clone(),
+            bar.clone(),
+            summary.clone(),
+            stack2.clone(),
+            guide.clone(),
+        );
         glib::spawn_future_local(async move {
             let d2 = doing.clone();
             let b2 = bar.clone();
@@ -455,6 +495,9 @@ pub fn present(shell: &Shell) {
                 desc.push_str(&sum.problems.join("\n"));
             }
             summary.set_description(Some(&glib::markup_escape_text(&desc)));
+            guide.set_visible(
+                choice.browser.name == "Chrome" && (sum.tabs > 0 || sum.bookmarks > 0),
+            );
             stack.set_visible_child_name("done");
             tracing::info!(?sum, "bring in");
             LAST.with(|l| *l.borrow_mut() = Some(sum));

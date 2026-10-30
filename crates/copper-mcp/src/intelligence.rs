@@ -776,9 +776,308 @@ pub async fn router_ask(
     })
 }
 
+// MARK: - `copper intelligence` (`Intelligence.control`)
+
+fn lane_name(lane: Lane) -> &'static str {
+    match lane {
+        Lane::Key => "key",
+        Lane::Claude => "claude",
+    }
+}
+
+/// Readiness and the non-secret settings (`Intelligence.status`). Never a key.
+pub fn status(source: &IntelligenceSource, claude_ready: bool) -> Map<String, Value> {
+    let eff = Effective::new(source, claude_ready);
+    let local = Keys::from_file(&source.local);
+    let mut out = json!({
+        "jevReady": eff.jev_ready(), "routerReady": eff.router_ready(),
+        "routerURL": eff.keys.router_url, "routerModel": local.router_model,
+        "jevModel": eff.keys.jev_model,
+        "lane": lane_name(eff.keys.lane),
+        "laneSource": eff.sources.get("lane").map_or("local", String::as_str),
+        "localLane": lane_name(local.lane), "tier": local.tier.name(),
+        "model": model(&eff.keys, None),
+        "modelReady": eff.model_ready(), "claudeReady": claude_ready,
+        // No Claude account lane in this build yet.
+        "claudeAccount": Value::Null,
+        "sources": eff.sources,
+    });
+    if let Some(cloud) = &source.cloud {
+        let mut line = json!({
+            "host": cloud.host.clone().unwrap_or_default(),
+            "provides": copper_cloud::intelligence::provides(cloud),
+        });
+        if let Some(updated) = &cloud.updated_at {
+            line["updatedAt"] = json!(updated);
+        }
+        if let Some(fetched) = cloud.fetched_at {
+            line["fetchedAt"] = json!(fetched.to_string());
+        }
+        if let Some(turns) = cloud.agent_max_turns() {
+            line["agentMaxTurns"] = json!(turns);
+        }
+        out["cloud"] = line;
+    }
+    match out {
+        Value::Object(map) => map,
+        _ => Map::new(),
+    }
+}
+
+/// Where each key and address comes from, and the same as one line
+/// (`Intelligence.sources`, `sourcesLine`).
+fn sources(source: &IntelligenceSource) -> Map<String, Value> {
+    let s = Effective::new(source, false).sources;
+    let line = [
+        "jevKey",
+        "jevEndpoint",
+        "jevModel",
+        "routerKey",
+        "routerURL",
+        "lane",
+    ]
+    .iter()
+    .map(|k| format!("{k} {}", s.get(*k).map_or("none", String::as_str)))
+    .collect::<Vec<_>>()
+    .join(" · ");
+    let mut out: Map<String, Value> = s.into_iter().map(|(k, v)| (k, json!(v))).collect();
+    out.insert("line".into(), json!(line));
+    out
+}
+
+/// `set`: the new `intelligence.json` and the fields it changed, or why not.
+/// Fields this build doesn't know are kept.
+fn set(
+    local: &IntelligenceKeys,
+    cloud: Option<&CloudProvided>,
+    p: &Map<String, Value>,
+) -> Result<(IntelligenceKeys, Vec<&'static str>), String> {
+    let mut next = local.clone();
+    let mut applied: Vec<&'static str> = Vec::new();
+    let text = |name: &str| -> Result<Option<String>, String> {
+        match p.get(name) {
+            None => Ok(None),
+            Some(Value::String(s)) => Ok(Some(s.trim().to_string())),
+            Some(_) => Err(format!("{name} must be a string")),
+        }
+    };
+    if let Some(raw) = p.get("lane") {
+        let lane = raw.as_str().map(|s| s.trim().to_lowercase());
+        match lane.as_deref() {
+            Some(l @ ("key" | "claude")) => next.lane = Some(l.to_string()),
+            _ => return Err("lane must be key or claude".into()),
+        }
+        applied.push("lane");
+    }
+    if let Some(raw) = p.get("tier") {
+        let tier = raw
+            .as_str()
+            .and_then(|s| Tier::parse(&s.trim().to_lowercase()))
+            .ok_or("tier must be haiku, sonnet or opus")?;
+        next.tier = Some(tier.name().to_string());
+        applied.push("tier");
+    }
+    if let Some(raw) = p.get("routerURL") {
+        let url = raw.as_str().ok_or("routerURL must be a string")?;
+        if web(Some(url)).is_none() {
+            return Err("routerURL must be an http(s) URL".into());
+        }
+    }
+    for (name, field) in [
+        ("jevKey", &mut next.jev_key),
+        ("routerKey", &mut next.router_key),
+        ("routerURL", &mut next.router_url),
+        ("textModel", &mut next.text_model),
+    ] {
+        if let Some(value) = text(name)? {
+            *field = Some(value);
+            applied.push(name);
+        }
+    }
+    for name in ["jevVision", "jevFast"] {
+        if p.contains_key(name) {
+            return Err(format!("{name} is not available in this build yet"));
+        }
+    }
+    if let Some(value) = text("jevModel")? {
+        next.jev_model = Some(if value.is_empty() {
+            DEFAULT_JEV_MODEL.into()
+        } else {
+            value
+        });
+        applied.push("jevModel");
+    }
+    let keys = Keys::from_file(&next);
+    let (mut router_models, mut claude_models) = (keys.router_models, keys.claude_models);
+    let (mut router_named, mut claude_named) = (false, false);
+    if let Some(value) = text("routerModel")? {
+        let name = gateway_name(&value);
+        next.router_model = Some(name.clone());
+        router_models.insert(keys.tier.name().to_string(), name);
+        router_named = true;
+        applied.push("routerModel");
+    }
+    // A tier's name goes to the map of the lane in force (the gateway's
+    // while Copper Cloud provides its key).
+    let names_lane = merge(&Keys::from_file(&next), cloud).0.lane;
+    for (name, tier) in [
+        ("haikuModel", Tier::Haiku),
+        ("sonnetModel", Tier::Sonnet),
+        ("opusModel", Tier::Opus),
+    ] {
+        if let Some(value) = text(name)? {
+            if names_lane == Lane::Claude {
+                claude_models.insert(tier.name().into(), claude_name(&value, Some(tier)));
+                claude_named = true;
+            } else {
+                router_models.insert(tier.name().into(), gateway_name(&value));
+                router_named = true;
+            }
+            applied.push(name);
+        }
+    }
+    if router_named {
+        next.router_models = Some(router_models);
+    }
+    if claude_named {
+        next.claude_models = Some(claude_models);
+    }
+    if applied.is_empty() {
+        return Err("set needs at least one of lane, tier, jevKey, jevModel, routerKey, routerURL, routerModel, haikuModel, sonnetModel, opusModel, textModel".into());
+    }
+    Ok((next, applied))
+}
+
+/// The loopback-only `copper/intelligence` method (`Intelligence.control`):
+/// `op` is `status` (default), `sources`, `refresh`, `set` or `reload`.
+/// Reads the files fresh; `set` writes `intelligence.json` (0600).
+/// `cloud_fetch` is the cloud's last `/v1/intelligence` outcome;
+/// `refresh` asks the cloud again now. The answer never holds a key.
+pub fn control(
+    params: &Map<String, Value>,
+    store: &Store,
+    claude_ready: bool,
+    cloud_fetch: &str,
+    refresh: impl FnOnce(),
+) -> Value {
+    let source = read_files(store);
+    let out = match params.get("op").and_then(Value::as_str).unwrap_or("status") {
+        "status" => status(&source, claude_ready),
+        "reload" => {
+            // Every call reads the file, so there is nothing to reload; say
+            // whether it reads.
+            let mut out = status(&source, claude_ready);
+            let read = read_json::<IntelligenceKeys>(&store.path(DataFile::Intelligence));
+            out.insert("reloaded".into(), json!(read.is_some()));
+            out
+        }
+        "sources" => {
+            let mut out = sources(&source);
+            if let Some(cloud) = &source.cloud {
+                out.insert(
+                    "cloudHost".into(),
+                    json!(cloud.host.clone().unwrap_or_default()),
+                );
+            }
+            out.insert("cloudFetch".into(), json!(cloud_fetch));
+            out
+        }
+        "refresh" => {
+            refresh();
+            let mut out = sources(&source);
+            out.insert("refreshing".into(), json!(true));
+            out
+        }
+        "set" => match set(&source.local, source.cloud.as_ref(), params) {
+            Err(e) => return json!({ "error": e }),
+            Ok((next, applied)) => {
+                if let Err(e) = store.save(&next) {
+                    return json!({ "error": format!("intelligence.json was not written: {e}") });
+                }
+                let saved = IntelligenceSource {
+                    local: next,
+                    cloud: source.cloud,
+                };
+                let mut out = status(&saved, claude_ready);
+                out.insert("applied".into(), json!(applied));
+                out
+            }
+        },
+        other => {
+            return json!({ "error": format!("unknown intelligence op {other} (status, sources, refresh, set, reload)") });
+        }
+    };
+    Value::Object(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn control_answers_and_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(copper_core::Paths::new(dir.path(), dir.path()));
+        let ask = |p: Value| {
+            let mut asked = false;
+            let out = control(p.as_object().unwrap(), &store, false, "never", || {
+                asked = true
+            });
+            (out, asked)
+        };
+        let (s, _) = ask(json!({}));
+        assert_eq!(s["jevReady"], false);
+        assert_eq!(s["lane"], "key");
+        assert_eq!(s["tier"], "sonnet");
+        assert_eq!(s["sources"]["jevKey"], "none");
+        let (s, _) = ask(
+            json!({"op": "set", "jevKey": " ts-1 ", "tier": "Opus", "opusModel": "exowatt/opus-5", "routerURL": "https://gw.example"}),
+        );
+        assert_eq!(
+            s["applied"],
+            json!(["tier", "jevKey", "routerURL", "opusModel"])
+        );
+        assert_eq!(s["jevReady"], true);
+        assert_eq!(s["tier"], "opus");
+        assert!(!s.to_string().contains("ts-1"), "a key was answered");
+        let file: IntelligenceKeys = store.load().unwrap().value;
+        assert_eq!(file.jev_key.as_deref(), Some("ts-1"));
+        assert_eq!(file.router_models.unwrap()["opus"], "opus");
+        let (s, _) = ask(json!({"op": "sources"}));
+        assert_eq!(s["jevKey"], "local");
+        assert_eq!(s["cloudFetch"], "never");
+        assert_eq!(
+            s["line"],
+            "jevKey local · jevEndpoint default · jevModel default · routerKey none · routerURL local · lane local"
+        );
+        let (s, asked) = ask(json!({"op": "refresh"}));
+        assert!(asked);
+        assert_eq!(s["refreshing"], true);
+        assert_eq!(ask(json!({"op": "reload"})).0["reloaded"], true);
+        for (p, e) in [
+            (json!({"op": "set"}), "set needs at least one of"),
+            (
+                json!({"op": "set", "lane": "bus"}),
+                "lane must be key or claude",
+            ),
+            (
+                json!({"op": "set", "routerURL": "ftp://x"}),
+                "routerURL must be an http(s) URL",
+            ),
+            (json!({"op": "set", "jevKey": 5}), "jevKey must be a string"),
+            (
+                json!({"op": "set", "jevFast": "on"}),
+                "jevFast is not available",
+            ),
+            (json!({"op": "nope"}), "unknown intelligence op nope"),
+        ] {
+            let msg = ask(p).0["error"].as_str().unwrap_or("").to_string();
+            assert!(msg.starts_with(e), "{msg}");
+        }
+        // A refused set wrote nothing.
+        let file: IntelligenceKeys = store.load().unwrap().value;
+        assert_eq!(file.lane, None);
+    }
 
     #[test]
     fn families() {

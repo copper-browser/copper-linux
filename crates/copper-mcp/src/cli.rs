@@ -44,6 +44,8 @@ pub struct Parsed {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Early {
     Help,
+    /// A verb's own help (`copper intelligence --help`).
+    HelpFor(&'static str),
     Usage(String),
 }
 
@@ -77,6 +79,8 @@ pub const USAGE: &str = "Usage: copper [--json] [--launch] [--tab ID] <command> 
   key KEY                                   press a key
   tools                                     list available tools
   health                                    check the agent server and Jev mode
+  intelligence [status|sources|refresh|set|reload]  model access, keys, their source and readiness; never prints a key
+                                            (copper intelligence --help)
   cloud-history delete [--since 1h|24h|7d|TIME] [--until TIME] [--host SITE]... [--page URL]... [--device ID|this] [--all]
                                             delete your history on Copper Cloud (every computer's); this
                                             one's stays. A site matches its subdomains; nothing chosen needs --all
@@ -102,12 +106,101 @@ Use --json for the raw JSON-RPC result. Pass --launch (or COPPER_LAUNCH=1)
 to opt into starting Copper when it is down. (Hidden: --dry-run prints the decision.)
 ";
 
+pub const INTELLIGENCE_USAGE: &str = "Usage: copper intelligence <command>
+
+The models Copper asks: Jev (TypeSafe) and the router (a LiteLLM gateway).
+Output is JSON and never contains a key.
+
+  status                     {jevReady, routerReady, routerURL, routerModel, jevModel,
+                             lane, laneSource, localLane, tier, model,
+                             modelReady, claudeReady, claudeAccount, sources, cloud} (default);
+                             lane is the one in force: key (laneSource cloud) while
+                             Copper Cloud provides a gateway key, else localLane
+  sources                    where each key and address comes from: local | cloud | none
+                             (keys) or local | cloud | default (addresses, jev model),
+                             and the lane: local | cloud;
+                             Copper Cloud provides keys through GET /v1/intelligence
+  refresh                    ask the linked Copper Cloud for its keys again now
+  set [--lane key|claude] [--model haiku|sonnet|opus]
+      [--haiku-model M] [--sonnet-model M] [--opus-model M]
+      [--jev KEY] [--jev-model M]
+      [--router-key KEY] [--router-url URL] [--router-model M] [--text-model M]
+                             write into intelligence.json (0600) through the running app;
+                             a value of - is read from stdin, keeping keys out of `ps`
+  reload                     re-read intelligence.json (Copper reads it on every use)
+
+Exit 0 on success, 1 when the app refuses a value, 2 on usage or when Copper is unreachable.
+";
+
+/// `copper intelligence …` (`CLI.runIntelligence`): the loopback-only
+/// `copper/intelligence` method.
+fn intelligence(args: &[String]) -> Result<Spec, Early> {
+    let (op, rest) = match args.split_first() {
+        Some((op, rest)) => (op.as_str(), rest),
+        None => ("status", args),
+    };
+    if ["help", "-h", "--help"].contains(&op) || rest.iter().any(|a| a == "-h" || a == "--help") {
+        return Err(Early::HelpFor(INTELLIGENCE_USAGE));
+    }
+    let mut params = Map::new();
+    params.insert("op".into(), json!(op));
+    match op {
+        "status" | "reload" | "sources" | "refresh" => {
+            if !rest.is_empty() {
+                return bad(format!("intelligence {op} takes no arguments"));
+            }
+        }
+        "set" => {
+            let mut flags = rest.iter();
+            while let Some(flag) = flags.next() {
+                let name = match flag.as_str() {
+                    "--jev" => "jevKey",
+                    "--router-key" => "routerKey",
+                    "--router-url" => "routerURL",
+                    "--router-model" => "routerModel",
+                    "--text-model" => "textModel",
+                    "--jev-model" => "jevModel",
+                    "--lane" => "lane",
+                    "--model" => "tier",
+                    "--haiku-model" => "haikuModel",
+                    "--sonnet-model" => "sonnetModel",
+                    "--opus-model" => "opusModel",
+                    other => return bad(format!("unknown intelligence set option: {other}")),
+                };
+                let Some(mut value) = flags.next().cloned() else {
+                    return bad(format!("{flag} needs a value"));
+                };
+                // `-` reads the value from stdin, so a key need not sit in
+                // the process list.
+                if value == "-" {
+                    let mut line = String::new();
+                    if io::stdin().read_line(&mut line).unwrap_or(0) == 0 {
+                        return bad(format!("{flag} - : nothing on stdin"));
+                    }
+                    value = line.trim_end_matches(['\r', '\n']).to_string();
+                }
+                params.insert(name.into(), json!(value));
+            }
+            if params.len() == 1 {
+                return bad(
+                    "intelligence set needs at least one of --lane, --model, --haiku-model, --sonnet-model, --opus-model, --jev, --jev-model, --router-key, --router-url, --router-model, --text-model",
+                );
+            }
+        }
+        _ => {
+            return bad(format!(
+                "unknown intelligence command: {op} (see copper intelligence --help)"
+            ));
+        }
+    }
+    Ok(rpc("copper/intelligence", Value::Object(params)))
+}
+
 /// Commands the Mac has that this build does not (yet).
-pub(crate) const ELSEWHERE: [&str; 9] = [
+pub(crate) const ELSEWHERE: [&str; 8] = [
     "setup",
     "session",
     "link",
-    "intelligence",
     "claude",
     "bitwarden",
     "crashes",
@@ -579,6 +672,7 @@ pub fn make_request(command: &str, args: &[String]) -> Result<Spec, Early> {
             Ok(call("cloud_history_delete", Value::Object(arguments)))
         }
         // Answered without a window, before this parser (crate::cloud_cli).
+        "intelligence" => intelligence(args),
         "cloud" => bad("cloud runs on its own: copper cloud pair|sso|status (copper cloud help)"),
         // Answered without a window, before this parser (copper_botpass::cli).
         "botpass" => {
@@ -794,6 +888,10 @@ pub fn run_with(args: &[String], env: &mut Env<'_>) -> i32 {
             let _ = writeln!(env.out, "{USAGE}");
             return 0;
         }
+        Err(Early::HelpFor(text)) => {
+            let _ = writeln!(env.out, "{text}");
+            return 0;
+        }
         Err(Early::Usage(text)) => {
             error(env, &text);
             return 2;
@@ -804,7 +902,15 @@ pub fn run_with(args: &[String], env: &mut Env<'_>) -> i32 {
         let running = (env.endpoint)().is_some_and(|c| health(c.port).is_some_and(|(_, r)| r));
         if running {
             match &spec.request {
-                Some(request) => print_json(env, request),
+                Some(request) => {
+                    let mut shown = request.clone();
+                    for secret in ["jevKey", "routerKey"] {
+                        if let Some(v) = shown["params"].get_mut(secret) {
+                            *v = json!("…");
+                        }
+                    }
+                    print_json(env, &shown)
+                }
                 None => {
                     let _ = writeln!(env.out, "GET /health");
                 }
@@ -841,7 +947,28 @@ pub fn run_with(args: &[String], env: &mut Env<'_>) -> i32 {
     let Some(response) = post(env, request, &conf, timeout) else {
         return 2;
     };
+    if request["method"]
+        .as_str()
+        .is_some_and(|m| m.starts_with("copper/"))
+    {
+        return render_control(env, &response);
+    }
     render(env, response, &spec, parsed.json)
+}
+
+/// A control's answer (`copper intelligence …`): JSON always; its `error`
+/// goes to stderr with exit 1.
+fn render_control(env: &mut Env<'_>, response: &Value) -> i32 {
+    let Some(result) = response.get("result").filter(|r| r.is_object()) else {
+        error(env, "Copper returned no result");
+        return 2;
+    };
+    if let Some(message) = result["error"].as_str().filter(|m| !m.is_empty()) {
+        error(env, message);
+        return 1;
+    }
+    print_json(env, result);
+    0
 }
 
 fn do_health(env: &mut Env<'_>, conf: &Endpoint, json_out: bool) -> i32 {
@@ -1100,6 +1227,63 @@ mod tests {
             };
             assert!(parse(&s(&extra), false).is_ok(), "{verb}");
         }
+    }
+
+    #[test]
+    fn intelligence_controls() {
+        let params =
+            |a: &[&str]| parse(&s(a), false).unwrap().spec.request.unwrap()["params"].clone();
+        let p = parse(&s(&["intelligence"]), false).unwrap();
+        assert_eq!(
+            p.spec.request.unwrap(),
+            json!({"jsonrpc": "2.0", "id": 1, "method": "copper/intelligence", "params": {"op": "status"}})
+        );
+        assert_eq!(
+            params(&[
+                "intelligence",
+                "set",
+                "--jev",
+                "ts-1",
+                "--model",
+                "opus",
+                "--router-url",
+                "https://gw"
+            ]),
+            json!({"op": "set", "jevKey": "ts-1", "tier": "opus", "routerURL": "https://gw"})
+        );
+        assert_eq!(
+            params(&["intelligence", "refresh"]),
+            json!({"op": "refresh"})
+        );
+        for (a, e) in [
+            (
+                &["intelligence", "set"][..],
+                "intelligence set needs at least one of",
+            ),
+            (&["intelligence", "set", "--jev"][..], "--jev needs a value"),
+            (
+                &["intelligence", "set", "--nope", "x"][..],
+                "unknown intelligence set option: --nope",
+            ),
+            (
+                &["intelligence", "status", "x"][..],
+                "intelligence status takes no arguments",
+            ),
+            (
+                &["intelligence", "frob"][..],
+                "unknown intelligence command: frob",
+            ),
+        ] {
+            assert!(
+                matches!(parse(&s(a), false), Err(Early::Usage(t)) if t.starts_with(e)),
+                "{a:?}"
+            );
+        }
+        assert_eq!(
+            parse(&s(&["intelligence", "--help"]), false),
+            Err(Early::HelpFor(INTELLIGENCE_USAGE))
+        );
+        assert!(!ELSEWHERE.contains(&"intelligence"));
     }
 
     #[test]

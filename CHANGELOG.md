@@ -34,6 +34,12 @@ release dates.
 - **The command palette offers "Install <addon> <version> for the Agent
   sidebar"** while an addon update waits, as the Mac's does.
 
+### Changed
+
+- **Addons: an unknown bridge method, or `voice.*` here, answers
+  `bad_request`** (`No bridge method "…"`), the Mac's code and words, not
+  `unavailable`. Addons still leave their mic out. (docs/addons.md.)
+
 ### Fixed
 
 - **Clearing history, or removing a page from History, now reaches Copper
@@ -88,6 +94,23 @@ release dates.
   after a confirmation. (`forms/csv.rs`.)
 - **Add and copy saved passwords.** Saved passwords has **Add a password**
   (site, username, password) and a copy button on each row.
+- **Jev can sign in and fill cards and addresses.** On a page with a
+  password field and an account shared with agents, Jev's controls include
+  SIGN_IN; with card or address fields and a shared card or identity,
+  AUTOFILL_CARD and AUTOFILL_IDENTITY — as on the Mac. The secret never
+  reaches the model. (`forms::mcp::jev_extras`.)
+- **`copper intelligence status|sources|refresh|set|reload`.** The model
+  keys in the running Copper from the command line, as JSON and never a key;
+  `set` writes `intelligence.json`, and `-` reads a value from stdin. On
+  Windows too. (docs/agents.md.)
+- **Let it back in.** After Stop, the capsule over the page offers **Let it
+  back in** for the 30 seconds an agent's calls are refused; pressing it
+  accepts them again now, as the Mac's driver card does.
+- **`canvas_list` names your invitations.** Canvases you've been invited to
+  and haven't answered come back as `invitations` (`{canvas, from}`).
+- **Open the Chrome guide.** When tabs or bookmarks come over from Chrome,
+  the Bring In summary offers the "Switching from Chrome" canvas, as the
+  Mac's move does.
 
 ## 0.5.2 — 2026-10-30
 

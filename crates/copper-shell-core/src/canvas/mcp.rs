@@ -6,9 +6,11 @@ use super::host::CanvasHost;
 use super::registry::{self, is_personal, is_shared};
 use crate::Platform;
 use crate::shell::Shell;
+use copper_cloud::canvas::Invite;
 use copper_core::canvas::CanvasEntry;
 use serde_json::{Map, Value, json};
 use std::rc::Rc;
+use std::time::Duration;
 
 /// `tool` is the full tool name (e.g. `canvas_read`). Returns JSON content
 /// items as the Mac does (a JSON value per content item; text items as
@@ -120,6 +122,41 @@ fn cloud_line() -> String {
     "not connected — canvases are local to this device".into()
 }
 
+/// The invites addressed to the signed-in account; none when signed out
+/// or the cloud does not answer.
+async fn my_invites() -> Vec<Invite> {
+    let Some(api) = crate::cloud::get()
+        .filter(|_| registry::cloud_ready())
+        .map(|c| c.canvas.clone())
+    else {
+        return Vec::new();
+    };
+    // shortcut: asked on every canvas_list (the Mac keeps a list); bounded so a slow cloud can't hold it.
+    let ask = async move { tokio::time::timeout(Duration::from_secs(5), api.my_invites()).await };
+    match crate::cloud::spawn(ask).await {
+        Ok(Ok(Ok(list))) => list,
+        _ => Vec::new(),
+    }
+}
+
+/// `canvas_list`'s `invitations` (`CanvasTools`): the pending ones, as
+/// `{canvas, from}`.
+fn invitations(list: &[Invite]) -> Vec<Value> {
+    let named = |s: &Option<String>| s.clone().filter(|v| !v.trim().is_empty());
+    list.iter()
+        .filter(|i| i.status.as_deref().is_none_or(|s| s == "pending"))
+        .map(|i| {
+            let from = i
+                .invited_by
+                .as_ref()
+                .and_then(|p| named(&p.display_name).or_else(|| named(&p.email)))
+                .unwrap_or_default();
+            let canvas = named(&i.canvas_name).unwrap_or_else(|| "A canvas".into());
+            json!({ "canvas": canvas, "from": from })
+        })
+        .collect()
+}
+
 /// Who an agent's ops are attributed to (`as`: a name or `{name, color}`).
 fn caller(said: Option<&Value>) -> Value {
     let mut name = "Agent".to_string();
@@ -200,9 +237,13 @@ async fn run<P: Platform>(
                 .iter()
                 .map(|e| summary(shell, e))
                 .collect();
-            Ok(vec![Value::String(json_text(
-                &json!({"canvases": rows, "cloud": cloud_line()}),
-            ))])
+            let mut out = json!({"canvases": rows, "cloud": cloud_line()});
+            // Invites waiting for the user's answer — theirs to give.
+            let waiting = invitations(&my_invites().await);
+            if !waiting.is_empty() {
+                out["invitations"] = json!(waiting);
+            }
+            Ok(vec![Value::String(json_text(&out))])
         }
         "canvas_open" => {
             let e = resolve(shell, args, false)?;
@@ -455,6 +496,24 @@ fn picture_text(name: &str, pending: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invitations_are_the_pending_ones() {
+        let list: Vec<Invite> = serde_json::from_value(json!([
+            {"id": "1", "canvas_name": "Roadmap", "status": "pending",
+             "invited_by": {"id": "u", "display_name": "Ann", "email": "ann@x"}},
+            {"id": "2", "invited_by": {"id": "v", "display_name": "", "email": "bo@x"}},
+            {"id": "3", "canvas_name": "Old", "status": "accepted"},
+        ]))
+        .unwrap();
+        assert_eq!(
+            invitations(&list),
+            vec![
+                json!({"canvas": "Roadmap", "from": "Ann"}),
+                json!({"canvas": "A canvas", "from": "bo@x"}),
+            ]
+        );
+    }
 
     #[test]
     fn a_picture_names_what_was_still_loading() {

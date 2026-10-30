@@ -718,8 +718,20 @@ async fn bitwarden_otp_and_agents(run: &Rc<Run>) {
         refused.as_ref().is_err_and(|e| e.contains("not shared")),
         format!("{refused:?}"),
     );
+    let extras = super::mcp::jev_extras(run.shell.clone(), tab.clone()).await;
+    run.check(
+        "jev extras: no SIGN_IN while nothing is shared",
+        extras == Default::default(),
+        format!("{extras:?}"),
+    );
     run.shell
         .update_settings(|s| s.set(super::keys::SHARE_ALL, true));
+    let extras = super::mcp::jev_extras(run.shell.clone(), tab.clone()).await;
+    run.check(
+        "jev extras: SIGN_IN on a login page once shared",
+        extras.sign_in && !extras.autofill_card,
+        format!("{extras:?}"),
+    );
     let mut args = serde_json::Map::new();
     args.insert("account".into(), json!(USER));
     args.insert("submit".into(), json!(false));
@@ -763,6 +775,12 @@ async fn bitwarden_otp_and_agents(run: &Rc<Run>) {
     run.shell.close(&tab);
 
     let tab = run.open("checkout.html").await;
+    let extras = super::mcp::jev_extras(run.shell.clone(), tab.clone()).await;
+    run.check(
+        "jev extras: AUTOFILL_CARD and AUTOFILL_IDENTITY on a checkout",
+        extras.autofill_card && extras.autofill_identity && !extras.sign_in,
+        format!("{extras:?}"),
+    );
     let mut args = serde_json::Map::new();
     args.insert("kind".into(), json!("card"));
     let r = super::mcp::autofill(run.shell.clone(), tab.clone(), args).await;
@@ -831,6 +849,33 @@ async fn chrome_import(run: &Rc<Run>) {
     Run::sleep(400).await;
     run.check("import: the sheet runs and ends on a summary", finished, "");
     run.shots("10b-import-summary").await;
+    let mut guide = None;
+    walk(&sheet_w, &mut |w| {
+        if guide.is_none()
+            && let Some(b) = w.downcast_ref::<gtk::Button>()
+            && b.label().as_deref() == Some("Open the Chrome guide")
+        {
+            guide = Some(b.clone());
+        }
+    });
+    let offered = guide.as_ref().is_some_and(|b| b.is_visible());
+    run.check("import: the summary offers the Chrome guide", offered, "");
+    if let Some(b) = guide.filter(|_| offered) {
+        b.emit_clicked();
+        // Landed: the sheet goes. Failed: the button is pressable again.
+        run.until(90, || !b.is_mapped() || b.is_sensitive()).await;
+        let shown = crate::canvas::registry::visible().iter().any(|e| {
+            e.name == "Switching from Chrome"
+                && crate::canvas::tab_showing(&run.shell, &e.id).is_some()
+        });
+        Run::sleep(1000).await;
+        run.check(
+            "import: the Chrome guide lands as a canvas tab and the sheet goes",
+            shown && !b.is_mapped(),
+            format!("{:?}", b.label()),
+        );
+        run.shots("10c-chrome-guide").await;
+    }
     sheet.close();
     Run::sleep(300).await;
     let Some(sum) = super::import::LAST.with(|l| l.borrow().clone()) else {
