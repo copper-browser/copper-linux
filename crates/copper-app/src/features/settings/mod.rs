@@ -1,11 +1,12 @@
 //! Settings pages (Mac: `Settings.swift`, `Fork/SettingsFork.swift`,
 //! `Fork/PrivacySettings.swift`): General (with Appearance and Downloads),
-//! Tabs (with Layout and the Calendar pin's calendars), Privacy, Extensions
-//! (Addons), About (Updates). Every key is the Mac's (copper-core `settings`).
+//! Tabs (with Layout and the Calendar pin's calendars), Intelligence (model
+//! keys and Jev's), Privacy, Extensions (Addons), About (Updates). Every key is the Mac's (copper-core `settings`).
 //! The shell skips its own General page because this lane registers one.
 
 pub mod calendar;
 pub mod general;
+pub mod intelligence;
 pub mod privacy;
 
 use crate::actions::{SettingsPage, register_settings_page};
@@ -27,6 +28,13 @@ pub fn register(shell: &Shell) {
         general::page,
     );
     page(shell, "tabs", "Tabs", "view-dual-symbolic", tabs);
+    page(
+        shell,
+        intelligence::ID,
+        "Intelligence",
+        "starred-symbolic",
+        intelligence::page,
+    );
     page(
         shell,
         "privacy",

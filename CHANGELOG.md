@@ -51,6 +51,18 @@ release dates.
   Renaming or ungrouping a folder is not here yet. (`window/column.rs`,
   `window/tabs.rs`; the flat `window/dropzone.rs` gives way to
   `copper_shell_core::sidedrop`.)
+- **Settings › Intelligence (Copper#115, #118).** Between Extensions and
+  Agents, as on the Mac: the gateway's API key and address, the model size
+  (Haiku, Sonnet, Opus) with the name it asks for, Model names under
+  Advanced, **Check** (one small question to Jev and one to the gateway,
+  answered in plain words), and the Jev key with **Get a key**
+  (console.typesafe.ai). Keys Copper Cloud provides say so and their boxes
+  fade. No Claude account sign-in yet, so there is no Use chooser: the API
+  key is the lane. Agents › Jev mode's key row now points here with **Add
+  key**, and its Advanced holds the **Text model**. Everything is still
+  kept in `intelligence.json`. The Check's words live in copper-mcp
+  (`intelligence::check`), for Windows to share. (`features/settings/
+  intelligence.rs`, `agents/settings.rs`; docs/agents.md.)
 
 ## 0.5.2 — 2026-10-30
 

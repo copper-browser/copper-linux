@@ -3,6 +3,8 @@
 //! under Advanced the port and the bearer token with Copy and Rotate; Jev
 //! mode; one "Copy for another agent" row (HTTP and stdio configs). As the
 //! Mac since Copper#115/#118: no "The key" section, the note is the server's.
+//! The Jev key lives on Intelligence; Jev mode only points there while it is
+//! missing (Copper#118), and folds the text model under its own Advanced.
 
 use super::{Agents, Server, agents};
 use crate::shell::Shell;
@@ -29,6 +31,10 @@ struct Rows {
     port: adw::SpinRow,
     jev: adw::SwitchRow,
     jev_key: adw::ActionRow,
+    jev_more: adw::ExpanderRow,
+    text_model: adw::ActionRow,
+    text_dot: gtk::Box,
+    text_field: gtk::Entry,
     token: gtk::Label,
     server: adw::PreferencesGroup,
     /// Set while the rows are being brought in line with the state, so
@@ -107,9 +113,47 @@ pub fn page(shell: &Shell) -> adw::PreferencesPage {
     let jev_key = adw::ActionRow::new();
     jev_key.set_title("Jev key");
     jev_key.set_subtitle(
-        "Jev mode needs a key (ts-…) from your TypeSafe account. It goes in intelligence.json, as jevKey.",
+        "Jev mode needs a key from your TypeSafe account. It goes in Intelligence › Jev.",
     );
+    let add_key = gtk::Button::with_label("Add key");
+    add_key.add_css_class("suggested-action");
+    add_key.set_valign(gtk::Align::Center);
+    add_key.connect_clicked(|b| {
+        if let Some(d) = b
+            .ancestor(adw::PreferencesDialog::static_type())
+            .and_downcast::<adw::PreferencesDialog>()
+        {
+            d.set_visible_page_name(crate::features::settings::intelligence::ID);
+        }
+    });
+    jev_key.add_suffix(&add_key);
     jev_group.add(&jev_key);
+    // Mac: Jev mode's Advanced (Copper#118); Linux has the text model only.
+    let jev_more = adw::ExpanderRow::new();
+    jev_more.set_title("Advanced");
+    jev_more.set_subtitle("1 more setting");
+    let text_model = adw::ActionRow::new();
+    text_model.set_title("Text model");
+    text_model.set_subtitle_lines(3);
+    let text_dot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    text_dot.add_css_class("agent-status-dot");
+    text_dot.set_valign(gtk::Align::Center);
+    text_dot.set_size_request(8, 8);
+    text_model.add_suffix(&text_dot);
+    let text_field = gtk::Entry::new();
+    text_field.set_text(
+        crate::features::settings::intelligence::local(shell)
+            .text_model
+            .as_deref()
+            .unwrap_or(""),
+    );
+    text_field.set_width_chars(14);
+    text_field.add_css_class("monospace");
+    text_field.set_valign(gtk::Align::Center);
+    text_field.update_property(&[gtk::accessible::Property::Label("Text model")]);
+    text_model.add_suffix(&text_field);
+    jev_more.add_row(&text_model);
+    jev_group.add(&jev_more);
     page.add(&jev_group);
 
     // — connecting —
@@ -133,6 +177,10 @@ pub fn page(shell: &Shell) -> adw::PreferencesPage {
         port,
         jev,
         jev_key,
+        jev_more,
+        text_model,
+        text_dot,
+        text_field,
         token,
         server,
         syncing: Cell::new(false),
@@ -166,6 +214,20 @@ pub fn page(shell: &Shell) -> adw::PreferencesPage {
                 && let Some(a) = agents()
             {
                 a.set_jev(r.is_active());
+            }
+        }
+    });
+    rows.text_field.connect_changed({
+        let weak = shell.downgrade();
+        let rows = Rc::downgrade(&rows);
+        move |e| {
+            let Some(s) = weak.upgrade() else { return };
+            let text = e.text().trim().to_string();
+            crate::features::settings::intelligence::edit(&s, |k| {
+                k.text_model = (!text.is_empty()).then_some(text)
+            });
+            if let (Some(rows), Some(a)) = (rows.upgrade(), agents()) {
+                sync(&rows, &a, &s);
             }
         }
     });
@@ -226,9 +288,29 @@ fn sync(rows: &Rows, a: &Server, shell: &Shell) {
         rows.dot.add_css_class("on");
     }
     // Mac: the key row shows only while it is missing (Copper#118).
-    let source = copper_mcp::intelligence::read_files(shell.store());
-    let effective = copper_mcp::intelligence::Effective::new(&source, false);
+    let effective = crate::features::settings::intelligence::effective(shell);
     rows.jev_key.set_visible(a.jev() && !effective.jev_ready());
+    rows.jev_more.set_visible(a.jev());
+    let ready = effective.model_ready();
+    let model = copper_mcp::intelligence::model(&effective.keys, None);
+    rows.text_model.set_subtitle(&if ready {
+        format!(
+            "Writes what Jev types and answers jev_extract. Small and fast is the point; empty uses {model}."
+        )
+    } else {
+        "Typing text and jev_extract need a model — set one up in Intelligence.".into()
+    });
+    rows.text_field.set_placeholder_text(Some(&model));
+    for c in ["on", "trouble"] {
+        rows.text_dot.remove_css_class(c);
+    }
+    rows.text_dot
+        .add_css_class(if ready { "on" } else { "trouble" });
+    rows.text_dot.set_tooltip_text(Some(if ready {
+        "A model is set up"
+    } else {
+        "No model is set up"
+    }));
     let token = a.token();
     let shown: String = token.chars().take(8).collect();
     rows.token.set_text(&format!("{shown}…"));
