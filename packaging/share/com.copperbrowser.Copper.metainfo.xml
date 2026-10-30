@@ -51,6 +51,19 @@
   </requires>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.6.0" date="2026-10-30">
+      <description>
+        <p>Catching up with the Mac.</p>
+        <ul>
+          <li>Folders in the column: drawn, folded, dragged into and out of.</li>
+          <li>Ctrl+Tab in most-recent order, Archive Today after 12/24/48 hours, zoom remembered per site.</li>
+          <li>Settings › Intelligence, search in Settings, Settings reopens where you left it.</li>
+          <li>Two-step codes fill themselves, Bitwarden auto-lock, passwords in and out as CSV.</li>
+          <li>Jev's Fast mode and strategies; copper intelligence from the command line.</li>
+          <li>Fixed: Clear History and Forget page now reach Copper Cloud.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.5.2" date="2026-10-30">
       <description>
         <p>Settings has the Mac's pages, in the Mac's order, and is shorter.</p>
