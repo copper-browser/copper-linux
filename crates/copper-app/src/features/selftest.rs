@@ -782,10 +782,9 @@ impl Run {
         for (name, shot) in [
             ("general", "60-settings-general"),
             ("tabs", "61-settings-tabs"),
-            ("appearance", "62-settings-appearance"),
-            ("privacy", "63-settings-privacy"),
             ("extensions", "64-settings-extensions"),
-            ("updates", "65-settings-updates"),
+            ("privacy", "63-settings-privacy"),
+            ("about", "65-settings-about"),
         ] {
             dialog.set_visible_page_name(name);
             self.pause(400).await;
@@ -799,7 +798,7 @@ impl Run {
         let dialog = crate::window::settings::dialog(&self.shell);
         for (name, shot) in [
             ("privacy", "66-settings-privacy-dark"),
-            ("appearance", "67-settings-appearance-dark"),
+            ("general", "67-settings-general-dark"),
         ] {
             dialog.set_visible_page_name(name);
             self.pause(400).await;
@@ -834,9 +833,9 @@ impl Run {
         );
         self.shot("70-update-toast").await;
         let dialog = crate::window::settings::dialog(&self.shell);
-        dialog.set_visible_page_name("updates");
+        dialog.set_visible_page_name("about");
         self.pause(500).await;
-        self.shot("71-settings-updates-available").await;
+        self.shot("71-settings-about-update-available").await;
         dialog.close();
         // Against GitHub itself (no release yet is a fine answer).
         match updates::get::<Gtk>(updates::FEED).await {

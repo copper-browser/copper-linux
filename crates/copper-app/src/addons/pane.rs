@@ -353,7 +353,7 @@ fn focus_inside(p: &Rc<Pane>) {
     }
 }
 
-/// Settings › Addons changed the width (or tests): apply `w` now.
+/// Settings › Extensions changed the width (or tests): apply `w` now.
 pub fn set_width(shell: &Shell, w: f64) {
     let width = policy::clamp_width(Some(w));
     if let Some(p) = pane() {

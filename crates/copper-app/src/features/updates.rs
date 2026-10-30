@@ -1,5 +1,6 @@
 //! Knowing when there is a newer Copper, in the GTK window: GIO's sockets
-//! for the check, its toast and Settings › Updates. The check itself — the
+//! for the check, its toast and Settings › About (its Updates group; the Mac
+//! folded the Updates page into About, Copper#115). The check itself — the
 //! feed, its cadence, what was seen — is copper-shell-core's
 //! [`copper_shell_core::updates`], re-exported here.
 //!
@@ -125,7 +126,7 @@ fn open_release(shell: &Shell) {
     });
 }
 
-// MARK: - Settings › Updates
+// MARK: - Settings › About
 
 struct View {
     group: glib::WeakRef<adw::PreferencesGroup>,
@@ -134,7 +135,7 @@ struct View {
 }
 
 thread_local! {
-    /// Settings › Updates while it is open.
+    /// Settings › About while it is open.
     static VIEW: RefCell<Option<Rc<View>>> = const { RefCell::new(None) };
 }
 
@@ -146,7 +147,7 @@ fn redraw(shell: &Shell) {
 
 pub fn page(shell: &Shell) -> adw::PreferencesPage {
     let page = adw::PreferencesPage::new();
-    let g = group(Some("This Copper"));
+    let g = group(Some("Updates")); // Mac: "This Copper" became "Updates" on About
     page.add(&g);
     let note = gtk::Label::new(None);
     note.add_css_class("copper-settings-note");

@@ -1,7 +1,8 @@
 //! Settings › Agents (Mac: `AgentsPage` in `Fork/SettingsFork.swift`):
-//! the server switch and its status (a busy port says so), announcing, the
-//! port, Jev mode, the two "Copy config" rows (HTTP and stdio), and the
-//! bearer token with Copy and Rotate.
+//! the server switch and its status (a busy port says so), announcing, and
+//! under Advanced the port and the bearer token with Copy and Rotate; Jev
+//! mode; one "Copy for another agent" row (HTTP and stdio configs). As the
+//! Mac since Copper#115/#118: no "The key" section, the note is the server's.
 
 use super::{Agents, Server, agents};
 use crate::shell::Shell;
@@ -29,7 +30,7 @@ struct Rows {
     jev: adw::SwitchRow,
     jev_key: adw::ActionRow,
     token: gtk::Label,
-    note: gtk::Label,
+    server: adw::PreferencesGroup,
     /// Set while the rows are being brought in line with the state, so
     /// their change handlers do not write it back.
     syncing: Cell<bool>,
@@ -48,7 +49,7 @@ pub fn page(shell: &Shell) -> adw::PreferencesPage {
     let enabled = adw::SwitchRow::new();
     enabled.set_title("Let agents drive this window");
     enabled.set_subtitle(
-        "An MCP server on this computer only (127.0.0.1). Agents in your terminal or editor see your open tabs and act in them, in the browser you're already signed in to.",
+        "An MCP server on this computer only (127.0.0.1). Agents in your terminal or editor see your tabs and act in them, signed in as you.",
     );
     server.add(&enabled);
     let status = adw::ActionRow::new();
@@ -66,56 +67,21 @@ pub fn page(shell: &Shell) -> adw::PreferencesPage {
     announces.set_title("Say what the agent does");
     announces.set_subtitle("Each tool call, in the bar over the page it works in");
     server.add(&announces);
+    // Mac: Advanced folds the port and the token (Copper#118).
+    let advanced = adw::ExpanderRow::new();
+    advanced.set_title("Advanced");
+    advanced.set_subtitle("2 more settings");
     let port = adw::SpinRow::with_range(1.0, 65535.0, 1.0);
     port.set_title("Port");
     port.set_numeric(true);
     port.set_digits(0);
     port.set_climb_rate(1.0);
-    server.add(&port);
-    page.add(&server);
-
-    // — Jev —
-    let jev_group = adw::PreferencesGroup::new();
-    jev_group.set_title("Jev mode");
-    let jev = adw::SwitchRow::new();
-    jev.set_title("Let the agent hand Copper a goal");
-    jev.set_subtitle(
-        "Adds jev_run, jev_step, jev_observe and jev_extract. Jev picks the next click or key about every 200 ms and Copper does it in this window, until the goal is done.",
-    );
-    jev_group.add(&jev);
-    let jev_key = adw::ActionRow::new();
-    jev_key.set_title("Jev key");
-    jev_group.add(&jev_key);
-    page.add(&jev_group);
-
-    // — connecting —
-    let connect = adw::PreferencesGroup::new();
-    connect.set_title("Connect a client");
-    let http = adw::ActionRow::new();
-    http.set_title("Claude Code, phi, Cursor");
-    http.set_subtitle(
-        "Over HTTP. Paste into ~/.claude.json, ~/.pi/agent/mcp.json or the editor's MCP settings.",
-    );
-    http.add_suffix(&copy_button("Copy config", |a| a.http_config()));
-    connect.add(&http);
-    let stdio = adw::ActionRow::new();
-    stdio.set_title("Claude Desktop and other stdio clients");
-    stdio.set_subtitle(
-        "Runs copper --mcp-stdio, a pipe to this window that starts Copper if it isn't running.",
-    );
-    stdio.add_suffix(&copy_button("Copy config", |a| a.stdio_config()));
-    connect.add(&stdio);
-    page.add(&connect);
-
-    // — the key —
-    let key = adw::PreferencesGroup::new();
-    key.set_title("The key");
-    key.set_description(Some(
-        "Every request must carry it. Kept in agent.json, readable by you alone.",
-    ));
+    advanced.add_row(&port);
     let token_row = adw::ActionRow::new();
     token_row.set_title("Bearer token");
-    token_row.set_subtitle("A new one stops every client set up with the old one.");
+    token_row.set_subtitle(
+        "Every request must carry it; it stays in agent.json, readable by you alone. A new token stops every client set up with the old one.",
+    );
     let token = gtk::Label::new(None);
     token.add_css_class("agent-token");
     token.set_valign(gtk::Align::Center);
@@ -125,15 +91,39 @@ pub fn page(shell: &Shell) -> adw::PreferencesPage {
     rotate.set_valign(gtk::Align::Center);
     rotate.connect_clicked(|b| confirm_rotate(b.upcast_ref()));
     token_row.add_suffix(&rotate);
-    key.add(&token_row);
-    let note = gtk::Label::new(None);
-    note.add_css_class("dim-label");
-    note.add_css_class("caption");
-    note.set_wrap(true);
-    note.set_xalign(0.0);
-    note.set_margin_top(12);
-    key.add(&note);
-    page.add(&key);
+    advanced.add_row(&token_row);
+    server.add(&advanced);
+    page.add(&server);
+
+    // — Jev —
+    let jev_group = adw::PreferencesGroup::new();
+    jev_group.set_title("Jev mode");
+    let jev = adw::SwitchRow::new();
+    jev.set_title("Let the agent hand Copper a goal");
+    jev.set_subtitle(
+        "Adds jev_run, jev_step, jev_observe and jev_extract: Jev clicks and types in this window about every 200 ms until the goal is done.",
+    );
+    jev_group.add(&jev);
+    let jev_key = adw::ActionRow::new();
+    jev_key.set_title("Jev key");
+    jev_key.set_subtitle(
+        "Jev mode needs a key (ts-…) from your TypeSafe account. It goes in intelligence.json, as jevKey.",
+    );
+    jev_group.add(&jev_key);
+    page.add(&jev_group);
+
+    // — connecting —
+    let connect = adw::PreferencesGroup::new();
+    connect.set_title("Connect a client");
+    let copy = adw::ActionRow::new();
+    copy.set_title("Copy for another agent");
+    copy.set_subtitle(
+        "The MCP config, with the address and token, for Claude Code, phi or Cursor; or over stdio, for Claude Desktop",
+    );
+    copy.add_suffix(&copy_button("Copy config", |a| a.http_config()));
+    copy.add_suffix(&copy_button("Copy stdio config", |a| a.stdio_config()));
+    connect.add(&copy);
+    page.add(&connect);
 
     let rows = Rc::new(Rows {
         enabled,
@@ -144,7 +134,7 @@ pub fn page(shell: &Shell) -> adw::PreferencesPage {
         jev,
         jev_key,
         token,
-        note,
+        server,
         syncing: Cell::new(false),
     });
     sync(&rows, &a, shell);
@@ -235,17 +225,10 @@ fn sync(rows: &Rows, a: &Server, shell: &Shell) {
     } else if a.running() {
         rows.dot.add_css_class("on");
     }
-    rows.jev_key.set_visible(a.jev());
+    // Mac: the key row shows only while it is missing (Copper#118).
     let source = copper_mcp::intelligence::read_files(shell.store());
     let effective = copper_mcp::intelligence::Effective::new(&source, false);
-    let jev_line = match effective.sources.get("jevKey").map(String::as_str) {
-        _ if !effective.jev_ready() => {
-            "Jev mode needs a Jev key (ts-…) in intelligence.json, the one Settings › Intelligence uses."
-        }
-        Some("cloud") => "From Copper Cloud.",
-        _ => "Set in intelligence.json, the same key Settings › Intelligence uses.",
-    };
-    rows.jev_key.set_subtitle(jev_line);
+    rows.jev_key.set_visible(a.jev() && !effective.jev_ready());
     let token = a.token();
     let shown: String = token.chars().take(8).collect();
     rows.token.set_text(&format!("{shown}…"));
@@ -257,14 +240,14 @@ fn sync(rows: &Rows, a: &Server, shell: &Shell) {
     let mut note = String::new();
     if calls > 0 {
         note.push_str(&format!(
-            "{calls} tool call{} this session — last: {last}\n",
+            "{calls} tool call{} this session — last: {last}. ",
             if calls == 1 { "" } else { "s" }
         ));
     }
     note.push_str(
         "Agents act as you: whatever you are signed in to, they are too. Turn the server off when you don't need it.",
     );
-    rows.note.set_text(&note);
+    rows.server.set_description(Some(&note));
     rows.syncing.set(false);
 }
 

@@ -17,7 +17,7 @@ Copper's own controls. The command palette and the window menu have it too, as
 - When you put it away, the addon keeps running: a chat keeps its place, and
   nothing loads again when you bring it back.
 - With no addon, it says "No agent here yet." and has a button that opens
-  Settings › Addons.
+  Settings › Extensions.
 
 ## Where addons come from
 
@@ -27,19 +27,19 @@ decides which addon you get. Copper asks for that list:
 - about five seconds after it starts;
 - when the link or the signed-in account changes;
 - every six hours;
-- when Settings › Updates checks (on its own, or when you press **Check now**);
+- when Settings › About checks (on its own, or when you press **Check now**);
 - when the cloud's event stream says something changed.
 
 What Copper does with the answer:
 
 - **A removed addon, or new settings** take effect at once.
 - **A new addon or a new version** is downloaded, checked against its SHA-256
-  and staged. Nothing runs yet. Settings › Updates shows "Update available —
+  and staged. Nothing runs yet. Settings › About shows "Update available —
   Hello addon 1.0.0 for the Agent sidebar" with an **Install** button, and a
   toast says the same once for each version. **Install** loads the new version
   into the sidebar; Copper doesn't need to restart.
 
-**Settings › Addons** lists each addon with its name, version, slot and the
+**Settings › Extensions** lists each addon with its name, version, slot and the
 cloud it came from, and offers:
 
 - **Use in Agent sidebar**: turn the addon off on this computer only. The
@@ -145,9 +145,9 @@ on any failure.
 Copper Cloud instead of a staged bundle. It makes a throwaway test world, signs
 it in (a new device id, `POST /v1/auth/login`, then `cloud.json` at 0600), and
 runs `COPPER_SELFTEST=addons-cloud` on a private headless weston. The app's own
-sync must bring the addon the cloud hands that account. Settings › Updates ›
+sync must bring the addon the cloud hands that account. Settings › About ›
 Install must then put it in the Agent sidebar. The run checks `info` and
-`identity`, then shows Settings › Addons.
+`identity`, then shows Settings › Extensions.
 
 ```sh
 CLOUD_URL=http://127.0.0.1:8080 CLOUD_KEY=… \
@@ -192,8 +192,8 @@ the core goes through one file, `core_glue.rs`.
 | `policy.rs` | navigation rules, the width | `AddonHost.swift` |
 | `host.rs` | the bridge calls only Copper can answer | `AddonBridge.swift` |
 | `oauth.rs` | the sign-in window | `AddonBridge.swift` |
-| `settings.rs` | Settings › Addons | `AddonsSettings.swift` |
-| `updates.rs` | Settings › Updates and the toast | `AddonUpdates.swift` |
+| `settings.rs` | Settings › Extensions | `AddonsSettings.swift` |
+| `updates.rs` | Settings › About and the toast | `AddonUpdates.swift` |
 | `core_glue.rs` | the one door to the shared core | `CloudAddons.swift`, `AddonStore.swift` |
 | `selftest.rs` | `COPPER_SELFTEST=addons` | `AddonsBench.swift` |
 | `selftest_cloud.rs` | `COPPER_SELFTEST=addons-cloud` (a real cloud) | — |

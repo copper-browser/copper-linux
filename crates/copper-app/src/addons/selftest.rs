@@ -5,7 +5,7 @@
 //!
 //! 1. Nothing installed: Ctrl+E shows Copper's placeholder — light and dark.
 //! 2. The hello fixture (`qa/addons/hello`, or `COPPER_ADDONS_DEV_DIR`) is
-//!    packed in the served format, verified and staged: Settings › Updates
+//!    packed in the served format, verified and staged: Settings › About
 //!    says "Update available"; Install puts it in the slot without a
 //!    relaunch.
 //! 3. Through the page's own `window.copper`: `info`, `settings`,
@@ -13,7 +13,7 @@
 //!    `openUrl` (a new foreground tab), `page.current`, `agent.state`
 //!    (`available: false`), `ui.close`; the `visibility` event arrives.
 //! 4. Screenshots with the pane open and closed — light and dark — and
-//!    Settings › Addons; Remove puts the placeholder back.
+//!    Settings › Extensions; Remove puts the placeholder back.
 //!
 //! Prints `PASS`/`FAIL` lines and exits non-zero on any failure.
 
@@ -214,7 +214,7 @@ async fn run(shell: &Shell) -> Vec<String> {
             &format!("pending update is listed ({pending:?})"),
         );
         let dialog = crate::window::settings::dialog(shell);
-        dialog.set_visible_page_name("updates");
+        dialog.set_visible_page_name("about");
         r.shot("linux-update-available").await;
         dialog.set_visible_page_name(super::settings::PAGE_ID);
         r.shot("linux-settings-addons-pending").await;
@@ -487,7 +487,7 @@ async fn run(shell: &Shell) -> Vec<String> {
         "the page was kept while hidden (no reload)",
     );
 
-    // Settings › Addons with the addon installed.
+    // Settings › Extensions with the addon installed.
     let dialog = crate::window::settings::dialog(shell);
     dialog.set_visible_page_name(super::settings::PAGE_ID);
     r.shot("linux-settings-addons").await;

@@ -5,6 +5,26 @@ release dates.
 
 ## Unreleased
 
+### Changed
+
+- **Settings has the Mac's pages, in the Mac's order (Copper#115–#118).**
+  The rail reads General, Tabs, Extensions, Agents, Passwords, Privacy,
+  Cloud, About (Spaces and Intelligence take their places if Linux ever has
+  them). Appearance is no longer a page: its Light/Dark/System row is on
+  General › Copper on this computer, and Left/Top is the first row of a new
+  **Layout** group on Tabs, with Tabs show. Addons' page is called
+  **Extensions**, and Updates is **About**, whose group is now called
+  Updates. Agents is shorter: "The key" is gone — the port and bearer token
+  fold under **Advanced** at the foot of the MCP server group, whose
+  description is the "Agents act as you" note (and this session's tool
+  calls); the two Copy config rows are one **Copy for another agent** row
+  with **Copy config** and **Copy stdio config** side by side; and the Jev
+  key row shows only while Jev mode is on and the key is missing. Passwords
+  › Agent access lists accounts only while sharing everything is off.
+  Ctrl+Tab and the agent rows take the Mac's shorter subtitles.
+  (`window/settings.rs`, `features/settings/`, `features/updates.rs`,
+  `agents/settings.rs`, `forms/settings.rs`; docs/agents.md, docs/addons.md.)
+
 ## 0.5.1 — 2026-10-29
 
 Copper Cloud: a computer can only overwrite what was changed on it, and a

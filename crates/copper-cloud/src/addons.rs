@@ -384,7 +384,7 @@ impl Fetcher for HttpFetcher {
 
 // MARK: the service
 
-/// One addon, for Settings › Addons and the update UI.
+/// One addon, for Settings › Extensions and the update UI.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddonSummary {
     pub id: String,

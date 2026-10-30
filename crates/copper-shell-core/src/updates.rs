@@ -1,5 +1,5 @@
 //! Knowing when there is a newer Copper (Mac: `Updater.swift`,
-//! `Fork/Updates.swift`, Settings › Updates).
+//! `Fork/Updates.swift`, Settings › About).
 //!
 //! Every six hours (and on Check now) Copper reads the platform's
 //! `copper-version.json` ([`Channel::feed`], the repo's GitHub releases);
@@ -11,7 +11,7 @@
 //! `COPPER_UPDATE_FEED` points the check elsewhere (tests); only then is
 //! plain `http` accepted. What was last seen lives in `updates.json`.
 //!
-//! The app supplies the socket, the announcement and Settings › Updates
+//! The app supplies the socket, the announcement and Settings › About
 //! ([`UpdatesApp`]; GTK: `copper-app`'s `features::updates`).
 
 use crate::Platform;
@@ -63,7 +63,7 @@ pub trait UpdatesApp<P: Platform>: 'static {
     ) -> LocalFuture<Result<Vec<u8>, String>>;
     /// "Copper `version` is available", with the way to it ([`release_page`]).
     fn announce(&self, shell: &Shell<P>, version: &str);
-    /// What the check knows changed (Settings › Updates redraws).
+    /// What the check knows changed (Settings › About redraws).
     fn changed(&self, shell: &Shell<P>);
 }
 
@@ -295,7 +295,7 @@ pub fn available<P: Platform>() -> Option<String> {
     })
 }
 
-/// What the check knows, for Settings › Updates.
+/// What the check knows, for Settings › About.
 #[derive(Clone, Debug, Default)]
 pub struct Status {
     /// A check is under way.

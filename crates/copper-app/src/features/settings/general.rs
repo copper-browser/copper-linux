@@ -1,10 +1,12 @@
 //! Settings › General (Mac: `Settings.swift` `general`, `downloads`):
-//! Copper as the default browser, the search engine, the download folder.
+//! Copper as the default browser and its appearance, the search engine, the
+//! download folder.
 
-use super::{button, combo, group, line};
+use super::{button, combo, group, line, segmented};
 use crate::shell::GtkShell;
 use crate::shell::Shell;
 use copper_core::address::ENGINES;
+use copper_core::settings::Look;
 use gtk4 as gtk;
 use gtk4::prelude::*;
 use libadwaita as adw;
@@ -33,6 +35,29 @@ pub fn page(shell: &Shell) -> adw::PreferencesPage {
     default.add_suffix(&tick);
     default.add_suffix(&make);
     here.add(&default);
+    // Mac: General › Copper on this Mac › Appearance (Copper#115; was its own page).
+    let look = line(
+        "Appearance",
+        "Light, dark, or whatever the system is doing — pages follow it too",
+    );
+    let at = match shell.look() {
+        Look::Light => 0,
+        Look::Dark => 1,
+        Look::System => 2,
+    };
+    look.add_suffix(&segmented(
+        shell,
+        &["Light", "Dark", "System"],
+        at,
+        |s, i| {
+            s.set_look(match i {
+                1 => Look::Dark,
+                2 => Look::System,
+                _ => Look::Light,
+            })
+        },
+    ));
+    here.add(&look);
     page.add(&here);
     show_default(&default, &make, &tick);
     let weak = shell.downgrade();
