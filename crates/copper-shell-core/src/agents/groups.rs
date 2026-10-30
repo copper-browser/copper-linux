@@ -1,7 +1,7 @@
 //! `browser_groups`: tab groups as `groups.json` keeps them (Mac:
 //! `Fork/Groups.swift`), membership on each tab (`Tab::group`, saved in the
-//! session). This window does not draw groups yet; the file and the
-//! membership round-trip with the Mac's.
+//! session). The file and the membership round-trip with the Mac's; the
+//! column draws them as folders ([`crate::folders`], [`crate::sidedrop`]).
 
 use crate::Platform;
 use crate::folders::{MARK, below};

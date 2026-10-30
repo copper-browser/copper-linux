@@ -37,7 +37,9 @@ drive it through the same MCP tools.
   Saved tabs work like Arc's: Ctrl+W on one only puts it to sleep — it stays
   in Saved, where it was — and the × on the row (or Unsave in its menu) is
   what takes it out; Ctrl+Shift+T brings it back to its place. Drag any tab
-  into Saved to keep it; a line shows where it will land. Tabs from your
+  into Saved to keep it; a line shows where it will land. Folders (yours,
+  and the Mac's through Copper Cloud) show with their tabs stepped in under
+  them; click one to shut or open it, drag a tab in or out. Tabs from your
   last session come back instantly and cost nothing until you click them.
   Ctrl+Shift+S moves the tabs between a column and a row.
 - **Spaces.** Rows of tabs with a name, an icon and a colour the whole

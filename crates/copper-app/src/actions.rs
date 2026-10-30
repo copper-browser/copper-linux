@@ -410,6 +410,11 @@ pub fn register_core(shell: &Shell) {
     register_action_with_id(shell, "tab-reload", tab(|s, id| s.reload(id)));
     register_action_with_id(
         shell,
+        "tab-take-out",
+        tab(copper_shell_core::agents::groups::take_out),
+    );
+    register_action_with_id(
+        shell,
         "tab-keep",
         tab(|s, id| {
             let saved = s.browser().tab(id).is_some_and(|t| t.saved);

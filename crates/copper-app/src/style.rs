@@ -52,6 +52,10 @@ window.copper { background: transparent; }
 }
 .chip.big { min-width: 22px; min-height: 22px; border-radius: 6px; font-size: 12px; }
 
+.folder-head .title { font-weight: 600; }
+.folder-head .count { font-size: 11px; margin-right: 3px; opacity: 0; transition: opacity 100ms ease-out; }
+.folder-head:hover .count, .folder-head:focus-visible .count { opacity: 1; }
+
 .new-tab-row .title { font-size: 14px; }
 .new-tab-row image { opacity: .8; }
 

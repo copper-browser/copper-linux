@@ -40,6 +40,17 @@ release dates.
   Cloud.** Docs said it did; only the Mac and Windows did. While history
   syncs, Clear History deletes it on the cloud too and its question says
   so, and a page removed in the History panel goes from the cloud as well.
+- **Folders in the column, as the Mac draws them (GroupsUI).** Saved and
+  Today show their folders — yours and the ones synced from the Mac through
+  Copper Cloud — as a line with the folder in its colour and its name, its
+  tabs stepped in under it, folders inside folders stepped in again. Click a
+  folder's line (or press Return) to shut or open it; that stays as you left
+  it on this computer. Drag a row into a folder, out of one, across the seam
+  or onto the favourites: the line shows where it will land, stepped in when
+  it lands in a folder. **Remove from Folder** is on a filed row's menu.
+  Renaming or ungrouping a folder is not here yet. (`window/column.rs`,
+  `window/tabs.rs`; the flat `window/dropzone.rs` gives way to
+  `copper_shell_core::sidedrop`.)
 
 ## 0.5.2 — 2026-10-30
 
