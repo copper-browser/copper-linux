@@ -51,6 +51,16 @@
   </requires>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.6.1" date="2026-10-30">
+      <description>
+        <p>The Mac's keys and small touches.</p>
+        <ul>
+          <li>Ctrl+S folds the column, Ctrl+Shift+M stops sound, Ctrl+P prints, F11 goes full screen, Alt+1–9 and Alt+N for spaces.</li>
+          <li>Recently Closed in the Ctrl+T card, a Clear button at the Saved seam.</li>
+          <li>Camera and microphone answers are remembered per site; Settings › Privacy can forget them.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.6.0" date="2026-10-30">
       <description>
         <p>Catching up with the Mac.</p>
