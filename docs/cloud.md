@@ -238,10 +238,21 @@ visits come down from where the last pull stopped. Copper pulls at sign-in,
 at *Turn on sync*, whenever the event stream reconnects, and when another
 device writes.
 
-To delete history on the cloud (every device's), run
-`copper cloud-history delete --since 24h`, `--host example.com`, or `--all`.
-The `cloud_history_delete` MCP tool does the same. History on this computer
-is not touched, and other devices keep what they already pulled.
+To delete history on the cloud (every device's), use Settings › Cloud ›
+**Delete history on cloud** once signed in: pick a time range (last hour,
+24 hours, 7 days, all time), optionally one site (with its subdomains), and
+press **Delete history on cloud…**. Copper asks first, naming exactly what
+goes. With a site, Copper finds its visits by reading your history on this
+computer (the cloud never looks inside it); that part can be stopped. The card
+only shows the controls once the cloud says it can delete history. From a
+terminal, run `copper cloud-history delete --since 24h`, `--host
+example.com`, or `--all`; the `cloud_history_delete` MCP tool does the same.
+Either way, history on this computer is not touched, and other devices keep
+what they already pulled.
+
+Clearing history in Settings › Privacy (or the History panel), while
+history syncs, clears it on the cloud too, and the question says so.
+Removing one page from the History panel removes its rows on the cloud.
 
 ## Where it is kept, and who can read it
 
