@@ -54,6 +54,9 @@ pub mod keys {
     pub const PASSWORDS_SAVE: &str = "passwords.save";
     /// Fill saved passwords. Default true.
     pub const PASSWORDS_FILL: &str = "passwords.fill";
+    /// Fill a two-step code on its own, right after a picked sign-in.
+    /// Default true.
+    pub const PASSWORDS_CODES: &str = "passwords.codes";
     /// Fill identities, cards, fields too. Default true.
     pub const AUTOFILL_EVERYTHING: &str = "autofill.everything";
     /// Where new passwords go.
@@ -364,6 +367,9 @@ impl Settings {
     }
     pub fn fills_passwords(&self) -> bool {
         self.bool_or(keys::PASSWORDS_FILL, true)
+    }
+    pub fn fills_codes(&self) -> bool {
+        self.bool_or(keys::PASSWORDS_CODES, true)
     }
     pub fn fills_everything(&self) -> bool {
         self.bool_or(keys::AUTOFILL_EVERYTHING, true)

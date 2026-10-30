@@ -15,6 +15,8 @@ copper-core.workspace = true
 # Passwords: the platform's secret store (Secret Service on Linux,
 # Credential Manager on Windows), Bitwarden and 1Password.
 copper-creds.workspace = true
+# Passwords CSV in and out (`forms::csv`).
+copper-import.workspace = true
 # BotPass: a paired BotPass server as another password source.
 copper-botpass.workspace = true
 # The Calendar pin's card: calendar.json and the calendars it names.

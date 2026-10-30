@@ -71,6 +71,23 @@ release dates.
   classic, llm) and `model`; `jev_run` takes `json` for a timing trace; and
   `copper run` has `--strategy`, `--model` and `--json-run`. What Jev sees
   (pictures) is not here yet.
+- **Two-step codes fill themselves.** Right after you sign in by picking an
+  account that has a code (Bitwarden or 1Password) from the list, the code
+  page fills itself: once per pick, within ten minutes, only on that
+  account's site and only into a box that is clearly a code box. Copper
+  never presses the button. Settings › Passwords › **Fill two-step codes**
+  turns it off, as on the Mac. (`forms/watch.rs`, `forms/relay.js`.)
+- **Settings › Passwords has the Mac's other switches.** **Fill addresses
+  and cards** turns the identity and card lists off, and Bitwarden has
+  **Auto-lock** (5, 15 or 60 minutes, or Never). Bitwarden and 1Password
+  now stay unlocked between launches until you turn it off, as on the Mac.
+- **Passwords in and out as CSV.** Settings › Passwords › Import and export
+  takes a passwords CSV from Chrome, Firefox, Safari or a password manager
+  (**Choose File…**) into the keyring and says what happened, and
+  **Export…** writes every keyring password to a CSV readable by you only,
+  after a confirmation. (`forms/csv.rs`.)
+- **Add and copy saved passwords.** Saved passwords has **Add a password**
+  (site, username, password) and a copy button on each row.
 
 ## 0.5.2 — 2026-10-30
 

@@ -304,6 +304,29 @@ function () {
     return null;
   }
 
+  // A box that is surely the two-step code's, not a promo or a card's:
+  // the autocomplete promise, a row of one-digit boxes, or a name that
+  // says so. Only this one is filled without a click. Asked whenever the
+  // page changes, so attributes are read first and layout only for a
+  // box that already looks like one.
+  var allInputs = document.getElementsByTagName('input');
+  function plainOTP() {
+    if (!allInputs.length) return false;
+    var promised = document.querySelectorAll('input[autocomplete~="one-time-code" i]');
+    for (var p = 0; p < promised.length; p++) if (visible(promised[p])) return true;
+    if (document.querySelectorAll('input[maxlength="1"]').length >= 4 && splitOTPFields()) return true;
+    var clues = /otp|one.?time|totp|2fa|mfa|two.?(?:factor|step)|verification.?code|authenticat/i;
+    for (var i = 0; i < allInputs.length; i++) {
+      var input = allInputs[i];
+      var kind = (input.type || 'text').toLowerCase();
+      if (['text', 'tel', 'number', 'password'].indexOf(kind) < 0) continue;
+      var labels = [input.name, input.id, input.getAttribute('aria-label'),
+                    input.getAttribute('placeholder')].join(' ');
+      if (clues.test(labels) && visible(input)) return true;
+    }
+    return false;
+  }
+
   var stateNames = {
     AL: 'Alabama', AK: 'Alaska', AZ: 'Arizona', AR: 'Arkansas', CA: 'California',
     CO: 'Colorado', CT: 'Connecticut', DE: 'Delaware', FL: 'Florida', GA: 'Georgia',
@@ -654,7 +677,22 @@ function () {
   // The boxes going away without a new page — a sign-in done in place —
   // is the other way a sign-in shows it took.
   var settling = null;
+  // The code page arriving: once when its box appears, at most a few
+  // times a second however busy the page is.
+  var coded = false, codeLook = null;
+  function lookForCode() {
+    if (codeLook) return;
+    codeLook = setTimeout(function () {
+      codeLook = null;
+      var here = plainOTP();
+      if (here && !coded) window.webkit.messageHandlers.officeForms.postMessage({ kind: 'otp' });
+      coded = here;
+    }, 300);
+  }
+  if (document.readyState === 'complete') { lookForCode(); }
+  else { window.addEventListener('load', lookForCode); }
   new MutationObserver(function () {
+    lookForCode();
     if (!told) { tell(); return; }
     if (pair()) return;
     told = false;

@@ -523,6 +523,7 @@ dependencies = [
  "copper-core",
  "copper-creds",
  "copper-engine",
+ "copper-import",
  "copper-mcp",
  "copper-pagejs",
  "copper-shield",

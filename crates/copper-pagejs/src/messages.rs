@@ -102,6 +102,8 @@ pub enum FormsMessage {
     },
     /// The sign-in boxes went away without a new page.
     Settled,
+    /// A two-step code box appeared (`plainOTP`).
+    Otp,
     /// Where the caret is.
     Focus {
         #[serde(default)]

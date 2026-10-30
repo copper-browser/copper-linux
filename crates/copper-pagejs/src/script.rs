@@ -186,7 +186,7 @@ scripts! {
     PerfProbe = "probe/perf.js", AsyncCall, Page, None;
 
     // ---- Forms and passwords (Forms.swift, Tab.swift) ----
-    /// `window.__officeForms` + the officeForms relay (sign-in found/sent/settled, focus, fullscreen).
+    /// `window.__officeForms` + the officeForms relay (sign-in found/sent/settled, code box, focus, fullscreen).
     FormsRelay = "forms/relay.js", UserScript(DocumentEnd, MainFrame), Page, None;
     /// Hides `PublicKeyCredential` so sites fall back to the password.
     WithoutPasskeys = "forms/without_passkeys.js", UserScript(DocumentStart, AllFrames), Page, None;

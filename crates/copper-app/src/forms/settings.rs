@@ -1,11 +1,12 @@
 //! Settings › Passwords: saving and filling, the keyring's saved sign-ins
-//! (search, show after a confirmation, delete), sites never asked about,
-//! Bitwarden, 1Password and BotPass, agent access, and bringing passwords in
-//! from Chrome (Mac `Passwords.swift`, `Fork/CredentialsSettings.swift`).
+//! (search, add, copy, show after a confirmation, delete), sites never asked
+//! about, Bitwarden, 1Password and BotPass, agent access, bringing passwords
+//! in from Chrome, and a passwords CSV in and out (Mac `Passwords.swift`,
+//! `Fork/CredentialsSettings.swift`, `Fork/Credentials/PasswordCSV.swift`).
 
 use super::vault::{Keyring, Snapshot};
 use super::{keys, rt, source_title};
-use crate::shell::{Shell, WeakShell};
+use crate::shell::{GtkShell, Shell, WeakShell};
 use copper_core::settings::keys as core_keys;
 use copper_creds::Login;
 use copper_creds::bitwarden::BwState;
@@ -30,6 +31,8 @@ struct Ui {
     page: glib::WeakRef<adw::PreferencesPage>,
     keyring: adw::PreferencesGroup,
     saved: adw::PreferencesGroup,
+    /// "Add a password", first in Saved passwords while a keyring is there.
+    add: adw::ExpanderRow,
     never: adw::PreferencesGroup,
     bw: adw::PreferencesGroup,
     op: adw::PreferencesGroup,
@@ -104,6 +107,15 @@ where
     F: FnOnce(std::sync::Arc<super::vault::Vault>) -> Fut + 'static,
     Fut: std::future::Future<Output = Result<(), String>> + Send + 'static,
 {
+    act_saying(ui, None, work);
+}
+
+/// [`act`], toasting `done` when the work went through.
+fn act_saying<F, Fut>(ui: &Rc<Ui>, done: Option<String>, work: F)
+where
+    F: FnOnce(std::sync::Arc<super::vault::Vault>) -> Fut + 'static,
+    Fut: std::future::Future<Output = Result<(), String>> + Send + 'static,
+{
     let Some(v) = super::vault() else { return };
     if ui.busy.replace(true) {
         return;
@@ -120,8 +132,10 @@ where
         .unwrap_or_else(|| Err("Copper couldn't finish that".into()));
         let Some(ui) = weak.upgrade() else { return };
         ui.busy.set(false);
-        if let Err(e) = r {
-            say(&ui, &first_line(&e));
+        match (r, done) {
+            (Err(e), _) => say(&ui, &first_line(&e)),
+            (Ok(()), Some(d)) => say(&ui, &d),
+            (Ok(()), None) => {}
         }
         refresh(&ui);
     });
@@ -166,6 +180,22 @@ pub fn page(shell: &Shell) -> adw::PreferencesPage {
         }
     });
     behaviour.add(&fill);
+    // Mac `Settings.swift` passwords: "Fill two-step codes", "Fill
+    // addresses and cards".
+    behaviour.add(&switch(
+        shell,
+        "Fill two-step codes",
+        "Right after you pick an account whose code Copper keeps, the code page fills itself",
+        shell.settings().fills_codes(),
+        core_keys::PASSWORDS_CODES,
+    ));
+    behaviour.add(&switch(
+        shell,
+        "Fill addresses and cards",
+        "Click into a checkout or address form and your Bitwarden and 1Password identities and cards hang from it",
+        shell.settings().fills_everything(),
+        core_keys::AUTOFILL_EVERYTHING,
+    ));
     let target = adw::ComboRow::new();
     target.set_title("Save new passwords to");
     target.set_subtitle("Bitwarden or 1Password while unlocked, else the keyring");
@@ -221,6 +251,10 @@ pub fn page(shell: &Shell) -> adw::PreferencesPage {
     search.set_valign(gtk::Align::Center);
     search.update_property(&[gtk::accessible::Property::Label("Search saved passwords")]);
     saved.set_header_suffix(Some(&search));
+    let add = adw::ExpanderRow::new();
+    add.set_title("Add a password");
+    add.set_subtitle("Type one in by hand: the site, the name and the password");
+    saved.add(&add);
     page.add(&saved);
 
     let never = adw::PreferencesGroup::new();
@@ -246,6 +280,28 @@ pub fn page(shell: &Shell) -> adw::PreferencesPage {
     ));
     page.add(&agents);
 
+    // Mac `PasswordCSVLines`: a CSV in, a CSV out.
+    let csv = adw::PreferencesGroup::new();
+    csv.set_title("Import and export");
+    let from = row(
+        "From a CSV file",
+        "A passwords export from Chrome, Safari, Apple Passwords or a password manager",
+    );
+    let choose = pill("Choose File…", false);
+    from.add_suffix(&choose);
+    from.set_activatable_widget(Some(&choose));
+    csv.add(&from);
+    let to = row(
+        "Export to a CSV file",
+        "Every password in the keyring, after a confirmation. Anyone with the file can read them — delete it when you're done.",
+    );
+    to.set_subtitle_lines(0);
+    let export = pill("Export…", false);
+    to.add_suffix(&export);
+    to.set_activatable_widget(Some(&export));
+    csv.add(&to);
+    page.add(&csv);
+
     let pw = glib::WeakRef::new();
     pw.set(Some(&page));
     let ui = Rc::new(Ui {
@@ -253,6 +309,7 @@ pub fn page(shell: &Shell) -> adw::PreferencesPage {
         page: pw,
         keyring,
         saved,
+        add,
         never,
         bw,
         op,
@@ -271,6 +328,21 @@ pub fn page(shell: &Shell) -> adw::PreferencesPage {
             if let Some(ui) = weak.upgrade() {
                 *ui.search.borrow_mut() = e.text().to_string();
                 build_saved(&ui);
+            }
+        });
+    }
+    build_add(&ui);
+    {
+        let weak = Rc::downgrade(&ui);
+        choose.connect_clicked(move |_| {
+            if let Some(ui) = weak.upgrade() {
+                import_csv(&ui);
+            }
+        });
+        let weak = Rc::downgrade(&ui);
+        export.connect_clicked(move |b| {
+            if let Some(ui) = weak.upgrade() {
+                export_csv(&ui, b.upcast_ref());
             }
         });
     }
@@ -390,11 +462,149 @@ fn build_keyring(ui: &Rc<Ui>) {
     put(ui, "keyring", &ui.keyring, vec![r.upcast()]);
 }
 
+/// A switch row for a setting.
+fn switch(
+    shell: &Shell,
+    title: &str,
+    subtitle: &str,
+    on: bool,
+    key: &'static str,
+) -> adw::SwitchRow {
+    let r = adw::SwitchRow::new();
+    r.set_title(title);
+    r.set_subtitle(subtitle);
+    r.set_active(on);
+    let weak = shell.downgrade();
+    r.connect_active_notify(move |r| {
+        if let Some(s) = weak.upgrade() {
+            let on = r.is_active();
+            s.update_settings(|st| st.set(key, on));
+        }
+    });
+    r
+}
+
+/// The add form (Mac `Passwords.swift` `AddForm`): site, username,
+/// password, Save "Kept for <site>".
+fn build_add(ui: &Rc<Ui>) {
+    let site = entry("Site", "");
+    site.set_input_purpose(gtk::InputPurpose::Url);
+    let user = entry("Username", "");
+    let password = password_entry("Password");
+    let go = row("", "");
+    let save = pill("Save", true);
+    go.add_suffix(&save);
+    let keep = {
+        let weak = Rc::downgrade(ui);
+        let (site, user, password) = (site.clone(), user.clone(), password.clone());
+        move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let host = copper_creds::site::host_of(&site.text());
+            let pw = password.text().to_string();
+            if host.is_empty() || pw.is_empty() {
+                say(&ui, "A site and a password, both");
+                return;
+            }
+            let who = user.text().trim().to_string();
+            for e in [&site, &user] {
+                e.set_text("");
+            }
+            password.set_text("");
+            ui.add.set_expanded(false);
+            let said = format!("Kept for {host}");
+            act_saying(&ui, Some(said), move |v| async move {
+                v.save(Source::Keychain, &host, &who, &pw).await
+            });
+        }
+    };
+    let keep = Rc::new(keep);
+    let k = keep.clone();
+    save.connect_clicked(move |_| k());
+    password.connect_entry_activated(move |_| keep());
+    ui.add.add_row(&site);
+    ui.add.add_row(&user);
+    ui.add.add_row(&password);
+    ui.add.add_row(&go);
+}
+
+/// The keyring, mid-sentence.
+const STORE: &str = "the keyring";
+
+/// Ask for a passwords CSV and keep its logins in the keyring.
+fn import_csv(ui: &Rc<Ui>) {
+    let Some(shell) = ui.shell.upgrade() else {
+        return;
+    };
+    let dialog = gtk::FileDialog::new();
+    dialog.set_title("A passwords export — from Chrome, Firefox or a password manager");
+    let filter = gtk::FileFilter::new();
+    filter.set_name(Some("CSV files"));
+    filter.add_suffix("csv");
+    filter.add_mime_type("text/csv");
+    let filters = gio::ListStore::new::<gtk::FileFilter>();
+    filters.append(&filter);
+    dialog.set_filters(Some(&filters));
+    let weak = Rc::downgrade(ui);
+    dialog.open(Some(shell.window()), gio::Cancellable::NONE, move |r| {
+        let (Some(ui), Ok(f)) = (weak.upgrade(), r) else {
+            return;
+        };
+        let Some(path) = f.path() else { return };
+        say(&ui, "Importing passwords…");
+        let weak = Rc::downgrade(&ui);
+        glib::spawn_future_local(async move {
+            let (said, _) = copper_shell_core::forms::csv::import_file(path, STORE).await;
+            if let Some(ui) = weak.upgrade() {
+                say(&ui, &said);
+                refresh(&ui);
+            }
+        });
+    });
+}
+
+/// Ask for a yes, then where, then write every password as CSV.
+fn export_csv(ui: &Rc<Ui>, from: &gtk::Widget) {
+    use copper_shell_core::forms::csv;
+    let d = adw::AlertDialog::new(Some(csv::EXPORT_TITLE), Some(csv::EXPORT_DETAIL));
+    d.add_responses(&[("cancel", "Cancel"), ("export", csv::EXPORT_ALLOW)]);
+    d.set_response_appearance("export", adw::ResponseAppearance::Destructive);
+    d.set_default_response(Some("cancel"));
+    d.set_close_response("cancel");
+    let weak = Rc::downgrade(ui);
+    d.connect_response(None, move |_, resp| {
+        let ("export", Some(ui)) = (resp, weak.upgrade()) else {
+            return;
+        };
+        let Some(shell) = ui.shell.upgrade() else {
+            return;
+        };
+        let dialog = gtk::FileDialog::new();
+        dialog.set_title("Export passwords");
+        dialog.set_initial_name(Some(csv::EXPORT_NAME));
+        let weak = Rc::downgrade(&ui);
+        dialog.save(Some(shell.window()), gio::Cancellable::NONE, move |r| {
+            let (Some(ui), Ok(f)) = (weak.upgrade(), r) else {
+                return;
+            };
+            let Some(path) = f.path() else { return };
+            let weak = Rc::downgrade(&ui);
+            glib::spawn_future_local(async move {
+                let (said, _) = csv::export_file(path, STORE).await;
+                if let Some(ui) = weak.upgrade() {
+                    say(&ui, &said);
+                }
+            });
+        });
+    });
+    d.present(Some(from));
+}
+
 fn build_saved(ui: &Rc<Ui>) {
     let ready = ui.snap.borrow().keyring_ready();
     if let Some(search) = ui.saved.header_suffix() {
         search.set_visible(ready);
     }
+    ui.add.set_visible(ready);
     let needle = ui.search.borrow().trim().to_lowercase();
     let logins: Vec<Login> = ui
         .logins
@@ -488,6 +698,15 @@ fn login_row(ui: &Rc<Ui>, l: &Login) -> adw::ActionRow {
         });
         r.add_suffix(&reveal);
     }
+    let copy = icon_button("edit-copy-symbolic", "Copy password");
+    let weak = Rc::downgrade(ui);
+    let l2 = l.clone();
+    copy.connect_clicked(move |b| {
+        if let Some(ui) = weak.upgrade() {
+            copy_password(&ui, b.upcast_ref(), &l2);
+        }
+    });
+    r.add_suffix(&copy);
     let delete = icon_button("user-trash-symbolic", "Delete password");
     let weak = Rc::downgrade(ui);
     let l2 = l.clone();
@@ -498,6 +717,30 @@ fn login_row(ui: &Rc<Ui>, l: &Login) -> adw::ActionRow {
     });
     r.add_suffix(&delete);
     r
+}
+
+/// The password onto the clipboard (Mac `Browser.copy`): "Password copied".
+fn copy_password(ui: &Rc<Ui>, from: &gtk::Widget, l: &Login) {
+    let Some(v) = super::vault() else { return };
+    let weak = Rc::downgrade(ui);
+    let clipboard = from.clipboard();
+    let id = copper_creds::CredentialId::Keychain {
+        host: l.host.clone(),
+        user: l.user.clone(),
+    };
+    glib::spawn_future_local(async move {
+        let got = rt::run(async move { v.secret(&id).await })
+            .await
+            .unwrap_or_else(|| Err("no answer".into()));
+        let Some(ui) = weak.upgrade() else { return };
+        match got {
+            Ok(secret) => {
+                clipboard.set_text(&secret);
+                say(&ui, "Password copied");
+            }
+            Err(_) => say(&ui, "The keyring didn't give up that password"),
+        }
+    });
 }
 
 fn confirm_reveal(ui: &Rc<Ui>, from: &gtk::Widget, l: &Login) {
@@ -810,6 +1053,7 @@ fn build_bw(ui: &Rc<Ui>) {
                 }
             });
             rows.push(stay.upcast());
+            rows.push(autolock_row(ui).upcast());
             let out = row("Account", "");
             let b = pill("Sign Out", false);
             let weak = Rc::downgrade(ui);
@@ -826,6 +1070,37 @@ fn build_bw(ui: &Rc<Ui>) {
         }
     }
     put(ui, "bw", &ui.bw, rows);
+}
+
+/// Mac `BitwardenCard` "Auto-lock": 5, 15 or 60 minutes, or never (0).
+fn autolock_row(ui: &Rc<Ui>) -> adw::ComboRow {
+    const MINUTES: [u32; 4] = [5, 15, 60, 0];
+    let r = adw::ComboRow::new();
+    r.set_title("Auto-lock");
+    r.set_subtitle("Lock the local Bitwarden session after inactivity");
+    r.set_model(Some(&gtk::StringList::new(&[
+        "5 minutes",
+        "15 minutes",
+        "60 minutes",
+        "Never",
+    ])));
+    let Some(shell) = ui.shell.upgrade() else {
+        return r;
+    };
+    let now = shell.settings().number(keys::BW_AUTOLOCK).unwrap_or(0.0);
+    let at = MINUTES
+        .iter()
+        .position(|&m| f64::from(m) == now)
+        .unwrap_or(3);
+    r.set_selected(at as u32);
+    let weak = shell.downgrade();
+    r.connect_selected_notify(move |r| {
+        let m = MINUTES.get(r.selected() as usize).copied().unwrap_or(0);
+        if let Some(s) = weak.upgrade() {
+            s.update_settings(|st| st.set(keys::BW_AUTOLOCK, m));
+        }
+    });
+    r
 }
 
 fn short_time(iso: &str) -> String {
