@@ -4,14 +4,14 @@
 //! The core's sync downloads, verifies and stages a new addon or version
 //! before anything shows. Here it becomes:
 //!
-//! * an **Addons** group on Settings › Updates — "Update available —
+//! * an **Addons** group on Settings › About — "Update available —
 //!   <Addon name> <version> for the Agent sidebar" with **Install** — that
 //!   is there in the Flatpak too (Copper's own update rows are not);
 //! * a toast, once per pending version, with **Install**;
 //! * **Install**: the staged bundle is unpacked and made current, and the
 //!   slot's view reloads with it. No relaunch.
 //!
-//! Settings › Updates' own "Check now" also asks the cloud for addons.
+//! Settings › About's own "Check now" also asks the cloud for addons.
 
 use super::core_glue;
 use crate::features::settings::{button, group, line};
@@ -47,7 +47,7 @@ fn dismiss_toast() {
     }
 }
 
-/// Settings › Updates: add the Addons group to `page`.
+/// Settings › About: add the Addons group to `page`.
 pub fn attach(shell: &Shell, page: &adw::PreferencesPage) {
     let g = group(Some("Addons"));
     page.add(&g);
@@ -60,13 +60,13 @@ pub fn attach(shell: &Shell, page: &adw::PreferencesPage) {
     draw(shell);
 }
 
-/// Settings › Updates' "Check now" (and its own schedule) ran: ask the
+/// Settings › About's "Check now" (and its own schedule) ran: ask the
 /// cloud for addons too.
 pub fn app_checked() {
     core_glue::check_now();
 }
 
-/// Redraw the Addons group on Settings › Updates, if it is open.
+/// Redraw the Addons group on Settings › About, if it is open.
 pub fn draw(shell: &Shell) {
     VIEW.with(|v| {
         let v = v.borrow();

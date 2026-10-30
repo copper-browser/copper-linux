@@ -16,8 +16,8 @@
 //! | [`policy`] | WebKit's `decide-policy`, and the pure address rules | `Fork/Addons/AddonHost.swift` |
 //! | [`host`] | what the bridge asks of Copper (identity, tabs, close, sign-in) | `Fork/Addons/AddonBridge.swift` |
 //! | [`oauth`] | the sign-in window for `copper.oauth.authorize` | `Fork/Addons/AddonBridge.swift` |
-//! | [`settings`] | Settings › Addons | `Fork/Addons/AddonsSettings.swift` |
-//! | [`updates`] | "Update available" on Settings › Updates, the toast, Install | `Fork/Addons/AddonUpdates.swift` |
+//! | [`settings`] | Settings › Extensions | `Fork/Addons/AddonsSettings.swift` |
+//! | [`updates`] | "Update available" on Settings › About, the toast, Install | `Fork/Addons/AddonUpdates.swift` |
 //! | [`core_glue`] | the one door to `copper_core::addons` and `copper_cloud::addons` | — |
 //!
 //! Everything platform-neutral (manifests, bundles, the on-disk store, the
@@ -114,7 +114,7 @@ pub fn showing() -> bool {
 }
 
 /// The addons, their state or the cloud's answer changed: bring the slot,
-/// Settings › Addons and Settings › Updates in line. Main thread.
+/// Settings › Extensions and Settings › About in line. Main thread.
 pub fn changed(shell: &Shell) {
     pane::sync(shell);
     settings::redraw(shell);

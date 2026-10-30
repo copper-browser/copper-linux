@@ -19,13 +19,13 @@ Go to Settings › Agents and switch on **Let agents drive this window**.
 - A request with a foreign `Origin` header is refused, so a page open in
   another browser can't reach in.
 - If another program already uses port 4123, change the port on the same
-  page.
+  page, under the MCP server's **Advanced** row (with the token).
 
 ## Connect a client
 
 ### Claude Code, phi, Cursor (HTTP)
 
-Settings › Agents › *Claude Code, phi, Cursor* › **Copy config**. Paste it
+Settings › Agents › *Copy for another agent* › **Copy config**. Paste it
 into `~/.claude.json`, `~/.pi/agent/mcp.json`, or your editor's MCP settings:
 
 ```json
@@ -48,7 +48,7 @@ claude mcp add --transport http copper http://127.0.0.1:4123/mcp --header "Autho
 
 ### Claude Desktop and other stdio-only clients
 
-Use the second **Copy config**. It runs `copper --mcp-stdio`, a pipe to the
+Use **Copy stdio config**, beside it. It runs `copper --mcp-stdio`, a pipe to the
 running window that starts Copper if it isn't running:
 
 ```json
@@ -75,7 +75,7 @@ With the Flatpak, run it through `flatpak`:
 
 ### Rotating the token
 
-**Rotate token…** makes a new token. Every client config goes stale at once,
+**Rotate token…** (Settings › Agents › MCP server › Advanced) makes a new token. Every client config goes stale at once,
 on purpose: set each client up again with the new one.
 
 ## Tools
@@ -137,7 +137,8 @@ custom `field` the same way. It answers only with how many fields it filled
 and the item's name.
 
 Nothing is shared with agents unless you share it, in Settings › Passwords ›
-**Agent access**. You can share everything, or turn individual items on.
+**Agent access**. You can share everything, or turn individual items on (the
+list shows while sharing everything is off).
 Items in a Bitwarden folder or 1Password vault named `Agents` are shared automatically. A custom
 field `copper-agent: deny` means never, even when sharing everything. Private
 tabs are always refused. Agents can't change any of this.
@@ -205,7 +206,8 @@ the server's instructions tell the agent to reach for them first:
 
 Jev needs a Jev key (`ts-…`). It comes from `intelligence.json` in Copper's
 data folder (the same file the Mac uses), or from your Copper Cloud if it
-provides one. Typing and `jev_extract` also need a text model, configured in
+provides one; while Jev mode is on and the key is missing, Settings › Agents
+says where it goes. Typing and `jev_extract` also need a text model, configured in
 the same file (or, for a headless Copper, with `COPPER_ROUTER_URL` and
 `COPPER_ROUTER_KEY`: [headless.md](headless.md#model-keys)). DONE is the
 model's own claim, so check the page.

@@ -1,4 +1,4 @@
-//! Settings › Addons (Mirrors the Mac's `Fork/Addons/AddonsSettings.swift`).
+//! Settings › Extensions (Mirrors the Mac's `Fork/Addons/AddonsSettings.swift`).
 //!
 //! The installed and pending addons — name, version, slot, the cloud they
 //! came from — each with "Use in Agent sidebar" (a local opt-out, kept in

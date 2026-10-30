@@ -1181,18 +1181,7 @@ fn build_agents(ui: &Rc<Ui>) {
         let mut rows: Vec<gtk::Widget> = Vec::new();
         let share_all = adw::SwitchRow::new();
         share_all.set_title("Share every saved account");
-        share_all.set_subtitle(
-            "Otherwise only the ones switched on below (and a Bitwarden “Agents” folder)",
-        );
-        share_all.set_active(shell.settings().bool_or(keys::SHARE_ALL, false));
-        let w2 = shell.downgrade();
-        share_all.connect_active_notify(move |r| {
-            if let Some(s) = w2.upgrade() {
-                let on = r.is_active();
-                s.update_settings(|st| st.set(keys::SHARE_ALL, on));
-            }
-        });
-        rows.push(share_all.upcast());
+        rows.push(share_all.clone().upcast());
         for c in all.iter().take(300) {
             rows.push(agent_row(&shell, c).upcast());
         }
@@ -1239,6 +1228,29 @@ fn build_agents(ui: &Rc<Ui>) {
         {
             rows.push(id_row(&shell, &id, &title, &sub).upcast());
         }
+        // Mac (Copper#116): sharing everything needs no list.
+        let list = rows[1..].to_vec();
+        let show = move |r: &adw::SwitchRow| {
+            let on = r.is_active();
+            r.set_subtitle(if on {
+                "Agents can use every saved sign-in in Copper without receiving the password"
+            } else {
+                "Off, agents use only the accounts you allow (and a Bitwarden “Agents” folder)"
+            });
+            for w in &list {
+                w.set_visible(!on);
+            }
+        };
+        share_all.set_active(shell.settings().bool_or(keys::SHARE_ALL, false));
+        show(&share_all);
+        let w2 = shell.downgrade();
+        share_all.connect_active_notify(move |r| {
+            show(r);
+            if let Some(s) = w2.upgrade() {
+                let on = r.is_active();
+                s.update_settings(|st| st.set(keys::SHARE_ALL, on));
+            }
+        });
         put(&ui, "agents", &ui.agents, rows);
     });
 }

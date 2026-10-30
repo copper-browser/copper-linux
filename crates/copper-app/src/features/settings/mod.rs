@@ -1,7 +1,7 @@
 //! Settings pages (Mac: `Settings.swift`, `Fork/SettingsFork.swift`,
-//! `Fork/PrivacySettings.swift`): General, Tabs (with the Calendar pin's
-//! calendars), Appearance, Privacy, Extensions, Updates. Every key is the
-//! Mac's (copper-core `settings`).
+//! `Fork/PrivacySettings.swift`): General (with Appearance and Downloads),
+//! Tabs (with Layout and the Calendar pin's calendars), Privacy, Extensions
+//! (Addons), About (Updates). Every key is the Mac's (copper-core `settings`).
 //! The shell skips its own General page because this lane registers one.
 
 pub mod calendar;
@@ -11,7 +11,7 @@ pub mod privacy;
 use crate::actions::{SettingsPage, register_settings_page};
 use crate::shell::GtkShell;
 use crate::shell::Shell;
-use copper_core::settings::{Glyph, Look, TabSwitching, TabsPosition, keys};
+use copper_core::settings::{Glyph, TabSwitching, TabsPosition, keys};
 use gtk4 as gtk;
 use gtk4::prelude::*;
 use libadwaita as adw;
@@ -29,13 +29,6 @@ pub fn register(shell: &Shell) {
     page(shell, "tabs", "Tabs", "view-dual-symbolic", tabs);
     page(
         shell,
-        "appearance",
-        "Appearance",
-        "applications-graphics-symbolic",
-        appearance,
-    );
-    page(
-        shell,
         "privacy",
         "Privacy",
         "security-high-symbolic",
@@ -44,15 +37,15 @@ pub fn register(shell: &Shell) {
     page(
         shell,
         "extensions",
-        "Addons", // Addons: the page is Settings › Addons (its id stays `extensions`)
+        "Extensions", // Mac: Extensions, with Addons on it (Copper#115); the page is Addons here
         "application-x-addon-symbolic",
         extensions,
     );
     page(
         shell,
-        "updates",
-        "Updates",
-        "software-update-available-symbolic",
+        "about",
+        "About", // Mac: About, with Updates on it (Copper#115)
+        "help-about-symbolic",
         super::updates::page,
     );
 }
@@ -213,9 +206,26 @@ pub fn confirm(shell: &Shell, heading: &str, body: &str, act: &str, f: impl Fn(&
 fn tabs(shell: &Shell) -> adw::PreferencesPage {
     let page = adw::PreferencesPage::new();
 
-    let showing = group(Some("Showing tabs"));
+    // Mac: Tabs › Layout (Copper#115) — where tabs go was Settings › Appearance.
+    let layout = group(Some("Layout"));
+    let position = line(
+        "Where tabs go",
+        "Down the left in a column, or across the top in a row",
+    );
+    let at = match shell.tabs_position() {
+        TabsPosition::Left => 0,
+        TabsPosition::Top => 1,
+    };
+    position.add_suffix(&segmented(shell, &["Left", "Top"], at, |s, i| {
+        s.set_tabs_position(if i == 1 {
+            TabsPosition::Top
+        } else {
+            TabsPosition::Left
+        })
+    }));
+    layout.add(&position);
     let icons = crate::window::tabs::shows_icons(shell);
-    showing.add(&combo(
+    layout.add(&combo(
         shell,
         "Tabs show",
         "Beside the title, and on a pinned square",
@@ -227,14 +237,14 @@ fn tabs(shell: &Shell) -> adw::PreferencesPage {
             s.ui().refresh(s, &crate::window::Refresh::all());
         },
     ));
-    page.add(&showing);
+    page.add(&layout);
 
     let switching = group(Some("Switching"));
     let current = shell.settings().tab_switching();
     switching.add(&combo(
         shell,
         "Ctrl+Tab switches to",
-        "Follow the row, or go back through your most recent tabs",
+        "The next tab in the row, or the one you used last",
         &["The next tab in the row", "The tab you were on before"],
         if current == TabSwitching::Recent {
             1
@@ -265,51 +275,6 @@ fn tabs(shell: &Shell) -> adw::PreferencesPage {
     page
 }
 
-fn appearance(shell: &Shell) -> adw::PreferencesPage {
-    let page = adw::PreferencesPage::new();
-    let g = group(None);
-    let look = line(
-        "Appearance",
-        "Light, dark, or whatever the system is doing — pages follow it too",
-    );
-    let at = match shell.look() {
-        Look::Light => 0,
-        Look::Dark => 1,
-        Look::System => 2,
-    };
-    look.add_suffix(&segmented(
-        shell,
-        &["Light", "Dark", "System"],
-        at,
-        |s, i| {
-            s.set_look(match i {
-                1 => Look::Dark,
-                2 => Look::System,
-                _ => Look::Light,
-            })
-        },
-    ));
-    g.add(&look);
-    let tabs = line(
-        "Tabs",
-        "Down the left in a column, or across the top in a row",
-    );
-    let at = match shell.tabs_position() {
-        TabsPosition::Left => 0,
-        TabsPosition::Top => 1,
-    };
-    tabs.add_suffix(&segmented(shell, &["Left", "Top"], at, |s, i| {
-        s.set_tabs_position(if i == 1 {
-            TabsPosition::Top
-        } else {
-            TabsPosition::Left
-        })
-    }));
-    g.add(&tabs);
-    page.add(&g);
-    page
-}
-
 fn extensions(shell: &Shell) -> adw::PreferencesPage {
-    crate::addons::settings::page(shell) // Addons: Settings › Addons (the web-extensions note is its foot)
+    crate::addons::settings::page(shell) // Addons: Settings › Extensions (the web-extensions note is its foot)
 }

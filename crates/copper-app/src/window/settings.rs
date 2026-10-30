@@ -1,5 +1,6 @@
 //! Settings: the shell's own page (appearance, tabs, search), then every
-//! page a lane registered ([`crate::actions::register_settings_page`]).
+//! page a lane registered ([`crate::actions::register_settings_page`]), in
+//! the Mac's rail order ([`ORDER`]).
 
 use crate::shell::GtkShell;
 use crate::shell::Shell;
@@ -28,7 +29,8 @@ pub fn dialog(shell: &Shell) -> adw::PreferencesDialog {
     {
         dialog.add(&general(shell));
     }
-    let pages = shell.registry().borrow().settings_pages.clone();
+    let mut pages = shell.registry().borrow().settings_pages.clone();
+    pages.sort_by_key(|p| rank(&p.id));
     for p in pages {
         let page = (p.build)(shell);
         page.set_title(&p.title);
@@ -38,6 +40,26 @@ pub fn dialog(shell: &Shell) -> adw::PreferencesDialog {
     }
     dialog.present(Some(shell.window()));
     dialog
+}
+
+/// The Mac's rail (`SettingsPanel.Page`, Copper#115): Browsing, AI & agents,
+/// Data & privacy, Copper. Pages Linux lacks are simply not registered.
+pub const ORDER: [&str; 10] = [
+    "general",
+    "tabs",
+    "spaces",
+    "extensions",
+    "intelligence",
+    "agents",
+    "passwords",
+    "privacy",
+    "cloud",
+    "about",
+];
+
+/// Where page `id` sits in [`ORDER`]; an unknown page goes last.
+fn rank(id: &str) -> usize {
+    ORDER.iter().position(|o| *o == id).unwrap_or(ORDER.len())
 }
 
 fn combo(title: &str, items: &[&str], selected: usize) -> adw::ComboRow {
@@ -148,4 +170,35 @@ fn general(shell: &Shell) -> adw::PreferencesPage {
     search.add(&engine);
     page.add(&search);
     page
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pages_follow_the_mac_rail() {
+        let mut ids = [
+            "about",
+            "cloud",
+            "x",
+            "privacy",
+            "agents",
+            "general",
+            "extensions",
+        ];
+        ids.sort_by_key(|id| rank(id));
+        assert_eq!(
+            ids,
+            [
+                "general",
+                "extensions",
+                "agents",
+                "privacy",
+                "cloud",
+                "about",
+                "x"
+            ]
+        );
+    }
 }

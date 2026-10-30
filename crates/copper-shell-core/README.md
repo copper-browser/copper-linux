@@ -53,7 +53,7 @@ pub type Shell = copper_shell_core::Shell<Gtk>;   // and so on for other generic
 |---|---|---|
 | `agents` | `agents::AgentsApp<P>` | Backstage pages (`holds` / `prepare` / `release` / `release_all`), the marks drawn over pages (`announce`, `drive`, `clear_marks`), and passwords for `browser_sign_in` / `browser_autofill` (usually `forms::mcp::{sign_in, autofill}`). |
 | `forms` | `forms::FormsUi` (`OfferView`, `PickerView`) plus `forms::vault::Look` | The save-offer capsule and the account list under a sign-in box. `Look` checks the secret store without opening it. GTK reads the Secret Service over D-Bus; Windows passes `vault::always_there`, because Credential Manager never prompts. |
-| `updates` | `updates::UpdatesApp<P>` plus `updates::Channel` | Where releases live, one HTTP/1.1 exchange over the platform's sockets and TLS, the "Copper X is available" toast, and a redraw hook for Settings › Updates. |
+| `updates` | `updates::UpdatesApp<P>` plus `updates::Channel` | Where releases live, one HTTP/1.1 exchange over the platform's sockets and TLS, the "Copper X is available" toast, and a redraw hook for Settings › About. |
 | `curtain` | `curtain::on_change` | A listener that refreshes the Hidden panel. |
 | `format` | `format::Calendar` | Local civil time and month names, so dates read the way the OS formats them. |
 

@@ -6,7 +6,7 @@
 //! `/tmp/copper-addons-cloud-e2e`).
 //!
 //! 1. Within 90 s the cloud sync stages `COPPER_E2E_EXPECT_ID` at
-//!    `COPPER_E2E_EXPECT_VERSION`; Settings › Updates says "Update available —
+//!    `COPPER_E2E_EXPECT_VERSION`; Settings › About says "Update available —
 //!    <name> <version> for the Agent sidebar" and its **Install** button is
 //!    pressed.
 //! 2. Ctrl+E shows the addon page; `copper.info()` reports the version and
@@ -23,7 +23,7 @@
 //!    Updates' addon **Check now**, "Update available" for the new version,
 //!    **Install**, and the page reports the new version — the same process,
 //!    no relaunch. `COPPER_E2E_UPDATE_PANE_SCRIPT` then runs like step 3.
-//! 5. Settings › Addons.
+//! 5. Settings › Extensions.
 //!
 //! Prints `PASS`/`FAIL` lines and exits non-zero on any failure.
 
@@ -241,14 +241,14 @@ async fn run(shell: &Shell) -> Vec<String> {
         update(&r, &id, &next).await;
     }
 
-    // 5. Settings › Addons.
+    // 5. Settings › Extensions.
     let listed = core_glue::list();
     let want = env("COPPER_E2E_UPDATE_TO").unwrap_or(version);
     r.check(
         listed
             .iter()
             .any(|l| l.id == id && l.version == want && l.installed && l.enabled),
-        &format!("Settings › Addons lists {id} {want}, installed and on"),
+        &format!("Settings › Extensions lists {id} {want}, installed and on"),
     );
     let dialog = crate::window::settings::dialog(shell);
     dialog.set_visible_page_name(super::settings::PAGE_ID);
@@ -266,7 +266,7 @@ async fn staged(r: &Run, id: &str, version: &str) -> bool {
     .await
 }
 
-/// Settings › Updates: check the row, screenshot it, press its Install, and
+/// Settings › About: check the row, screenshot it, press its Install, and
 /// wait for `id` `version` to run.
 async fn install_from_updates(r: &Run, id: &str, version: &str, shot: &str) -> bool {
     let shell = &r.shell;
@@ -275,10 +275,10 @@ async fn install_from_updates(r: &Run, id: &str, version: &str, shot: &str) -> b
         return false;
     };
     let dialog = crate::window::settings::dialog(shell);
-    dialog.set_visible_page_name("updates");
+    dialog.set_visible_page_name("about");
     crate::app::settle(&shell.downgrade(), Duration::from_secs(5)).await;
     let want = format!("{} {} for the {}", p.name, version, super::SLOT_NAME);
-    let found = row(&dialog, "updates", "Update available");
+    let found = row(&dialog, "about", "Update available");
     let text = found
         .as_ref()
         .map(|r| format!("{} — {}", r.title(), r.subtitle().unwrap_or_default()))
@@ -287,7 +287,7 @@ async fn install_from_updates(r: &Run, id: &str, version: &str, shot: &str) -> b
         found
             .as_ref()
             .is_some_and(|r| r.subtitle().as_deref() == Some(want.as_str())),
-        &format!("Settings › Updates says “{text}”"),
+        &format!("Settings › About says “{text}”"),
     );
     r.shot(shot).await;
     let Some(button) = found.as_ref().and_then(|r| row_button(r, "Install")) else {
@@ -435,7 +435,7 @@ async fn update(r: &Run, id: &str, next: &str) {
         return;
     }
 
-    // Settings › Updates › Check for addon updates › Check now. The cloud's
+    // Settings › About › Check for addon updates › Check now. The cloud's
     // event stream may have asked already: let any such check finish and
     // land in an earlier second, so the press is seen to run one of its own.
     let _ = r
@@ -445,9 +445,9 @@ async fn update(r: &Run, id: &str, next: &str) {
     let early = core_glue::pending().is_some_and(|p| p.version == next);
     let before = core_glue::checked_at();
     let dialog = crate::window::settings::dialog(shell);
-    dialog.set_visible_page_name("updates");
+    dialog.set_visible_page_name("about");
     crate::app::settle(&shell.downgrade(), Duration::from_secs(5)).await;
-    let button = row(&dialog, "updates", "Check for addon updates")
+    let button = row(&dialog, "about", "Check for addon updates")
         .and_then(|r| row_button(&r, "Check now"))
         .filter(|b| b.is_sensitive());
     if let Some(b) = &button {
@@ -461,7 +461,7 @@ async fn update(r: &Run, id: &str, next: &str) {
     r.check(
         checked,
         &format!(
-            "Settings › Updates › Check now runs a cloud check{}",
+            "Settings › About › Check now runs a cloud check{}",
             if early {
                 " (the cloud's event stream had already staged the version)"
             } else {

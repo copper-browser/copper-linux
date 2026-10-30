@@ -292,6 +292,7 @@ mod debug {
         glib::timeout_future(Duration::from_millis(300)).await;
         let mut copies = Vec::new();
         buttons(d.upcast_ref(), "Copy config", &mut copies);
+        buttons(d.upcast_ref(), "Copy stdio config", &mut copies);
         let mut pasted = Vec::new();
         for b in &copies {
             b.emit_clicked();
@@ -308,7 +309,7 @@ mod debug {
         }
         run.check(
             pasted == [a.http_config(), a.stdio_config()],
-            "the two Copy config buttons put the HTTP and stdio configs on the clipboard",
+            "Copy config and Copy stdio config put the HTTP and stdio configs on the clipboard",
         );
         d.close();
 

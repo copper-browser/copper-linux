@@ -3,7 +3,7 @@
 # (Linux). Builds `copper`, makes a throwaway test world that is linked and
 # signed in (POST /v1/auth/login with a new device id, then `cloud.json`
 # written 0600), and runs `COPPER_SELFTEST=addons-cloud`: the app's own sync
-# must bring EXPECT_ID at EXPECT_VERSION, and Settings › Updates › Install
+# must bring EXPECT_ID at EXPECT_VERSION, and Settings › About › Install
 # must put it in the Agent sidebar. PNGs and logs go to $OUT.
 #
 #   CLOUD_URL=http://127.0.0.1:8080   the instance (http only for loopback) …
