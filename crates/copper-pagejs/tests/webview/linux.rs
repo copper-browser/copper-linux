@@ -564,6 +564,11 @@ async fn jev_actions(h: &H) -> Res {
         obs.action("scroll_up").is_some(),
         "no scroll_up after scrolling"
     );
+    // `watch`: false at the cap on a still page, true on the first change.
+    ensure_eq!(h.run(&jev::wait_for_change(100)).await?, false);
+    h.js("setTimeout(() => document.body.appendChild(document.createElement('p')), 50); true")
+        .await?;
+    ensure_eq!(h.run(&jev::wait_for_change(1500)).await?, true);
     // Observation round-trips through the typed struct for resolve().
     let again: Value = serde_json::to_value(&search).map_err(|e| e.to_string())?;
     ensure!(

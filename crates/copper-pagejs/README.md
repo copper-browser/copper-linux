@@ -150,6 +150,7 @@ Two deliberate Linux changes to the helper, both marked `// Linux:` in
 | `jev/set_value.js` | `JevSetValue` | `Fork/MCP/Ultrafast.swift:731` `Ultrafast.act` | call | page | `jev/fast.js` |
 | `jev/settle.js` | `JevSettle` | `Fork/MCP/Ultrafast.swift:354` `Ultrafast.observe` | async call | page |  |
 | `jev/scroll_by.js` | `JevScrollBy` | `Fork/MCP/Ultrafast.swift:688` `Ultrafast.act` | call | page |  |
+| `jev/wait_change.js` | `JevWaitChange` | `Fork/MCP/UltrafastStrategies.swift:348` `Ultrafast.waitForChange` | async call | page |  |
 | `trail/layer.js` | `TrailLayer` | `Fork/MCP/Trail.swift:146` `Trail.script` | installer | page |  |
 | `trail/glide.js` | `TrailGlide` | `Fork/MCP/Trail.swift:55` `Trail.glide` | async call | page | `trail/layer.js` |
 | `trail/fire.js` | `TrailFire` | `Fork/MCP/Trail.swift:140` `Trail.fire` | call | page | `trail/layer.js` |

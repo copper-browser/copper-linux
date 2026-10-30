@@ -1277,13 +1277,25 @@
               "description": "Everything the run must achieve, with concrete values: places, dates, names, filters, and when to stop (\"stop when results are visible\").",
               "type": "string"
             },
+            "json": {
+              "description": "Return the run as one JSON object (status, timings, steps, page) instead of the text report; default false",
+              "type": "boolean"
+            },
             "maxSteps": {
               "description": "Cap on actions; default 60",
               "type": "number"
             },
+            "model": {
+              "description": "The Jev to ask for this run (jev-latest, jev-preview, jev-1.14.0); default is the configured one. Box needs jev-1.14.0 or jev-preview.",
+              "type": "string"
+            },
             "newTab": {
               "description": "Open url in a new tab of your own, in the background — the user's tab does not change, and your later calls land on it",
               "type": "boolean"
+            },
+            "strategy": {
+              "description": "Speed-ups, comma-separated; default is this Mac's Fast mode (turbo, with the pointer glide only when the tab is on screen), classic is the original loop: fast (no pointer glide), literal (Jev matches the goal's quoted values to fields; no text model), burst (literal, and fills every matched field at once), lean (trimmed state), paste (set a field's value in one go), watch (WAIT ends when the page changes), turbo (all of those), llm or llm=<model> (an LLM decides instead of Jev). Default classic.",
+              "type": "string"
             },
             "tab": {
               "description": "Tab id (or index) from browser_tabs list, to run in that tab",
@@ -1307,6 +1319,14 @@
           "properties": {
             "goal": {
               "description": "The goal; same text as before to continue the session",
+              "type": "string"
+            },
+            "model": {
+              "description": "The Jev to ask (jev-latest, jev-preview, jev-1.14.0); read when the session starts",
+              "type": "string"
+            },
+            "strategy": {
+              "description": "fast, literal, burst, lean, turbo, llm — see jev_run; read when the session starts",
               "type": "string"
             },
             "tab": {

@@ -199,8 +199,8 @@ the server's instructions tell the agent to reach for them first:
 
 | tool | does |
 |---|---|
-| `jev_run` | Takes a `goal` (+ `url`, `newTab`, `focus`, `tab`, `maxSteps`, `elements`). Runs the [jev-ultrafast](https://github.com/browser-use/jev-ultrafast) loop in the caller's tab until DONE, BLOCKED, or the budget runs out. Answers with the trace, the page and the indexed element table. |
-| `jev_step` | One decision and its action; calling again with the same `goal` continues the session. |
+| `jev_run` | Takes a `goal` (+ `url`, `newTab`, `focus`, `tab`, `maxSteps`, `elements`, `strategy`, `model`, `json`). Runs the [jev-ultrafast](https://github.com/browser-use/jev-ultrafast) loop in the caller's tab until DONE, BLOCKED, or the budget runs out. Answers with the trace, the page and the indexed element table. |
+| `jev_step` | One decision and its action; calling again with the same `goal` continues the session (`strategy` and `model` are read when it starts). |
 | `jev_observe` | What Jev sees: every visible control as `[3] combobox  Where to? · London`, plus the visible text. |
 | `jev_extract` | Takes an `instruction` (+ `schema`, `full`) and returns one JSON object drawn from the page. |
 
@@ -220,6 +220,35 @@ call on. A headless Copper can name its gateway with `COPPER_ROUTER_URL` and
 `COPPER_ROUTER_KEY` instead ([headless.md](headless.md#model-keys)). There
 is no Claude account sign-in on Linux yet: the API key is the only lane.
 DONE is the model's own claim, so check the page.
+
+### Faster runs (`strategy`)
+
+*Fast mode* is on by default (`jevFast` in `intelligence.json`; set it to
+`false` for the original loop): a run takes `turbo`, with the pointer glide
+kept for a tab that is on the user's screen. `jev_run` / `jev_step` take
+`strategy`, comma-separated speed-ups, to choose for one run
+(`copper run --strategy …`):
+
+| word | what changes |
+|---|---|
+| `fast` | no cosmetic pointer glide before a click; the trail still draws |
+| `literal` | each value the goal quotes (`"maya@northwind.test"`, email addresses) becomes one Jev question in the same request — *which field holds this?* — and a TYPE_TEXT types the value Jev matched. No text-model call; a field no quoted value fits still asks the text model |
+| `burst` | `literal`, and every other value Jev matched surely (≥ 60%) is typed in the same breath, before the next read: a sign-in form is one decision, not three |
+| `lean` | the state Jev reads is trimmed (page text to 1,200 characters, five recent actions) |
+| `paste` | a field's value is set in one go (native setter, input and change events) instead of a key event per character |
+| `watch` | WAIT ends when the page changes (capped at 1.5 s) instead of after 100 ms |
+| `turbo` | all of the above |
+| `watched` | like `fast`, but the glide stays when the tab is on the user's screen (Fast mode is `turbo` + `watched`) |
+| `classic` | none of them: the original loop |
+| `llm`, `llm=<model>` | a small LLM (the text model, else Haiku) decides instead of Jev: one chat call returns the operation, the target and any text |
+
+`model` asks another Jev for the run (`jev-preview`, `jev-1.14.0`).
+`json: true` (`copper run --json-run`) returns the run as one object —
+`status`, `elapsed_ms`, `totals` (`strategy`, Jev's ms and tokens, stale
+reads, bursts) and one entry per step with where its time went
+(`observe_ms`, `decide_ms`, `jev_ms`, `text_ms`, `act_ms`, `settle_ms`;
+`burst: true` for a field typed without a decision of its own) — for a
+harness.
 
 ## The command line
 
@@ -254,6 +283,9 @@ These Mac features aren't in the Linux build:
 - **Your agents** links to an agents app (`copper link`)
 - the Listen transcript tools (`voice_status`, `voice_transcript`): there is
   no Voice on Linux
+- what Jev sees (`vision`: auto, screenshot, marks, box, pixels): Jev reads
+  the element table only, and `jev_run` does not offer `vision`. No Fast
+  mode switch in Settings yet either; it is `jevFast` in `intelligence.json`
 - the CLI's `setup`, `session`, `intelligence`, `claude`, `bitwarden`,
   `crashes`, `listen` and `transcript` commands
 

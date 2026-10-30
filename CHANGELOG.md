@@ -63,6 +63,14 @@ release dates.
   kept in `intelligence.json`. The Check's words live in copper-mcp
   (`intelligence::check`), for Windows to share. (`features/settings/
   intelligence.rs`, `agents/settings.rs`; docs/agents.md.)
+- **Jev runs in Fast mode, as on the Mac.** Unless `jevFast` is `false` in
+  `intelligence.json`, Jev types the values your goal quotes without asking a
+  model, fills a whole form in one go, and the pointer glides only when you
+  can see the tab — about twice the actions a minute. `jev_run` and
+  `jev_step` take `strategy` (fast, literal, burst, lean, paste, watch, turbo,
+  classic, llm) and `model`; `jev_run` takes `json` for a timing trace; and
+  `copper run` has `--strategy`, `--model` and `--json-run`. What Jev sees
+  (pictures) is not here yet.
 
 ## 0.5.2 — 2026-10-30
 

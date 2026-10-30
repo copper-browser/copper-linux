@@ -168,6 +168,8 @@ scripts! {
     JevSettle = "jev/settle.js", AsyncCall, Page, None;
     /// Scroll by a delta, instantly.
     JevScrollBy = "jev/scroll_by.js", Call, Page, None;
+    /// `watch`: resolves on the page's first change (outside the trail), or at `ms`.
+    JevWaitChange = "jev/wait_change.js", AsyncCall, Page, None;
 
     // ---- Trails (Fork/MCP/Trail.swift) ----
     /// `window.__jevTrail`: the cosmetic SVG layer that draws the agent's moves.

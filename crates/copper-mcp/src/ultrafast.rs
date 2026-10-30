@@ -30,6 +30,9 @@ use crate::who::Who;
 use crate::{CallCtx, Failure, Mcp};
 use copper_pagejs::trail;
 
+mod strategies;
+pub use strategies::{Assignment, STRATEGY_WORDS, Strategy, literals, strategy_arg};
+
 pub const MAX_STEPS: usize = 60;
 
 /// Their instructions, word for word — the policy is the model's.
@@ -66,7 +69,7 @@ const CARD_LABEL: &str = "Fill the saved card — number, expiry, code — for y
 const IDENTITY_LABEL: &str = "Fill your saved name, address, email and phone for you";
 
 /// A decision Jev made.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Decision {
     pub choice: String,
     pub operation: String,
@@ -75,10 +78,18 @@ pub struct Decision {
     pub probability: f64,
     pub latency_ms: f64,
     pub candidates: Vec<String>,
+    /// The value to type, when Jev matched a quoted one (literal) or the
+    /// deciding LLM wrote it — no text-model call then.
+    pub text: Option<String>,
+    /// literal/burst: every quoted value Jev matched to a field.
+    pub assignments: Vec<Assignment>,
+    pub input_tokens: i64,
+    /// Who answered (`jev-1.14.0`, the LLM's name), when it says.
+    pub model: String,
 }
 
 /// One action taken.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Step {
     pub number: usize,
     pub operation: String,
@@ -91,9 +102,35 @@ pub struct Step {
     pub text_latency_ms: f64,
     pub page_changed: Option<bool>,
     pub url: String,
+    pub input_tokens: i64,
+    /// Jev requests behind the step (0 for a burst's later fields).
+    pub requests: u32,
+    /// Where the step's time went, ms: reading the page, deciding (the
+    /// whole choose call, Jev's latency inside it), acting, settling.
+    pub observe_ms: f64,
+    pub decide_ms: f64,
+    pub act_ms: f64,
+    pub settle_ms: f64,
+    /// Typed in the same breath as the step before it (burst): no decision
+    /// of its own.
+    pub burst: bool,
 }
 
 impl Step {
+    /// One step of `jev_run json:true` (`Step.json`; no pictures here, so
+    /// `shot_ms` is 0 and `box`/`box_hit` null).
+    pub fn json(&self) -> Value {
+        json!({
+            "n": self.number, "operation": self.operation, "kind": self.kind, "label": self.label,
+            "probability": self.probability, "confidence": self.confidence, "jev_ms": self.latency_ms,
+            "text_ms": self.text_latency_ms, "shot_ms": 0.0, "input_tokens": self.input_tokens,
+            "requests": self.requests, "url": self.url, "observe_ms": self.observe_ms,
+            "decide_ms": self.decide_ms, "act_ms": self.act_ms, "settle_ms": self.settle_ms,
+            "burst": self.burst, "text": self.text, "page_changed": self.page_changed,
+            "box_hit": null, "box": null,
+        })
+    }
+
     fn recent(&self) -> Value {
         json!({
             "action": self.label,
@@ -236,6 +273,10 @@ pub fn action_space(actions: &[JevAction], extras: Extras) -> ActionSpace {
     }
 }
 
+fn ms_since(started: Instant) -> f64 {
+    started.elapsed().as_secs_f64() * 1000.0
+}
+
 /// `3` and `3:2` both sort as numbers.
 fn rank(index: &str) -> (i64, i64) {
     let mut parts = index.split(':');
@@ -339,6 +380,18 @@ pub fn summary(status: &str, actions: usize, ms: u128, url: Option<&str>) -> Str
     parts.join(" · ").chars().take(200).collect()
 }
 
+/// How an action goes in (the strategy's part of `Ultrafast.act`).
+#[derive(Clone, Copy)]
+struct Hand {
+    /// The pointer glides to the target first (cosmetic, and the one wait).
+    glide: bool,
+    /// Freshness is checked first; off for a burst's later fields, whose
+    /// form changed on purpose (the field before was just filled).
+    checked: bool,
+    paste: bool,
+    watch: bool,
+}
+
 /// Why an action did not go in.
 enum Miss {
     /// The page moved under the decision: observe again.
@@ -366,13 +419,26 @@ pub struct Session {
     pub note: String,
     pub observation: Option<Observation>,
     pub extras: Extras,
+    /// How the loop runs (Fast mode's unless the run named one) and which
+    /// Jev it asks (`None`: the configured one).
+    pub strategy: Strategy,
+    pub model: Option<String>,
+    /// Who answered last, and how many decisions went stale.
+    answered_by: String,
+    stale: usize,
     pending: Option<(String, String)>,
     stale_streak: usize,
     traced: bool,
 }
 
 impl Session {
-    pub fn new(goal: &str, tab: TabId, who: Who) -> Session {
+    pub fn new(
+        goal: &str,
+        tab: TabId,
+        who: Who,
+        strategy: Strategy,
+        model: Option<String>,
+    ) -> Session {
         Session {
             goal: goal.to_string(),
             tab,
@@ -384,10 +450,57 @@ impl Session {
             note: String::new(),
             observation: None,
             extras: Extras::default(),
+            strategy,
+            model: model
+                .map(|m| m.trim().to_string())
+                .filter(|m| !m.is_empty()),
+            answered_by: String::new(),
+            stale: 0,
             pending: None,
             stale_streak: 0,
             traced: false,
         }
+    }
+
+    /// What the run cost, summed over its steps (`Session.totals`).
+    pub fn totals(&self) -> Value {
+        let sum = |f: fn(&Step) -> f64| self.history.iter().map(f).sum::<f64>();
+        json!({
+            "jev_ms": sum(|s| s.latency_ms),
+            "text_ms": sum(|s| s.text_latency_ms),
+            "shot_ms": 0.0,
+            "input_tokens": self.history.iter().map(|s| s.input_tokens).sum::<i64>(),
+            "requests": self.history.iter().map(|s| s.requests).sum::<u32>(),
+            "stale": self.stale,
+            "vision": "off",
+            "model": self.answered_by,
+            "strategy": self.strategy.name(),
+            "observe_ms": sum(|s| s.observe_ms),
+            "decide_ms": sum(|s| s.decide_ms),
+            "act_ms": sum(|s| s.act_ms),
+            "settle_ms": sum(|s| s.settle_ms),
+            "burst_actions": self.history.iter().filter(|s| s.burst).count(),
+            "pictured": 0,
+        })
+    }
+
+    /// The run as one JSON object for a harness (`Session.json`): status,
+    /// timings, every step, the page it ended on.
+    pub fn json(&self, page: Option<&TabInfo>) -> Value {
+        let mut out = json!({
+            "status": self.status, "note": self.note, "goal": self.goal,
+            "elapsed_ms": self.elapsed_ms() as u64, "actions": self.history.len(),
+            "decisions": self.decisions, "totals": self.totals(),
+            "steps": self.history.iter().map(Step::json).collect::<Vec<_>>(),
+            "page": {
+                "url": page.map_or("about:blank", TabInfo::url_or_blank),
+                "title": page.map(|t| t.title.clone()).unwrap_or_default(),
+            },
+        });
+        if let Some(model) = &self.model {
+            out["asked_model"] = Value::String(model.clone());
+        }
+        out
     }
 
     pub fn elapsed_ms(&self) -> u128 {
@@ -559,16 +672,23 @@ impl<H: Host> Mcp<H> {
     }
 
     /// One TypeSafe request: the operation, and a target for every
-    /// operation that has candidates (`Ultrafast.choose`).
+    /// operation that has candidates (`Ultrafast.choose`). With `literal`,
+    /// one more question per quoted value: which field holds it.
     async fn choose(
         &self,
         obs: &Observation,
-        goal: &str,
-        history: &[Step],
+        s: &Session,
         eff: &Effective,
-        extras: Extras,
     ) -> Result<Decision, Failure> {
-        let space = action_space(&obs.actions, extras);
+        let (goal, history, strategy) = (s.goal.as_str(), &s.history, &s.strategy);
+        let space = action_space(&obs.actions, s.extras);
+        let quoted = if strategy.literals {
+            literals(goal)
+        } else {
+            Vec::new()
+        };
+        let empty = BTreeMap::new();
+        let fills = space.targets.get("TYPE_TEXT").unwrap_or(&empty);
         let mut operations: BTreeMap<String, String> = BTreeMap::new();
         for key in space.targets.keys() {
             let label = match key.as_str() {
@@ -636,31 +756,35 @@ impl<H: Host> Mcp<H> {
                 }),
             );
         }
+        questions.extend(strategies::value_questions(&quoted, fills, goal));
         let recent: Vec<Value> = history
             .iter()
             .rev()
-            .take(10)
+            .take(if strategy.lean { 5 } else { 10 })
             .rev()
             .map(Step::recent)
             .collect();
+        let text: String = if strategy.lean {
+            obs.text.chars().take(1200).collect()
+        } else {
+            obs.text.clone()
+        };
         let state = json!({
-            "page": { "url": obs.url, "title": obs.title, "text": obs.text },
+            "page": { "url": obs.url, "title": obs.title, "text": text },
             "elements": space.elements,
             "recent_actions": recent,
         });
         let questions = Value::Object(questions);
 
         let net = self.net()?;
+        let mut keys = eff.keys.clone();
+        if let Some(model) = &s.model {
+            keys.jev_model = model.clone();
+        }
         let mut answer = None;
         for attempt in 0..3u32 {
-            match intelligence::jev_ask(
-                &net,
-                &eff.keys,
-                &state,
-                &questions,
-                Duration::from_secs(25),
-            )
-            .await
+            match intelligence::jev_ask(&net, &keys, &state, &questions, Duration::from_secs(25))
+                .await
             {
                 Ok(a) => {
                     answer = Some(a);
@@ -697,15 +821,26 @@ impl<H: Host> Mcp<H> {
                     "Invalid TypeSafe answer for the {operation} target; nothing executed."
                 )));
             };
-            return Ok(Decision {
+            let mut decision = Decision {
                 choice: action.id.clone(),
-                operation,
                 target: Some(head.key.clone()),
                 confidence: op.confidence,
                 probability: head.probabilities.get(&head.key).copied().unwrap_or(0.0),
                 latency_ms: answer.latency_ms,
                 candidates: offered(candidates),
-            });
+                input_tokens: answer.input_tokens,
+                model: answer.model.clone(),
+                ..Decision::default()
+            };
+            if !quoted.is_empty() {
+                decision.assignments = strategies::assignments(&answer, &quoted, fills, 0.3);
+                if operation == "TYPE_TEXT" {
+                    decision.text = strategies::literal_for(&head.key, &answer, &quoted)
+                        .map(|(value, _)| value);
+                }
+            }
+            decision.operation = operation;
+            return Ok(decision);
         }
         let choice = space
             .controls
@@ -716,10 +851,41 @@ impl<H: Host> Mcp<H> {
             confidence: op.confidence,
             probability: op.probabilities.get(&operation).copied().unwrap_or(0.0),
             operation,
-            target: None,
             latency_ms: answer.latency_ms,
-            candidates: Vec::new(),
+            input_tokens: answer.input_tokens,
+            model: answer.model.clone(),
+            ..Decision::default()
         })
+    }
+
+    /// An LLM decides instead of Jev (`strategy: llm`, `Ultrafast.chooseLLM`).
+    async fn choose_llm(
+        &self,
+        obs: &Observation,
+        s: &Session,
+        eff: &Effective,
+    ) -> Result<Decision, Failure> {
+        let user = strategies::llm_user(obs, &s.goal, &s.history, &s.strategy);
+        let model = s.strategy.llm_model.clone().unwrap_or_else(|| {
+            if eff.keys.text_model.is_empty() {
+                "haiku".into()
+            } else {
+                eff.keys.text_model.clone()
+            }
+        });
+        let reply = self
+            .ask_model(
+                eff,
+                strategies::LLM_RULE,
+                &user,
+                Duration::from_secs(30),
+                200,
+                Some(&model),
+            )
+            .await?;
+        let mut decision = strategies::llm_decision(&reply.json, obs, reply.latency_ms)?;
+        decision.model = reply.model;
+        Ok(decision)
     }
 
     /// The router writes the value: exactly one key, `text`, a non-empty
@@ -757,6 +923,7 @@ impl<H: Host> Mcp<H> {
         action: &JevAction,
         obs: &Observation,
         text: Option<&str>,
+        hand: Hand,
     ) -> Result<(), Miss> {
         let page = self.page_of(tab)?;
         let stale = || Miss::Stale("Page changed since this decision. Observe again.".into());
@@ -786,6 +953,7 @@ impl<H: Host> Mcp<H> {
         }
         let node = action.node;
         let fresh = match (kind, node) {
+            _ if !hand.checked => true,
             ("click" | "select", Some(n)) => self.fresh_target(&page, obs, n).await,
             _ => self.fresh(&page, obs).await,
         };
@@ -795,7 +963,15 @@ impl<H: Host> Mcp<H> {
         match kind {
             "wait" => {
                 cosmetic(&page, &trail::wait()).await;
-                self.host.sleep(Duration::from_millis(100)).await;
+                if hand.watch {
+                    // A navigation takes the page's promise with it: the cap is kept here too.
+                    let call = pj::wait_for_change(1500);
+                    let change = pin!(cosmetic(&page, &call));
+                    let cap = pin!(self.host.sleep(Duration::from_millis(1600)));
+                    let _ = select(change, cap).await;
+                } else {
+                    self.host.sleep(Duration::from_millis(100)).await;
+                }
             }
             "scroll" => {
                 let delta = action.delta.unwrap_or(560.0);
@@ -830,11 +1006,17 @@ impl<H: Host> Mcp<H> {
                     cosmetic(&page, &trail::click(point.x, point.y)).await;
                     return Ok(());
                 }
-                self.glide(&page, point.x, point.y).await;
-                let Some(landed) = js(&page, &pj::resolve(action)).await? else {
-                    return Err(Miss::Stale(
-                        "Target changed or is covered. Observe again.".into(),
-                    ));
+                let landed = if hand.glide {
+                    self.glide(&page, point.x, point.y).await;
+                    // The glide took time: where the target is now gets the click.
+                    let Some(landed) = js(&page, &pj::resolve(action)).await? else {
+                        return Err(Miss::Stale(
+                            "Target changed or is covered. Observe again.".into(),
+                        ));
+                    };
+                    landed
+                } else {
+                    point
                 };
                 cosmetic(&page, &trail::click(landed.x, landed.y)).await;
                 let real = page.can_post_input();
@@ -849,7 +1031,7 @@ impl<H: Host> Mcp<H> {
                     let text = text.ok_or(Failure::new("TYPE_TEXT without a value"))?;
                     self.host.sleep(Duration::from_millis(40)).await;
                     js(&page, &pj::select_all(node)).await?;
-                    if real {
+                    if real && !hand.paste {
                         page.input(copper_engine::InputEvent::Type(text.to_string()))
                             .await
                             .map_err(Failure)?;
@@ -905,6 +1087,7 @@ impl<H: Host> Mcp<H> {
         let page = self.page_of(&tab)?;
         self.trace(DriveEvent::Cycle);
 
+        let observe_started = Instant::now();
         let reading = self.phase(PhaseKind::Observe, "Reading the page");
         let obs = match &s.observation {
             Some(have) if self.fresh(&page, have).await => {
@@ -919,10 +1102,19 @@ impl<H: Host> Mcp<H> {
                 obs
             }
         };
+        // The pointer glides to its target when someone can see it.
+        let on_screen = self.host.tab(&tab).is_some_and(|t| t.selected);
+        let hand = Hand {
+            glide: s.strategy.glide || (s.strategy.glide_watched && on_screen),
+            checked: true,
+            paste: s.strategy.paste,
+            watch: s.strategy.watch,
+        };
         self.trace(DriveEvent::Page {
             url: obs.url.clone(),
             title: obs.title.clone(),
         });
+        let observe_ms = ms_since(observe_started);
 
         if s.decisions >= MAX_STEPS * 2 {
             s.status = "budget".into();
@@ -936,10 +1128,24 @@ impl<H: Host> Mcp<H> {
         }
         s.decisions += 1;
         s.extras = self.host.jev_extras(&tab).await;
-        let asking = self.phase(PhaseKind::Ask, "Asking Jev which move");
-        let decision = self
-            .choose(&obs, &s.goal, &s.history, &eff, s.extras)
-            .await?;
+        let asking = self.phase(
+            PhaseKind::Ask,
+            if s.strategy.llm {
+                "Asking the model which move"
+            } else {
+                "Asking Jev which move"
+            },
+        );
+        let decide_started = Instant::now();
+        let decision = if s.strategy.llm {
+            self.choose_llm(&obs, s, &eff).await?
+        } else {
+            self.choose(&obs, s, &eff).await?
+        };
+        let decide_ms = ms_since(decide_started);
+        if !decision.model.is_empty() {
+            s.answered_by = decision.model.clone();
+        }
         self.close_phase(asking, None);
         if stopped(s) {
             return Ok(None);
@@ -983,11 +1189,17 @@ impl<H: Host> Mcp<H> {
             action.label.clone()
         };
 
-        let mut text: Option<String> = None;
+        let mut text: Option<String> = if kind == "fill" {
+            decision.text.clone()
+        } else {
+            None
+        };
         let mut text_latency = 0.0;
         let mut open_phase: Option<u64> = None;
+        let mut act_ms = 0.0;
+        let mut burst_steps: Vec<Step> = Vec::new();
         let attempt: Result<(), Miss> = async {
-            if kind == "fill" {
+            if kind == "fill" && text.is_none() {
                 if !self.fresh(&page, &obs).await {
                     return Err(Miss::Stale("Page changed before text generation.".into()));
                 }
@@ -1015,9 +1227,57 @@ impl<H: Host> Mcp<H> {
             }
             let acted = self.phase(PhaseKind::Act, act_title(&action, &label));
             open_phase = Some(acted);
-            self.act(&tab, &action, &obs, text.as_deref()).await?;
+            let act_started = Instant::now();
+            self.act(&tab, &action, &obs, text.as_deref(), hand).await?;
+            act_ms = ms_since(act_started);
             self.close_phase(acted, None);
             open_phase = None;
+            if s.strategy.burst
+                && kind == "fill"
+                && let Some(target) = &decision.target
+            {
+                // The rest of the form, in the same breath: every other field
+                // Jev matched a quoted value to, surely.
+                let space = action_space(&obs.actions, Extras::default());
+                let empty = BTreeMap::new();
+                let fills = space.targets.get("TYPE_TEXT").unwrap_or(&empty);
+                for (other, value) in strategies::burst_fills(&decision.assignments, target, fills)
+                {
+                    if stopped(s) {
+                        break;
+                    }
+                    let started = Instant::now();
+                    self.host.sleep(Duration::from_millis(30)).await;
+                    let later = Hand {
+                        checked: false,
+                        ..hand
+                    };
+                    match self.act(&tab, &other, &obs, Some(&value), later).await {
+                        Ok(()) => {}
+                        Err(Miss::Stale(_)) => break,
+                        Err(Miss::Fail(f)) => return Err(Miss::Fail(f)),
+                    }
+                    let probability = decision
+                        .assignments
+                        .iter()
+                        .find(|a| a.literal == value)
+                        .map_or(0.0, |a| a.probability);
+                    burst_steps.push(Step {
+                        number: s.history.len() + 2 + burst_steps.len(),
+                        operation: "TYPE_TEXT".into(),
+                        kind: "fill".into(),
+                        label: other.label.clone(),
+                        text: Some(value),
+                        confidence: decision.confidence,
+                        probability,
+                        page_changed: Some(true),
+                        url: obs.url.clone(),
+                        act_ms: ms_since(started),
+                        burst: true,
+                        ..Step::default()
+                    });
+                }
+            }
             s.pending = None;
             s.stale_streak = 0;
             Ok(())
@@ -1029,6 +1289,7 @@ impl<H: Host> Mcp<H> {
             Err(Miss::Fail(f)) => return Err(f),
             Err(Miss::Stale(why)) => {
                 s.stale_streak += 1;
+                s.stale += 1;
                 s.observation = None;
                 if let Some(p) = open_phase {
                     self.close_phase(p, None);
@@ -1068,18 +1329,32 @@ impl<H: Host> Mcp<H> {
             text_latency_ms: text_latency,
             page_changed: None,
             url: obs.url.clone(),
+            input_tokens: decision.input_tokens,
+            requests: 1,
+            observe_ms,
+            decide_ms,
+            act_ms,
+            ..Step::default()
         };
         // Logged before the next read: a navigation there must not erase it.
+        let at = s.history.len();
         s.history.push(step.clone());
+        let bursts = !burst_steps.is_empty();
+        s.history.extend(burst_steps);
         let settling = self.phase(PhaseKind::Settle, "Watching the page settle");
-        let next = self.observe(&tab, Some(&action)).await?;
+        let settle_started = Instant::now();
+        let after = if bursts {
+            synthetic("wait", "")
+        } else {
+            action.clone()
+        };
+        let next = self.observe(&tab, Some(&after)).await?;
         s.observation = Some(next.clone());
         self.seen(&tab, &next).await;
         step.page_changed = Some(next.marker != obs.marker);
         step.url = next.url.clone();
-        if let Some(last) = s.history.last_mut() {
-            *last = step.clone();
-        }
+        step.settle_ms = ms_since(settle_started);
+        s.history[at] = step.clone();
         self.close_phase(
             settling,
             Some(
@@ -1258,9 +1533,28 @@ impl<H: Host> Mcp<H> {
                 let existing = self.state.borrow_mut().sessions.remove(&tab.id);
                 let mut session = match existing {
                     Some(have) if have.goal == goal && !have.finished() => have,
-                    _ => {
+                    other => {
+                        // Read when the session starts, as the Mac.
+                        let named = match strategy_arg(args) {
+                            Ok(named) => named,
+                            Err(e) => {
+                                if let Some(have) = other {
+                                    self.state
+                                        .borrow_mut()
+                                        .sessions
+                                        .insert(tab.id.clone(), have);
+                                }
+                                return Err(e);
+                            }
+                        };
                         self.begin_run(&jev_who, goal, &tab.id);
-                        Session::new(goal, tab.id.clone(), jev_who)
+                        Session::new(
+                            goal,
+                            tab.id.clone(),
+                            jev_who,
+                            Strategy::for_run(named, self.effective().keys.jev_fast),
+                            arg_str(args, "model").map(str::to_string),
+                        )
                     }
                 };
                 let step = match self.tick(&mut session).await {
@@ -1317,6 +1611,9 @@ impl<H: Host> Mcp<H> {
                     .map(str::trim)
                     .filter(|s| !s.is_empty())
                     .ok_or("goal required")?;
+                let strategy =
+                    Strategy::for_run(strategy_arg(args)?, self.effective().keys.jev_fast);
+                let wants_json = arg_bool(args, "json").unwrap_or(false);
                 let jev_who = Who::jev(Some(&ctx.who));
                 let address = arg_str(args, "url").and_then(copper_core::url_from_typed);
                 let tab_id = match (arg_str(args, "url"), address) {
@@ -1352,7 +1649,13 @@ impl<H: Host> Mcp<H> {
                         tab.id
                     }
                 };
-                let mut session = Session::new(goal, tab_id.clone(), jev_who);
+                let mut session = Session::new(
+                    goal,
+                    tab_id.clone(),
+                    jev_who,
+                    strategy,
+                    arg_str(args, "model").map(str::to_string),
+                );
                 self.state.borrow_mut().sessions.remove(&tab_id);
                 let cap = arg_f64(args, "maxSteps")
                     .map_or(MAX_STEPS, |n| (n.max(0.0) as usize).min(MAX_STEPS));
@@ -1372,6 +1675,12 @@ impl<H: Host> Mcp<H> {
                             session.elapsed_ms(),
                             self.url_of(&tab_id).as_deref(),
                         ));
+                        if wants_json {
+                            let mut object = session.json(self.host.tab(&tab_id).as_ref());
+                            object["status"] = json!("error");
+                            object["note"] = json!(e.0);
+                            return Ok(vec![Content::Text(sorted_compact(&object))]);
+                        }
                         let n = session.history.len();
                         let lines = if session.history.is_empty() {
                             String::new()
@@ -1417,6 +1726,14 @@ impl<H: Host> Mcp<H> {
                     session.elapsed_ms(),
                     self.url_of(&tab_id).as_deref(),
                 ));
+                if wants_json {
+                    let mut object = session.json(self.host.tab(&tab_id).as_ref());
+                    if !finished {
+                        object["status"] = json!("budget");
+                        object["note"] = json!(format!("Stopped at the {cap}-action cap"));
+                    }
+                    return Ok(vec![Content::Text(sorted_compact(&object))]);
+                }
                 let mut report = self.report(&session, arg_bool(args, "elements").unwrap_or(true));
                 if !finished {
                     report = report.replace(
@@ -1500,6 +1817,7 @@ mod tests {
             text_latency_ms: 300.0,
             page_changed: Some(false),
             url: String::new(),
+            ..Step::default()
         };
         assert_eq!(
             step.line(),
