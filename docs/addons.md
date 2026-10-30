@@ -36,7 +36,8 @@ What Copper does with the answer:
 - **A new addon or a new version** is downloaded, checked against its SHA-256
   and staged. Nothing runs yet. Settings › About shows "Update available —
   Hello addon 1.0.0 for the Agent sidebar" with an **Install** button, and a
-  toast says the same once for each version. **Install** loads the new version
+  toast says the same once for each version, and the command palette offers
+  **Install Hello addon 1.0.0 for the Agent sidebar** while it waits. **Install** loads the new version
   into the sidebar; Copper doesn't need to restart.
 
 **Settings › Extensions** lists each addon with its name, version, slot and the
