@@ -192,6 +192,8 @@ scripts! {
     WithoutPasskeys = "forms/without_passkeys.js", UserScript(DocumentStart, AllFrames), Page, None;
     /// Fill the sign-in pair.
     FormsFillLogin = "forms/fill_login.js", Call, Page, None;
+    /// Fill the name alone on a sign-in that asks for it first.
+    FormsFillName = "forms/fill_name.js", Call, Page, None;
     /// Submit the sign-in.
     FormsSubmit = "forms/submit.js", Call, Page, None;
     /// Fill a one-time code (one box or one box per digit).

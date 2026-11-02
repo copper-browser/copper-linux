@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Copper name-first sign-in fixture</title>
+  <style>
+    body { max-width: 30rem; margin: 3rem auto; font: 16px/1.4 system-ui, sans-serif; }
+    input { box-sizing: border-box; width: 100%; padding: .45rem; font: inherit; }
+    .gone { display: none; }
+  </style>
+</head>
+<body>
+  <!-- Google's first page as it is served (2026-11): a name box, a hidden
+       password box that is display:none, and Next. Next swaps in the
+       password step in place, the way Google does. -->
+  <form id="name" action="#">
+    <label>Email or phone
+      <input type="text" name="identifier" id="identifier" autocomplete="username webauthn"></label>
+    <div class="gone"><input type="password" name="hiddenPassword" tabindex="-1" aria-hidden="true"></div>
+    <input type="text" name="ca" class="gone">
+    <button id="next" type="button">Next</button>
+  </form>
+  <form id="pw" action="#" class="gone">
+    <label>Enter your password
+      <input type="password" name="Passwd" id="password" autocomplete="current-password"></label>
+  </form>
+  <script>
+    document.getElementById('next').addEventListener('click', () => {
+      document.getElementById('name').classList.add('gone');
+      document.getElementById('pw').classList.remove('gone');
+      document.getElementById('password').focus();
+    });
+  </script>
+</body>
+</html>

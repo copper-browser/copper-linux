@@ -5,6 +5,15 @@ release dates.
 
 ## Unreleased
 
+### Fixed
+
+- **Picking an account on Google's sign-in page fills it in.** A sign-in
+  that asks for the name first (Google, Microsoft) has no password box on
+  its first page, so picking a saved account said "Couldn't find the
+  sign-in fields anymore". The name now goes in alone and the list comes
+  back on the password page. The Mac has the same gap. (`forms/relay.js`
+  `fillName`, `forms/watch.rs`.)
+
 ## 0.6.1 — 2026-10-30
 
 The Mac's keys and small touches: fold the column, stop sound, print, full screen, space keys, Recently Closed, the Clear seam, camera choices remembered.

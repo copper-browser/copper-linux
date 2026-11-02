@@ -663,18 +663,35 @@ impl<U: FormsUi> Forms<U> {
                     return;
                 }
             };
+            let user = &row.credential.user;
+            let mut name_only = false;
             let filled = if code {
-                call(&page, &copper_pagejs::forms::fill_otp(&value)).await
+                call(&page, &copper_pagejs::forms::fill_otp(&value))
+                    .await
+                    .ok()
+                    .flatten()
             } else {
-                call(
-                    &page,
-                    &copper_pagejs::forms::fill_login(&row.credential.user, &value),
-                )
-                .await
+                match call(&page, &copper_pagejs::forms::fill_login(user, &value))
+                    .await
+                    .ok()
+                    .flatten()
+                {
+                    Some(true) => Some(true),
+                    // A sign-in that asks for the name first (Google): the
+                    // name goes in alone, and the list comes back up on
+                    // the password page.
+                    _ => {
+                        name_only = true;
+                        call(&page, &copper_pagejs::forms::fill_name(user))
+                            .await
+                            .ok()
+                            .flatten()
+                    }
+                }
             };
             drop(value);
             f.lower_now(&tab);
-            if filled.ok().flatten() != Some(true) {
+            if filled != Some(true) {
                 shell.toast(if code {
                     "Couldn't find the code box anymore"
                 } else {
@@ -685,7 +702,7 @@ impl<U: FormsUi> Forms<U> {
             let c = row.credential.clone();
             let now = f.now();
             f.with_tab(&tab, |t| {
-                t.picked_into = !code;
+                t.picked_into = !code && !name_only;
                 t.signed_with = Some(c.clone());
                 if code {
                     // A code picked by hand: none goes in on its own after it.
