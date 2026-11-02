@@ -574,6 +574,26 @@ function () {
       put(both.pass, password);
       return true;
     },
+    // Copper-linux (not on the Mac yet): a sign-in that asks for the name
+    // first (Google, Microsoft) has no password box on its first page, so
+    // the picked account's name goes in alone — the box the caret is in, or
+    // the page's one name box. The password goes in on the next page.
+    fillName: function (user) {
+      if (pair()) return false;
+      var box = document.activeElement;
+      var field = classifyCore(box);
+      if (!field || field.kind !== 'username') {
+        box = null;
+        var all = document.querySelectorAll('input');
+        for (var i = 0; i < all.length && !box; i++) {
+          field = classifyCore(all[i]);
+          if (field && field.kind === 'username') box = all[i];
+        }
+      }
+      if (!box) return false;
+      put(box, user);
+      return true;
+    },
     submit: function () {
       var both = pair();
       if (!both) return false;

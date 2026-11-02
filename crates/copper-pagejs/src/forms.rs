@@ -34,6 +34,13 @@ pub fn fill_login(user: &str, password: &str) -> Call<Option<bool>> {
     )
 }
 
+/// The name step of a sign-in that asks for the name first: no password box
+/// on the page, so `user` goes into its name box alone. `Some(false)` when
+/// there is a password box (use [`fill_login`]) or no name box.
+pub fn fill_name(user: &str) -> Call<Option<bool>> {
+    Call::new(Script::FormsFillName, json!({ "user": user }))
+}
+
 /// Press Enter in the password box and submit its form (or click the nearest button).
 pub fn submit() -> Call<Option<bool>> {
     Call::new(Script::FormsSubmit, json!({}))

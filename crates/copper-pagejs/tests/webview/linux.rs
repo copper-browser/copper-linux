@@ -28,6 +28,7 @@ pub fn main() {
         case!(perf_probe_text),
         case!(perf_probe_json),
         case!(forms_login),
+        case!(forms_name_first),
         case!(forms_autofill),
         case!(forms_without_passkeys),
         case!(curtain_style_and_peek),
@@ -779,10 +780,71 @@ async fn forms_login(h: &H) -> Res {
     Ok(())
 }
 
+/// Google's first page: a name box and no password box to be seen (its
+/// own is display:none). The picked account's name goes in alone; the
+/// password goes in on the next page.
+async fn forms_name_first(h: &H) -> Res {
+    h.add_user_script(&forms::relay());
+    h.load("login-name-first.html").await?;
+    ensure_eq!(h.run(&forms::has_password()).await?, false);
+    ensure_eq!(
+        h.run(&forms::fill_login("ada@example.test", "hunter2"))
+            .await?,
+        Some(false)
+    );
+    // The caret anywhere: the page's one name box is found.
+    h.js("document.activeElement && document.activeElement.blur(); true")
+        .await?;
+    ensure_eq!(
+        h.run(&forms::fill_name("ada@example.test")).await?,
+        Some(true)
+    );
+    ensure_eq!(
+        h.js("document.getElementById('identifier').value").await?,
+        json!("ada@example.test")
+    );
+    // The hidden password box is never filled.
+    ensure_eq!(
+        h.js("document.querySelector('[name=hiddenPassword]').value")
+            .await?,
+        json!("")
+    );
+    // A prefix typed to narrow the list is replaced by the pick.
+    h.js("document.getElementById('identifier').value = 'ad'; document.getElementById('identifier').focus(); true")
+        .await?;
+    ensure_eq!(
+        h.run(&forms::fill_name("ada@example.test")).await?,
+        Some(true)
+    );
+    ensure_eq!(
+        h.js("document.getElementById('identifier').value").await?,
+        json!("ada@example.test")
+    );
+    // The password step: now the pair is there, and the name step is not.
+    h.js("document.getElementById('next').click(); true")
+        .await?;
+    ensure_eq!(h.run(&forms::has_password()).await?, true);
+    ensure_eq!(
+        h.run(&forms::fill_name("ada@example.test")).await?,
+        Some(false)
+    );
+    ensure_eq!(
+        h.run(&forms::fill_login("ada@example.test", "hunter2"))
+            .await?,
+        Some(true)
+    );
+    ensure_eq!(
+        h.js("document.getElementById('password').value").await?,
+        json!("hunter2")
+    );
+    Ok(())
+}
+
 async fn forms_autofill(h: &H) -> Res {
     // Without the relay every call is a harmless no-op.
     h.load("autofill.html").await?;
     ensure_eq!(h.run(&forms::fill_login("a", "b")).await?, None);
+    ensure_eq!(h.run(&forms::fill_name("a")).await?, None);
     ensure_eq!(h.run(&forms::fields_present()).await?, Vec::<String>::new());
     h.add_user_script(&forms::relay());
     h.load("autofill.html").await?;

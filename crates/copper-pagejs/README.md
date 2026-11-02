@@ -159,6 +159,7 @@ Two deliberate Linux changes to the helper, both marked `// Linux:` in
 | `forms/relay.js` | `FormsRelay` | `Forms.swift:102` `FormRelay.script` | user script: end, main frame | page |  |
 | `forms/without_passkeys.js` | `WithoutPasskeys` | `Forms.swift:90` `FormRelay.withoutPasskeys` | user script: start, all frames | page |  |
 | `forms/fill_login.js` | `FormsFillLogin` | `Tab.swift:566` `Tab.fill` | call | page |  |
+| `forms/fill_name.js` | `FormsFillName` | `Tab.swift:698` `Tab.fill` (its name step; Copper-linux only) | call | page |  |
 | `forms/submit.js` | `FormsSubmit` | `Tab.swift:574` `Tab.submitSignIn` | call | page |  |
 | `forms/fill_otp.js` | `FormsFillOtp` | `Tab.swift:582` `Tab.fillOTP` | call | page |  |
 | `forms/fill_values.js` | `FormsFillValues` | `Tab.swift:599` `Tab.fillValues` | call | page |  |
