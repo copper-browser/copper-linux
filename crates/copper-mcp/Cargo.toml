@@ -20,6 +20,7 @@ tracing.workspace = true
 tokio.workspace = true
 reqwest.workspace = true
 url.workspace = true
+percent-encoding = "2"
 base64 = "0.22"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 uuid = { version = "1", features = ["v4"] }

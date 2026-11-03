@@ -9,13 +9,21 @@
 //! again under the old ceiling; any other non-2xx answer is an error that
 //! carries the start of its body.
 //!
+//! On the Claude-account lane the same turn goes to Anthropic's Messages API
+//! instead ([`complete_claude`], `Agent.complete`'s `claude` branch): the
+//! conversation translated at the boundary, `.rolling` marks, and the
+//! reply's blocks kept for the next request (`_blocks`: thinking carries a
+//! signature the next turn must send back).
+//!
 //! The request runs on a tokio runtime (the host's), so the UI thread that
 //! awaits it never has to be one. Bodies are written with sorted keys
 //! (serde_json's map), so the same history is the same bytes every turn —
 //! what the cache marks need.
 
+use std::sync::Arc;
 use std::time::Duration;
 
+use copper_mcp::claude::{self, Account, Marks, messages as anthropic};
 use copper_mcp::intelligence::{Keys, family};
 use serde_json::{Map, Value, json};
 
@@ -62,6 +70,9 @@ pub struct Reply {
     pub finish: Option<String>,
     /// The model that answered, when the gateway says.
     pub model: Option<String>,
+    /// The Claude-account lane's blocks, as the history keeps them
+    /// (`_blocks`).
+    pub blocks: Option<Value>,
 }
 
 /// Where requests go: an HTTP client on a tokio runtime.
@@ -158,7 +169,12 @@ pub fn body(
 ) -> Value {
     let mut messages: Vec<Message> = Vec::with_capacity(history.len() + 1);
     messages.push(message(json!({ "role": "system", "content": system })));
-    messages.extend(history.iter().cloned());
+    // The Claude-account lane's own copy of a reply is not the gateway's.
+    messages.extend(history.iter().map(|m| {
+        let mut m = m.clone();
+        m.remove("_blocks");
+        m
+    }));
     let mut tools = tools.to_vec();
     if cached && family(model).is_some() {
         mark(&mut messages, &mut tools);
@@ -313,6 +329,46 @@ pub async fn complete(
     }
 }
 
+/// One turn on the Claude account: the conversation as Messages, Copper's
+/// system prompt after Claude Code's identity, `.rolling` marks. A 401 is
+/// asked again with a fresh token (the account's).
+pub async fn complete_claude(
+    account: &Arc<Account>,
+    model: &str,
+    history: &[Message],
+    tools: &[Value],
+) -> Result<Reply, Failure> {
+    let chat: Vec<Value> = history.iter().cloned().map(Value::Object).collect();
+    let payload = account
+        .complete(
+            model,
+            words::SYSTEM,
+            anthropic::messages_from_chat(&chat),
+            anthropic::tools_from_chat(tools),
+            OUTPUT_LIMIT,
+            TIMEOUT,
+            Marks::Rolling,
+        )
+        .await
+        .map_err(|f| match f {
+            claude::Failure::TimedOut => Failure::TimedOut(TIMEOUT),
+            f => Failure::Text(f.text()),
+        })?;
+    let m = anthropic::chat_message(&payload);
+    let text = |k: &str| m.get(k).and_then(Value::as_str).map(str::to_string);
+    Ok(Reply {
+        content: text("content").unwrap_or_default(),
+        tool_calls: m
+            .get("tool_calls")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
+        finish: text("_stop"),
+        model: text("_model"),
+        blocks: m.get("_blocks").cloned(),
+    })
+}
+
 /// The first choice of a chat-completions answer.
 pub fn parse(data: &[u8]) -> Result<Reply, Failure> {
     let none = || Failure::Text("router answered with no choices".into());
@@ -331,6 +387,7 @@ pub fn parse(data: &[u8]) -> Result<Reply, Failure> {
             .unwrap_or_default(),
         finish: choice["finish_reason"].as_str().map(str::to_string),
         model: payload["model"].as_str().map(str::to_string),
+        blocks: None,
     })
 }
 

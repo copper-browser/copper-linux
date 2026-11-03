@@ -346,7 +346,7 @@ fn run_check(rows: &Rc<Rows>, shell: &Shell) {
     );
     let (weak, w) = (shell.downgrade(), Rc::downgrade(rows));
     glib::spawn_future_local(async move {
-        let done = check::run(&net, &eff).await;
+        let done = check::run(&net, &eff, None).await;
         CHECK.with(|c| *c.borrow_mut() = done);
         if let (Some(s), Some(rows)) = (weak.upgrade(), w.upgrade()) {
             sync(&rows, &s);

@@ -116,6 +116,7 @@ struct Mock {
     slow: Rc<Cell<Duration>>,
     jev_stops: Rc<Cell<u32>>,
     page: Option<PageInFront>,
+    claude: Option<Arc<copper_mcp::claude::Account>>,
 }
 
 impl Mock {
@@ -140,6 +141,7 @@ impl Mock {
                     "Example Domain\nThis domain is for use in documentation examples.".into(),
                 ),
             }),
+            claude: None,
         }
     }
 }
@@ -209,6 +211,9 @@ impl ChatHost for Mock {
     fn stop_jev(&self) {
         self.jev_stops.set(self.jev_stops.get() + 1);
     }
+    fn claude(&self) -> Option<Arc<copper_mcp::claude::Account>> {
+        self.claude.clone()
+    }
 }
 
 // -- running ----------------------------------------------------------------------
@@ -257,6 +262,83 @@ fn detail(item: &Value) -> Value {
 }
 
 // -- the tests ---------------------------------------------------------------------
+
+#[test]
+fn the_claude_account_lane_asks_messages_and_keeps_the_blocks() {
+    use copper_core::intelligence::ClaudeCredential;
+    use copper_mcp::claude::{Account, Endpoints};
+    run(|net| async move {
+        let tool_use = json!({
+            "model": "claude-sonnet-5",
+            "stop_reason": "tool_use",
+            "content": [
+                {"type": "thinking", "thinking": "Read it first.", "signature": "sig-1"},
+                {"type": "tool_use", "id": "toolu_1", "name": "browser_snapshot", "input": {"reason": "read it"}},
+            ],
+        });
+        let answer = json!({
+            "model": "claude-sonnet-5",
+            "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": "It says Example Domain."}],
+        });
+        let router = Router::start(vec![(200, tool_use), (200, answer)]);
+        let dir = tempfile::tempdir().unwrap();
+        let store = copper_core::Store::new(copper_core::Paths::new(dir.path(), dir.path()));
+        store
+            .save(&ClaudeCredential {
+                access: "claude-access".into(),
+                refresh: "claude-refresh".into(),
+                expires: copper_core::SwiftDate::from_unix(copper_core::date::now_unix() + 3600.0),
+                ..ClaudeCredential::default()
+            })
+            .unwrap();
+        let endpoints = Endpoints {
+            messages: format!("{}/v1/messages", router.url),
+            ..Endpoints::default()
+        };
+        let mut mock = host(&router, &net);
+        mock.keys.borrow_mut().local.lane = Some("claude".into());
+        let chat = Chat::new(mock.clone());
+        assert!(!chat.available(), "the lane is the account's, signed out");
+        mock.claude = Some(Account::with_endpoints(store, net.clone(), endpoints));
+        let chat = Chat::new(mock.clone());
+        assert!(chat.available());
+        chat.send("What does the page say?").unwrap();
+        until(&chat, "the answer", |c| !c.busy()).await;
+        let state = chat.state();
+        assert_eq!(
+            roles(&state),
+            ["user", "activity", "assistant"],
+            "{state:#}"
+        );
+        assert_eq!(mock.called.borrow()[0].0, "browser_snapshot");
+
+        let seen = router.seen();
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[0].authorization, "Bearer claude-access");
+        let first = &seen[0].body;
+        assert_eq!(first["model"], "claude-sonnet-5");
+        assert_eq!(first["max_tokens"], wire::OUTPUT_LIMIT);
+        assert_eq!(
+            first["system"][0]["text"],
+            copper_mcp::claude::messages::IDENTITY
+        );
+        assert_eq!(first["system"][1]["text"], words::SYSTEM);
+        assert!(first["tools"][0]["input_schema"].is_object());
+        assert_eq!(first["tool_choice"], json!({"type": "auto"}));
+        let second = &seen[1].body;
+        let turns = second["messages"].as_array().unwrap();
+        assert_eq!(turns.len(), 3, "{second:#}");
+        assert_eq!(
+            turns[1]["content"][0],
+            json!({"type": "thinking", "thinking": "Read it first.", "signature": "sig-1"}),
+            "the thinking goes back with its signature"
+        );
+        assert_eq!(turns[1]["content"][1]["id"], "toolu_1");
+        assert_eq!(turns[2]["content"][0]["type"], "tool_result");
+        assert_eq!(turns[2]["content"][0]["tool_use_id"], "toolu_1");
+    });
+}
 
 #[test]
 fn a_tool_call_then_the_answer() {

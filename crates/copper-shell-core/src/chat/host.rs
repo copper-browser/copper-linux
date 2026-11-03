@@ -6,8 +6,10 @@
 use copper_core::agent::ChatConfig;
 use copper_engine::LocalFuture;
 use copper_mcp::IntelligenceSource;
+use copper_mcp::claude::Account;
 use copper_mcp::intelligence::Tier;
 use serde_json::{Map, Value};
+use std::sync::Arc;
 
 /// The tab in front of a question (Settings › Agents › Page in front of
 /// every question).
@@ -61,4 +63,9 @@ pub trait ChatHost: 'static {
     fn call(&self, name: &str, args: &Map<String, Value>) -> LocalFuture<ToolOutput>;
     /// Stop the Jev run this agent started, before its next move.
     fn stop_jev(&self);
+    /// The Claude account, for the `claude` lane (none: the lane can't be
+    /// asked).
+    fn claude(&self) -> Option<Arc<Account>> {
+        None
+    }
 }

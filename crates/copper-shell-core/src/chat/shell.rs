@@ -57,6 +57,10 @@ impl<P: Platform> ChatHost for ShellChat<P> {
         crate::cloud::runtime().handle().clone()
     }
 
+    fn claude(&self) -> Option<std::sync::Arc<copper_mcp::claude::Account>> {
+        Some(crate::claude::account(self.shell.upgrade()?.store()))
+    }
+
     fn intelligence(&self) -> IntelligenceSource {
         match self.shell.upgrade() {
             Some(s) => copper_mcp::intelligence::read_files(s.store()),

@@ -301,7 +301,7 @@ impl<P: Platform> Host for AppHost<P> {
             Some(shell) if method == "copper/intelligence" => {
                 let cloud = crate::cloud::get();
                 let fetch = cloud.map_or("never".into(), |c| c.intelligence.last_outcome());
-                copper_mcp::intelligence::control(
+                let mut out = copper_mcp::intelligence::control(
                     params,
                     shell.store(),
                     self.claude_ready(),
@@ -312,9 +312,15 @@ impl<P: Platform> Host for AppHost<P> {
                             crate::cloud::spawn(async move { i.fetch().await });
                         }
                     },
-                )
+                );
+                if let Some(account) = out.get_mut("claudeAccount") {
+                    *account = Value::String(crate::claude::account(shell.store()).status().email);
+                }
+                out
             }
-            // `copper/link`, `copper/claude`, `copper/bitwarden`: not here yet.
+            Some(shell) if method == "copper/claude" => crate::claude::account(shell.store())
+                .control(params, || crate::claude::sign_in(&shell)),
+            // `copper/link`, `copper/bitwarden`: not here yet.
             _ => {
                 serde_json::json!({ "error": format!("{method} is not available in this build yet") })
             }
@@ -327,6 +333,30 @@ impl<P: Platform> Host for AppHost<P> {
             Some(s) => copper_mcp::intelligence::read_files(s.store()),
             None => IntelligenceSource::default(),
         }
+    }
+
+    fn claude_ask(
+        &self,
+        system: &str,
+        user: &str,
+        model: &str,
+        max_tokens: u32,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<(String, String), String>> {
+        let asked = self.shell().map(|s| {
+            crate::claude::account(s.store()).ask(system, user, model, max_tokens, timeout)
+        });
+        async move {
+            match asked {
+                Some(asked) => asked.await.map_err(|f| f.text()),
+                None => Err("Copper's window is gone".to_string()),
+            }
+        }
+    }
+
+    fn claude_ready(&self) -> bool {
+        self.shell()
+            .is_some_and(|s| crate::claude::ready(s.store()))
     }
 }
 
