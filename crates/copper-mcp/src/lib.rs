@@ -13,6 +13,8 @@
 //! * [`bridge`] — `copper --mcp-stdio`: stdin/stdout JSON-RPC proxied to the
 //!   running instance. [`cli`] — the `copper` command-line verbs;
 //!   [`cloud_cli`] — `copper cloud pair|sso|status`, with no window.
+//! * [`claude`] — the Claude account: sign-in, tokens and the Messages API
+//!   the `claude` model lane asks.
 //!
 //! Formats follow macOS Copper (`Fork/MCP/*.swift`) byte for byte where an
 //! agent can see them: tool names, descriptions and schemas come straight
@@ -21,6 +23,7 @@
 pub mod agent_tabs;
 pub mod bridge;
 pub mod catalogue;
+pub mod claude;
 pub mod cli;
 pub mod client;
 pub mod cloud_cli;

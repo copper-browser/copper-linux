@@ -219,8 +219,10 @@ Jev mode › Advanced names a smaller **Text model** for what Jev types (empty
 uses the chosen size). All of it is kept in `intelligence.json` (0600) in
 Copper's data folder, the same file the Mac uses, and is used from the next
 call on. A headless Copper can name its gateway with `COPPER_ROUTER_URL` and
-`COPPER_ROUTER_KEY` instead ([headless.md](headless.md#model-keys)). There
-is no Claude account sign-in on Linux yet: the API key is the only lane.
+`COPPER_ROUTER_KEY` instead ([headless.md](headless.md#model-keys)). A
+Claude account is the other lane: `copper claude signin` opens claude.ai in
+a tab, and once signed in the agent and Jev's typing ask the account
+(`copper claude --help`; Settings has no button for it on Linux yet).
 DONE is the model's own claim, so check the page.
 
 ### Faster runs (`strategy`)

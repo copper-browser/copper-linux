@@ -488,6 +488,7 @@ dependencies = [
  "copper-pagejs",
  "futures-util",
  "jpeg-encoder",
+ "percent-encoding",
  "png",
  "regex",
  "reqwest",

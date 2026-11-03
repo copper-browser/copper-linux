@@ -4,16 +4,19 @@
 //! a refused key). A verdict is about the setup it was asked with: change a
 //! key, the address or the model and it no longer says anything.
 //!
-//! Only the gateway lane is asked: the Claude account lane is Mac-only for
-//! now. Toolkit-free, so every platform's page keeps a [`Check`] and draws it.
+//! The model lane asked is the one in force: the gateway, or the Claude
+//! account. Toolkit-free, so every platform's page keeps a [`Check`] and
+//! draws it.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use serde_json::json;
 
-use super::{Effective, Keys, Net, jev_ask, model, router_ask};
+use super::{Effective, Keys, Lane, Net, jev_ask, model, router_ask};
+use crate::claude::{Account, Failure};
 
 /// Where a Jev key is made (`Jev.keyPage`).
 pub const JEV_KEY_PAGE: &str = "https://console.typesafe.ai";
@@ -21,7 +24,7 @@ pub const JEV_KEY_PAGE: &str = "https://console.typesafe.ai";
 /// One lane's verdict.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Verdict {
-    /// `jev` or `router`.
+    /// `jev`, `router` or `claude`.
     pub lane: &'static str,
     pub ok: bool,
     pub text: String,
@@ -77,8 +80,9 @@ impl Check {
 }
 
 /// Ask Jev and the gateway one small question each (`IntelligenceCheck.run`).
-/// Await it from any loop: [`Net`] does the requests on its own runtime.
-pub async fn run(net: &Net, eff: &Effective) -> Check {
+/// Await it from any loop: [`Net`] and the account do the requests on their
+/// own runtime. `claude`: the account, where the shell has one.
+pub async fn run(net: &Net, eff: &Effective, claude: Option<&Arc<Account>>) -> Check {
     let keys = &eff.keys;
     let asked_model = model(keys, None);
     let mut asked_with = Vec::with_capacity(2);
@@ -107,7 +111,36 @@ pub async fn run(net: &Net, eff: &Effective) -> Check {
             false,
         )
     });
-    verdicts.push(if eff.router_ready() {
+    verdicts.push(if keys.lane == Lane::Claude {
+        match claude.filter(|_| eff.claude_ready) {
+            Some(account) => {
+                asked_with.push(("claude", lane_key(keys, "claude")));
+                let started = Instant::now();
+                let reply = account
+                    .ask(
+                        "Reply with JSON only.",
+                        "{\"ping\": true} → reply {\"pong\": true}",
+                        &asked_model,
+                        20,
+                        Duration::from_secs(15),
+                    )
+                    .await;
+                match reply {
+                    Ok((_, answered)) => Verdict {
+                        lane: "claude",
+                        ok: true,
+                        text: format!(
+                            "Claude answered as {answered} in {}.",
+                            duration(started.elapsed().as_secs_f64() * 1000.0)
+                        ),
+                        refused: false,
+                    },
+                    Err(f) => claude_failure(&f),
+                }
+            }
+            None => Verdict::bad("claude", "Not signed in to Claude — Sign in above.", false),
+        }
+    } else if eff.router_ready() {
         asked_with.push(("router", lane_key(keys, "router")));
         let reply = router_ask(
             net,
@@ -159,14 +192,18 @@ pub fn lane_key(keys: &Keys, lane: &str) -> u64 {
     lane.hash(&mut h);
     match lane {
         "jev" => (&keys.jev_key, &keys.jev_endpoint).hash(&mut h),
+        "claude" => {}
         _ => (&keys.router_key, &keys.router_url).hash(&mut h),
     }
     h.finish()
 }
 
-/// Everything a verdict depends on: both lanes' keys and the model asked.
+/// Everything a verdict depends on: both lanes' keys, the model lane and
+/// the model asked. (Who the account is signed in as is the page's to
+/// watch: a new sign-in is a new check.)
 pub fn whole(keys: &Keys) -> u64 {
     let mut h = DefaultHasher::new();
+    (keys.lane == Lane::Claude).hash(&mut h);
     lane_key(keys, "jev").hash(&mut h);
     lane_key(keys, "router").hash(&mut h);
     model(keys, None).hash(&mut h);
@@ -279,6 +316,39 @@ pub fn gateway_failure(error: &str, model: &str) -> Verdict {
     Verdict::bad("router", text, refused)
 }
 
+/// The Claude account's failure (`IntelligenceCheck.claudeFailure`).
+pub fn claude_failure(f: &Failure) -> Verdict {
+    let (text, refused) = match f {
+        Failure::TimedOut => (network("timed out", "Claude", 15), false),
+        Failure::Network(detail) => (network(detail, "Claude", 15), false),
+        Failure::Http {
+            status: 401 | 403, ..
+        } => (
+            "Claude signed this computer out — sign in again above.".into(),
+            true,
+        ),
+        Failure::Http { status: 429, .. } => (
+            "Your Claude plan's limit is reached for now — try again later.".into(),
+            false,
+        ),
+        Failure::Http { status, .. } if *status >= 500 => (
+            format!("Claude is having trouble on its side ({status}). Try again later."),
+            false,
+        ),
+        Failure::Http { status, .. } => {
+            (format!("Claude answered with an error ({status})."), false)
+        }
+        Failure::Account(t) if t.starts_with("Not signed in") => {
+            ("Not signed in to Claude — Sign in above.".into(), false)
+        }
+        Failure::Account(_) => (
+            "Claude's sign-in has run out — sign in again above.".into(),
+            true,
+        ),
+    };
+    Verdict::bad("claude", text, refused)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -337,10 +407,40 @@ mod tests {
             .unwrap();
         let net = Net::new(rt.handle().clone(), "test");
         let eff = Effective::with_router(&IntelligenceSource::default(), false, None);
-        let c = rt.block_on(run(&net, &eff));
+        let c = rt.block_on(run(&net, &eff, None));
         assert!(c.verdicts[0].text.contains(JEV_KEY_PAGE));
         assert!(c.verdicts[1].text.contains("no key yet"));
         assert!(c.line(&eff.keys).is_some());
         assert!(c.asked_with.is_empty());
+        // The account's lane, signed out: said so, and a different setup.
+        let mut eff = eff;
+        eff.keys.lane = Lane::Claude;
+        let c = rt.block_on(run(&net, &eff, None));
+        assert_eq!(c.verdicts[1].lane, "claude");
+        assert_eq!(
+            c.verdicts[1].text,
+            "Not signed in to Claude — Sign in above."
+        );
+        eff.keys.lane = Lane::Key;
+        assert!(c.line(&eff.keys).is_none(), "the lane changed");
+    }
+
+    #[test]
+    fn claude_failures_in_plain_words() {
+        let http = |status| Failure::Http {
+            status,
+            text: String::new(),
+        };
+        let v = claude_failure(&http(401));
+        assert!(v.refused && v.lane == "claude");
+        assert!(claude_failure(&http(429)).text.contains("plan's limit"));
+        assert!(claude_failure(&http(529)).text.contains("(529)"));
+        assert!(
+            claude_failure(&Failure::TimedOut)
+                .text
+                .contains("15 seconds")
+        );
+        let gone = claude_failure(&Failure::Account("Claude sign-in expired — …".into()));
+        assert!(gone.refused && gone.text.contains("run out"));
     }
 }

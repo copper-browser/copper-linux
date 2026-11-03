@@ -273,13 +273,13 @@ pub fn sso_failure(mut failure: Failure, domains: &[String]) -> Failure {
 
 /// A PKCE verifier (43 characters of base64url: 32 random bytes) and its
 /// S256 challenge.
-pub(crate) fn pkce_pair() -> Result<(String, String)> {
+pub fn pkce_pair() -> Result<(String, String)> {
     let verifier = random_token(32)?;
     Ok((verifier.clone(), challenge_for(&verifier)))
 }
 
 /// `BASE64URL(SHA256(verifier))`, unpadded.
-pub(crate) fn challenge_for(verifier: &str) -> String {
+pub fn challenge_for(verifier: &str) -> String {
     let digest = ring::digest::digest(&ring::digest::SHA256, verifier.as_bytes());
     URL_SAFE_NO_PAD.encode(digest.as_ref())
 }
@@ -424,7 +424,9 @@ fn page(title: &str, heading: &str, detail: &str) -> String {
     )
 }
 
-async fn respond(stream: &mut TcpStream, status: u16, html: &str) {
+/// Answer a loopback request with `html` and close it (the Claude account's
+/// sign-in answers its own loopback with this too).
+pub async fn respond(stream: &mut TcpStream, status: u16, html: &str) {
     let reason = match status {
         200 => "OK",
         400 => "Bad Request",
@@ -442,7 +444,8 @@ async fn respond(stream: &mut TcpStream, status: u16, html: &str) {
     let _ = stream.shutdown().await;
 }
 
-async fn read_head(stream: &mut TcpStream) -> Option<String> {
+/// A loopback request's head (at most 16 KiB); `None` when it never came.
+pub async fn read_head(stream: &mut TcpStream) -> Option<String> {
     let mut buf = Vec::with_capacity(1024);
     let mut chunk = [0u8; 2048];
     loop {

@@ -5,6 +5,20 @@ release dates.
 
 ## Unreleased
 
+### Added
+
+- **Sign in with Claude, in the shared crates.** The Mac's Claude account
+  (`ClaudeAccount.swift`, `Claude.swift`) with no toolkit: claude.ai's
+  OAuth with PKCE through a loopback listener, the paste-the-code fallback,
+  a refresh five minutes before the token runs out (one at a time; a
+  refresh turned away signs out) and the tokens in `claude.json` (0600).
+  Signed in, the model lane is the account's: the agent pane, Jev's typing
+  and Check ask Anthropic's Messages API the way Claude Code does, and
+  `copper claude status|signin|paste|signout|cancel` works. Windows draws
+  it in Settings › Intelligence; on Linux `copper claude signin` signs in
+  for now. (`copper-mcp` `claude`, `copper-shell-core` `claude`,
+  `chat/wire.rs`.)
+
 ### Fixed
 
 - **Picking an account on Google's sign-in page fills it in.** A sign-in

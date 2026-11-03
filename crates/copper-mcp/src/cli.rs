@@ -6,7 +6,7 @@
 //! Exit codes: 0 done, 1 the tool answered with an error, 2 usage or Copper
 //! unreachable.
 
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -81,6 +81,9 @@ pub const USAGE: &str = "Usage: copper [--json] [--launch] [--tab ID] <command> 
   health                                    check the agent server and Jev mode
   intelligence [status|sources|refresh|set|reload]  model access, keys, their source and readiness; never prints a key
                                             (copper intelligence --help)
+  claude [status|signin|paste -|signout|cancel]
+                                            Claude account sign-in and status; never prints a token
+                                            (copper claude --help)
   cloud-history delete [--since 1h|24h|7d|TIME] [--until TIME] [--host SITE]... [--page URL]... [--device ID|this] [--all]
                                             delete your history on Copper Cloud (every computer's); this
                                             one's stays. A site matches its subdomains; nothing chosen needs --all
@@ -131,6 +134,68 @@ Output is JSON and never contains a key.
 
 Exit 0 on success, 1 when the app refuses a value, 2 on usage or when Copper is unreachable.
 ";
+
+pub const CLAUDE_USAGE: &str = "Usage: copper claude <command>
+
+Sign in with a Claude account instead of an API key. `signin` opens claude.ai
+in the running Copper window; finish the OAuth sign-in there and the callback
+returns to Copper. If the tab cannot return, copy the callback code and use
+`paste -` (stdin is preferred; a literal code is also accepted).
+
+  status                     account status, email and expiry (default)
+  signin                     open claude.ai and start OAuth with PKCE
+  paste -|CODE               finish sign-in from stdin or a literal callback code
+  signout                    forget claude.json and the account
+  cancel                     cancel a waiting sign-in
+
+Tokens live in claude.json beside intelligence.json, private to you. Output
+never contains a token. Use a Claude Pro, Max, Team or Enterprise account.
+
+Exit 0 on success, 1 when the app refuses an operation, 2 on usage or when
+Copper is unreachable.
+";
+
+/// `copper claude …` (`CLI.runClaude`): the loopback-only `copper/claude`
+/// method.
+fn claude(args: &[String]) -> Result<Spec, Early> {
+    let (op, rest) = match args.split_first() {
+        Some((op, rest)) => (op.as_str(), rest),
+        None => ("status", args),
+    };
+    if ["help", "-h", "--help"].contains(&op) || rest.iter().any(|a| a == "-h" || a == "--help") {
+        return Err(Early::HelpFor(CLAUDE_USAGE));
+    }
+    let mut params = Map::new();
+    params.insert("op".into(), json!(op));
+    match op {
+        "status" | "signin" | "signout" | "cancel" => {
+            if !rest.is_empty() {
+                return bad(format!("claude {op} takes no arguments"));
+            }
+        }
+        "paste" => {
+            let [code] = rest else {
+                return bad("claude paste needs CODE or - (stdin is preferred)");
+            };
+            let mut code = code.clone();
+            if code == "-" {
+                let mut all = String::new();
+                let _ = io::stdin().read_to_string(&mut all);
+                code = all.trim().to_string();
+                if code.is_empty() {
+                    return bad("claude paste -: nothing on stdin");
+                }
+            }
+            params.insert("code".into(), json!(code));
+        }
+        _ => {
+            return bad(format!(
+                "unknown claude command: {op} (see copper claude --help)"
+            ));
+        }
+    }
+    Ok(rpc("copper/claude", Value::Object(params)))
+}
 
 /// `copper intelligence …` (`CLI.runIntelligence`): the loopback-only
 /// `copper/intelligence` method.
@@ -197,11 +262,10 @@ fn intelligence(args: &[String]) -> Result<Spec, Early> {
 }
 
 /// Commands the Mac has that this build does not (yet).
-pub(crate) const ELSEWHERE: [&str; 8] = [
+pub(crate) const ELSEWHERE: [&str; 7] = [
     "setup",
     "session",
     "link",
-    "claude",
     "bitwarden",
     "crashes",
     "listen",
@@ -673,6 +737,7 @@ pub fn make_request(command: &str, args: &[String]) -> Result<Spec, Early> {
         }
         // Answered without a window, before this parser (crate::cloud_cli).
         "intelligence" => intelligence(args),
+        "claude" => claude(args),
         "cloud" => bad("cloud runs on its own: copper cloud pair|sso|status (copper cloud help)"),
         // Answered without a window, before this parser (copper_botpass::cli).
         "botpass" => {
@@ -904,7 +969,7 @@ pub fn run_with(args: &[String], env: &mut Env<'_>) -> i32 {
             match &spec.request {
                 Some(request) => {
                     let mut shown = request.clone();
-                    for secret in ["jevKey", "routerKey"] {
+                    for secret in ["jevKey", "routerKey", "code"] {
                         if let Some(v) = shown["params"].get_mut(secret) {
                             *v = json!("…");
                         }
@@ -1227,6 +1292,38 @@ mod tests {
             };
             assert!(parse(&s(&extra), false).is_ok(), "{verb}");
         }
+    }
+
+    #[test]
+    fn claude_controls() {
+        let params =
+            |a: &[&str]| parse(&s(a), false).unwrap().spec.request.unwrap()["params"].clone();
+        let p = parse(&s(&["claude"]), false).unwrap();
+        assert_eq!(p.spec.request.unwrap()["method"], "copper/claude");
+        assert_eq!(params(&["claude"]), json!({"op": "status"}));
+        assert_eq!(params(&["claude", "signin"]), json!({"op": "signin"}));
+        assert_eq!(
+            params(&["claude", "paste", "abc#xyz"]),
+            json!({"op": "paste", "code": "abc#xyz"})
+        );
+        for (a, e) in [
+            (&["claude", "paste"][..], "claude paste needs CODE"),
+            (
+                &["claude", "signout", "x"][..],
+                "claude signout takes no arguments",
+            ),
+            (&["claude", "frob"][..], "unknown claude command: frob"),
+        ] {
+            assert!(
+                matches!(parse(&s(a), false), Err(Early::Usage(t)) if t.starts_with(e)),
+                "{a:?}"
+            );
+        }
+        assert_eq!(
+            parse(&s(&["claude", "--help"]), false),
+            Err(Early::HelpFor(CLAUDE_USAGE))
+        );
+        assert!(!ELSEWHERE.contains(&"claude"));
     }
 
     #[test]

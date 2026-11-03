@@ -41,7 +41,7 @@ use std::rc::Rc;
 use std::time::SystemTime;
 
 use copper_mcp::drive::DriveEvent;
-use copper_mcp::intelligence::{self, Effective, Tier};
+use copper_mcp::intelligence::{self, Effective, Lane, Tier};
 use serde_json::{Map, Value, json};
 
 use history::{Broken, Message, message};
@@ -170,7 +170,7 @@ impl<H: ChatHost> Chat<H> {
     /// The model keys in force (this computer's, Copper Cloud's, the
     /// environment's).
     pub fn effective(&self) -> Effective {
-        Effective::new(&self.inner.host.intelligence(), false)
+        self.inner.effective(&self.inner.host.intelligence())
     }
 
     /// A model can be asked: a router key and address exist.
@@ -519,6 +519,12 @@ impl<H: ChatHost> Inner<H> {
         self.state.borrow().generation == ticket
     }
 
+    /// The keys in force, and whether the Claude account can be asked.
+    fn effective(&self, source: &copper_mcp::IntelligenceSource) -> Effective {
+        let claude = self.host.claude().is_some_and(|a| a.signed_in());
+        Effective::new(source, claude)
+    }
+
     fn net(&self) -> wire::Net {
         self.net
             .borrow_mut()
@@ -555,7 +561,7 @@ impl<H: ChatHost> Inner<H> {
             s.messages = history::sealed(&s.messages);
         }
         let source = self.host.intelligence();
-        let eff = Effective::new(&source, false);
+        let eff = self.effective(&source);
         let content = self.question(&text).await;
         if !self.live(ticket) {
             return;
@@ -575,6 +581,8 @@ impl<H: ChatHost> Inner<H> {
         );
         let model = intelligence::model(&eff.keys, None);
         let net = self.net();
+        // The lane is read once per question, like the keys.
+        let claude = self.host.claude().filter(|_| eff.keys.lane == Lane::Claude);
         let mut cutoffs = 0;
         let mut nudged = false;
         for turn in 0..turns {
@@ -589,7 +597,10 @@ impl<H: ChatHost> Inner<H> {
                 }
             });
             let history = history::sealed(&self.state.borrow().messages);
-            let reply = wire::complete(&net, &eff.keys, &model, &history, &tools).await;
+            let reply = match &claude {
+                Some(account) => wire::complete_claude(account, &model, &history, &tools).await,
+                None => wire::complete(&net, &eff.keys, &model, &history, &tools).await,
+            };
             if !self.live(ticket) {
                 return;
             }
@@ -630,6 +641,7 @@ impl<H: ChatHost> Inner<H> {
         ticket: u64,
     ) -> Turn {
         let cut = history::cut_off(reply.finish.as_deref());
+        let blocks = reply.blocks;
         let content = reply.content;
         let said = content.trim().to_string();
         let mut calls = reply.tool_calls;
@@ -660,6 +672,9 @@ impl<H: ChatHost> Inner<H> {
             }
             if !calls.is_empty() {
                 assistant["tool_calls"] = Value::Array(calls.clone());
+            }
+            if let Some(blocks) = &blocks {
+                assistant["_blocks"] = blocks.clone();
             }
             // An empty assistant turn is no history worth keeping.
             if !said.is_empty() || !calls.is_empty() {

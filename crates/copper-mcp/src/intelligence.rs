@@ -798,7 +798,7 @@ pub fn status(source: &IntelligenceSource, claude_ready: bool) -> Map<String, Va
         "localLane": lane_name(local.lane), "tier": local.tier.name(),
         "model": model(&eff.keys, None),
         "modelReady": eff.model_ready(), "claudeReady": claude_ready,
-        // No Claude account lane in this build yet.
+        // Who the account is signed in as: the shell's to say.
         "claudeAccount": Value::Null,
         "sources": eff.sources,
     });
