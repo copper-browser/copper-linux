@@ -53,6 +53,7 @@ meta() {
 }
 
 dagger_core() {
+  export DO_NOT_TRACK=1 DAGGER_NO_NAG=1 DAGGER_NO_UPDATE_CHECK=1
   export _EXPERIMENTAL_DAGGER_RUNNER_HOST=${_EXPERIMENTAL_DAGGER_RUNNER_HOST:-unix:///run/dagger-engine/engine.sock}
   dagger --progress=plain core "$@"
 }
@@ -82,7 +83,7 @@ build() {
     from --address="$UBUNTU" \
     with-env-variable --name=HOME --value=/root \
     "${caches[@]}" \
-    with-directory --path=/src --directory=. --exclude=target,dist \
+    with-directory --path=/src --source=. --exclude=target,dist \
     with-workdir --path=/src \
     with-exec --args="bash,ci/release.sh,_$kind,$version,$arch" "${exec_opts[@]}" \
     directory --path=/src/dist \
@@ -97,7 +98,7 @@ assemble() {
   published_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   rm -rf dist/publish
   dagger_core container from --address="$PYTHON" \
-    with-directory --path=/src --directory=. --exclude=.git,target,dist/publish,dist/tools \
+    with-directory --path=/src --source=. --exclude=.git,target,dist/publish,dist/tools \
     with-workdir --path=/src \
     with-exec --args="bash,ci/release.sh,_assemble,$version,$tag,$commit,$published_at" \
     directory --path=/src/dist/publish \
