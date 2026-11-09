@@ -1,0 +1,37 @@
+# Roadrunner (Woodpecker + Dagger, https://cicd.apps.exowatt.com); replaces .github/workflows/canvas.yml.
+# The canvas page lives in copper-browser/canvas-app; Linux vendors its build
+# (crates/copper-shell-core/src/canvas/resources/canvas.html, pinned in CANVAS_APP_REF).
+# - check (pull requests touching the vendored page): it must be the pinned canvas-app build.
+# - bump (cron "canvas-bump", hourly at :23, or a manual run on main with variable CANVAS_BUMP=1):
+#   when canvas-app main has moved, push branch canvas/take-canvas-app and open/update one issue;
+#   close it when the pin catches up (ci/canvas-bump.sh on the host, as exowatt-woodpecker-bot).
+labels:
+  tier: "0"
+when:
+  - event: pull_request
+    path:
+      include: ['crates/copper-shell-core/src/canvas/resources/**']
+  - event: cron
+    cron: canvas-bump
+  - event: manual
+    branch: main
+    evaluate: 'CANVAS_BUMP != nil && CANVAS_BUMP != ""'
+steps:
+  - name: check
+    image: bash
+    when:
+      - event: pull_request
+    commands:
+      - >-
+        ci-dagger v0.10.1 container-run --src=. --repo=copper-linux
+        --image=public.ecr.aws/docker/library/ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
+        --apt=ca-certificates,curl,git --shell=bash --run='bash ci/check.sh canvas'
+  - name: bump
+    image: bash
+    when:
+      - event: [cron, manual]
+    environment:
+      GH_TOKEN:
+        from_secret: github_release_token
+    commands:
+      - bash ci/canvas-bump.sh

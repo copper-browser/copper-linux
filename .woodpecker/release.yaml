@@ -1,0 +1,53 @@
+# Roadrunner release (Woodpecker + Dagger, https://cicd.apps.exowatt.com); replaces
+# .github/workflows/release.yml. `$$` escapes `$`. Logic: ci/release.sh.
+# A pushed tag v<version> (= Cargo.toml [workspace.package] version) builds and publishes the
+# GitHub release of this repo (same assets, copper-version.json and SHA256SUMS as before). A manual
+# run with variable RELEASE_DRY_RUN=1 is the dry run: builds, smoke-tests and assembles
+# v<Cargo.toml version>, publishes nothing.
+# The four builds run in parallel, each in an Ubuntu 24.04 container on the engine (arm64 under
+# qemu: slow), exported to dist/parts/; assemble writes dist/publish/; publish (tags only) uploads
+# it with a pinned gh as exowatt-woodpecker-bot (secret github_release_token).
+labels:
+  tier: "0"
+when:
+  - event: tag
+    ref: refs/tags/v*
+  - event: manual
+    evaluate: 'RELEASE_DRY_RUN != nil && RELEASE_DRY_RUN != ""'
+steps:
+  - name: deb-amd64
+    image: bash
+    depends_on: []
+    commands:
+      - bash ci/release.sh build deb-amd64 "$$CI_COMMIT_TAG"
+  - name: deb-arm64
+    image: bash
+    depends_on: []
+    commands:
+      - bash ci/release.sh build deb-arm64 "$$CI_COMMIT_TAG"
+  - name: flatpak-x86_64
+    image: bash
+    depends_on: []
+    commands:
+      - bash ci/release.sh build flatpak-x86_64 "$$CI_COMMIT_TAG"
+  - name: flatpak-aarch64
+    image: bash
+    depends_on: []
+    commands:
+      - bash ci/release.sh build flatpak-aarch64 "$$CI_COMMIT_TAG"
+  - name: assemble
+    image: bash
+    depends_on: [deb-amd64, deb-arm64, flatpak-x86_64, flatpak-aarch64]
+    commands:
+      - bash ci/release.sh assemble "$$CI_COMMIT_TAG"
+  - name: publish
+    image: bash
+    depends_on: [assemble]
+    when:
+      - event: tag
+        ref: refs/tags/v*
+    environment:
+      GH_TOKEN:
+        from_secret: github_release_token
+    commands:
+      - bash ci/release.sh publish "$$CI_COMMIT_TAG"

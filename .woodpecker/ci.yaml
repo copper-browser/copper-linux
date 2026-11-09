@@ -1,0 +1,57 @@
+# Roadrunner CI (Woodpecker + Dagger, https://cicd.apps.exowatt.com); replaces .github/workflows/ci.yml.
+# `$$` escapes `$`. The three steps run in parallel and report independently (fail-fast off).
+#
+# test: rustfmt, clippy -D warnings, cargo test on Debian 13 (trixie: GTK 4.18, libadwaita 1.7,
+#   WebKitGTK 2.52, the floors Cargo.toml's feature flags need; bookworm is too old), x86_64 only.
+#   GUI/WebKit tests on a headless weston + private session bus; the copper-cloud live test against
+#   the pinned copper-cloud v0.8.1 release on native PostgreSQL (--pg-admin-url, never a container).
+#   The ci-dagger container (default seccomp, no CAP_SYS_ADMIN, no AppArmor profile to grant
+#   `userns`) cannot give WebKit's bubblewrap sandbox its user namespace, so the sandbox is off
+#   here: the throwaway container is the sandbox (docs/headless.md "The WebKit sandbox").
+# windows-clippy: the shared toolkit-free crates through clippy for x86_64-pc-windows-msvc
+#   (cargo-xwin, as crates/copper-shell-core/README.md and copper-windows do). Their tests need a
+#   Windows machine and are not run here.
+# packaging-lint: shellcheck, desktop-file-validate, appstreamcli, apparmor_parser, Flatpak
+#   manifest, on Ubuntu 24.04 like the GitHub job.
+labels:
+  tier: "0"
+when:
+  - event: pull_request
+  - event: push
+    branch: main
+  - event: manual
+steps:
+  - name: test
+    image: bash
+    depends_on: []
+    commands:
+      - >-
+        ci-dagger v0.10.1 rust --src=. --repo=copper-linux --rust=1-trixie
+        --apt=build-essential,pkg-config,libwebkitgtk-6.0-dev,libgtk-4-dev,libadwaita-1-dev,libsecret-1-dev,weston,dbus-daemon,dbus-bin,fonts-dejavu-core,gnome-keyring,libsecret-tools,python3,postgresql-client
+        --pg-admin-url=file:///etc/woodpecker/pg-ci-test-url --database-url-scheme=postgres
+        --database-env=COPPER_CLOUD_TEST_DATABASE_URL
+        --env=WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1 --env=RUST_BACKTRACE=1
+        --dep-cache=registry.dev.exowatt.com/cache --dep-cache-password=file:///etc/woodpecker/zot-ci-cache
+        --run='bash ci/check.sh test'
+  - name: windows-clippy
+    image: bash
+    depends_on: []
+    commands:
+      - >-
+        ci-dagger v0.10.1 rust --src=. --repo=copper-linux --rust=1-trixie
+        --apt=clang,lld,llvm --tools=cargo-xwin@0.23.1
+        --env=XWIN_ACCEPT_LICENSE=1 --env=XWIN_CACHE_DIR=/cargo-target/xwin-cache
+        --dep-cache=registry.dev.exowatt.com/cache --dep-cache-password=file:///etc/woodpecker/zot-ci-cache
+        --run='rustup target add x86_64-pc-windows-msvc && cargo xwin clippy --locked --target x86_64-pc-windows-msvc
+        -p copper-core -p copper-engine -p copper-pagejs -p copper-shield -p copper-creds -p copper-botpass
+        -p copper-calendar -p copper-import -p copper-cloud -p copper-mcp -p copper-shell-core
+        --all-targets -- -D warnings'
+  - name: packaging-lint
+    image: bash
+    depends_on: []
+    commands:
+      - >-
+        ci-dagger v0.10.1 container-run --src=. --repo=copper-linux
+        --image=public.ecr.aws/docker/library/ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
+        --apt=ca-certificates,curl,shellcheck,desktop-file-utils,appstream,apparmor,flatpak-builder,python3-aiohttp,python3-tomlkit
+        --shell=bash --run='bash ci/check.sh lint'
