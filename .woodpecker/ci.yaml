@@ -24,15 +24,19 @@ steps:
   - name: test
     image: bash
     depends_on: []
+    # Ubuntu 24.04 like the old GitHub runner: the WebKitGTK input/focus and MCP text checks
+    # depend on its WebKitGTK and weston (Debian trixie's differ). container-run keeps no cargo
+    # cache, so this compiles from scratch each run.
     commands:
       - >-
-        ci-dagger v0.10.1 rust --src=. --repo=copper-linux --rust=1-trixie
-        --apt=build-essential,pkg-config,libwebkitgtk-6.0-dev,libgtk-4-dev,libadwaita-1-dev,libsecret-1-dev,weston,dbus-daemon,dbus-bin,fonts-dejavu-core,gnome-keyring,libsecret-tools,python3,postgresql-client
+        ci-dagger v0.10.1 container-run --src=. --repo=copper-linux --shell=bash
+        --image=public.ecr.aws/docker/library/ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
+        --apt=ca-certificates,curl,build-essential,pkg-config,libwebkitgtk-6.0-dev,libgtk-4-dev,libadwaita-1-dev,libsecret-1-dev,weston,dbus-daemon,dbus-bin,fonts-dejavu-core,gnome-keyring,libsecret-tools,python3,postgresql-client
+        --setup='curl -fsSL --retry 3 https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none'
         --pg-admin-url=file:///etc/woodpecker/pg-ci-test-url --database-url-scheme=postgres
         --database-env=COPPER_CLOUD_TEST_DATABASE_URL
-        --env=WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1 --env=RUST_BACKTRACE=1
-        --dep-cache=registry.dev.exowatt.com/cache --dep-cache-password=file:///etc/woodpecker/zot-ci-cache
-        --run='bash ci/check.sh test'
+        --env=WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1 --env=RUST_BACKTRACE=1 --env=CARGO_TERM_COLOR=never
+        --run='export PATH=$$HOME/.cargo/bin:$$PATH && rustup toolchain install && bash ci/check.sh test'
   - name: windows-clippy
     image: bash
     depends_on: []
