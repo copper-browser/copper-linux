@@ -17,7 +17,9 @@ set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 root=$(cd "$here/../.." && pwd)
 id=com.copperbrowser.Copper
-arch=$(flatpak --default-arch)
+# FLATPAK_ARCH (e.g. aarch64) cross-builds for another architecture; its binaries then run
+# through the host's qemu binfmt.
+arch=${FLATPAK_ARCH:-$(flatpak --default-arch)}
 out="$root/target/flatpak"
 name=
 install=0
@@ -48,6 +50,7 @@ grep -q "^        path: $root$" "$work/$id.yml" || { echo "flatpak/build: could 
 
 flatpak-builder \
   --user \
+  --arch="$arch" \
   --install-deps-from=flathub \
   --force-clean \
   --disable-rofiles-fuse \
@@ -57,6 +60,7 @@ flatpak-builder \
   "$work/$id.yml"
 
 flatpak build-bundle \
+  --arch="$arch" \
   --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo \
   "$work/repo" "$out/$name" "$id"
 

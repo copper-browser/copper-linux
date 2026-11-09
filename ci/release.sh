@@ -67,7 +67,7 @@ build() {
     deb-amd64) kind=deb arch=amd64 platform=linux/amd64 ;;
     deb-arm64) kind=deb arch=arm64 platform=linux/arm64 ;;
     flatpak-x86_64) kind=flatpak arch=x86_64 platform=linux/amd64 ;;
-    flatpak-aarch64) kind=flatpak arch=aarch64 platform=linux/arm64 ;;
+    flatpak-aarch64) kind=flatpak arch=aarch64 platform=linux/amd64 ;; # cross: bwrap fails under qemu
     *) die "$usage" ;;
   esac
   rm -rf "dist/parts/$part"
@@ -230,16 +230,21 @@ _flatpak() {
   # elfutils (eu-strip) and librsvg2-common (the SVG loader appstreamcli compose reads the app
   # icon with) are only recommended by flatpak-builder; without them the build stops.
   apt-get install -y -q --no-install-recommends ca-certificates curl \
-    flatpak flatpak-builder elfutils librsvg2-common python3-aiohttp python3-tomlkit
-  [ "$(flatpak --default-arch)" = "$arch" ] || die "flatpak --default-arch is $(flatpak --default-arch), not $arch"
-  packaging/flatpak/build.sh --out dist --name "copper-$version-$arch.flatpak"
+    flatpak flatpak-builder elfutils librsvg2-common python3-aiohttp python3-tomlkit dbus-daemon dbus-bin
+  # flatpak talks to a session bus; the container has none.
+  XDG_RUNTIME_DIR=$(mktemp -d /tmp/xdg.XXXXXX)
+  chmod 700 "$XDG_RUNTIME_DIR"
+  export XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+  dbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --fork
+  # aarch64 is cross-built on the x86_64 engine (FLATPAK_ARCH; bwrap cannot run under qemu-user).
+  FLATPAK_ARCH=$arch packaging/flatpak/build.sh --out dist --name "copper-$version-$arch.flatpak"
 
   flatpak install --user -y --noninteractive "dist/copper-$version-$arch.flatpak"
-  flatpak info --user --show-permissions com.copperbrowser.Copper
-  out=$(timeout 60 flatpak run --user com.copperbrowser.Copper --version)
+  flatpak info --user --arch="$arch" --show-permissions com.copperbrowser.Copper
+  out=$(timeout 300 flatpak run --user --arch="$arch" com.copperbrowser.Copper --version)
   echo "$out"
   [ "$out" = "copper $version" ] || die "copper --version said '$out', expected 'copper $version'"
-  flatpak uninstall --user -y --noninteractive com.copperbrowser.Copper
+  flatpak uninstall --user -y --noninteractive --arch="$arch" com.copperbrowser.Copper
 
   cd dist
   cp "copper-$version-$arch.flatpak" "copper-$arch.flatpak"
