@@ -20,6 +20,7 @@ when:
   - event: push
     branch: main
   - event: manual
+    evaluate: '(RELEASE_DRY_RUN == nil || RELEASE_DRY_RUN == "") && (CANVAS_BUMP == nil || CANVAS_BUMP == "")'
 steps:
   - name: test
     image: bash
