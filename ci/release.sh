@@ -231,7 +231,9 @@ _flatpak() {
   # icon with) are only recommended by flatpak-builder; without them the build stops.
   apt-get install -y -q --no-install-recommends ca-certificates curl \
     flatpak flatpak-builder elfutils librsvg2-common python3-aiohttp python3-tomlkit dbus-daemon dbus-bin
-  # flatpak talks to a session bus; the container has none.
+  # flatpak run talks to the system and session buses; the container has neither.
+  mkdir -p /run/dbus
+  dbus-daemon --system --fork
   XDG_RUNTIME_DIR=$(mktemp -d /tmp/xdg.XXXXXX)
   chmod 700 "$XDG_RUNTIME_DIR"
   export XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
