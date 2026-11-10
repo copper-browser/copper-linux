@@ -230,20 +230,20 @@ _flatpak() {
   # elfutils (eu-strip) and librsvg2-common (the SVG loader appstreamcli compose reads the app
   # icon with) are only recommended by flatpak-builder; without them the build stops.
   apt-get install -y -q --no-install-recommends ca-certificates curl \
-    flatpak flatpak-builder elfutils librsvg2-common python3-aiohttp python3-tomlkit dbus-daemon dbus-bin
-  # flatpak run talks to the system and session buses; the container has neither.
-  mkdir -p /run/dbus
-  dbus-daemon --system --fork
-  XDG_RUNTIME_DIR=$(mktemp -d /tmp/xdg.XXXXXX)
-  chmod 700 "$XDG_RUNTIME_DIR"
-  export XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
-  dbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --fork
+    flatpak flatpak-builder elfutils librsvg2-common python3-aiohttp python3-tomlkit dbus-daemon
   # aarch64 is cross-built on the x86_64 engine (FLATPAK_ARCH; bwrap cannot run under qemu-user).
   FLATPAK_ARCH=$arch packaging/flatpak/build.sh --out dist --name "copper-$version-$arch.flatpak"
 
+  # flatpak run needs a system bus, which the container lacks: start one just for the smoke run.
+  mkdir -p /run/dbus
+  rm -f /run/dbus/pid /run/dbus/system_bus_socket
+  dbus-daemon --system --fork
   flatpak install --user -y --noninteractive "dist/copper-$version-$arch.flatpak"
   flatpak info --user --arch="$arch" --show-permissions com.copperbrowser.Copper
-  out=$(timeout 300 flatpak run --user --arch="$arch" com.copperbrowser.Copper --version)
+  out=$(timeout 300 flatpak run --user --arch="$arch" com.copperbrowser.Copper --version) || {
+    ls -la /run/dbus; [ -d "/proc/$(cat /run/dbus/pid)" ] && echo "system bus alive" || echo "system bus died"
+    die "flatpak run failed"
+  }
   echo "$out"
   [ "$out" = "copper $version" ] || die "copper --version said '$out', expected 'copper $version'"
   flatpak uninstall --user -y --noninteractive --arch="$arch" com.copperbrowser.Copper
