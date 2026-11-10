@@ -5,6 +5,10 @@ release dates.
 
 ## Unreleased
 
+## 0.6.2 — 2026-11-10
+
+Sign in with Claude in the shared crates, and picking a saved account on Google's sign-in page fills it in.
+
 ### Added
 
 - **Sign in with Claude, in the shared crates.** The Mac's Claude account

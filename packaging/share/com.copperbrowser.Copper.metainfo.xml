@@ -51,6 +51,15 @@
   </requires>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.6.2" date="2026-11-10">
+      <description>
+        <p>Sign in with Claude, and Google sign-ins fill in.</p>
+        <ul>
+          <li>copper claude signin signs in with your Claude account; the agent pane, Jev's typing and Check then use it.</li>
+          <li>Picking a saved account on a sign-in page that asks for the name first (Google, Microsoft) fills it in.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.6.1" date="2026-10-30">
       <description>
         <p>The Mac's keys and small touches.</p>
