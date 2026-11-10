@@ -235,9 +235,9 @@ _flatpak() {
   FLATPAK_ARCH=$arch packaging/flatpak/build.sh --out dist --name "copper-$version-$arch.flatpak"
 
   # flatpak run needs a system bus, which the container lacks: start one just for the smoke run.
+  # (A --system daemon dies right away in the build container; a plain one for root does fine.)
   mkdir -p /run/dbus
-  rm -f /run/dbus/pid /run/dbus/system_bus_socket
-  dbus-daemon --system --fork
+  dbus-daemon --session --address=unix:path=/run/dbus/system_bus_socket --fork --print-pid >/run/dbus/pid
   flatpak install --user -y --noninteractive "dist/copper-$version-$arch.flatpak"
   flatpak info --user --arch="$arch" --show-permissions com.copperbrowser.Copper
   out=$(timeout 300 flatpak run --user --arch="$arch" com.copperbrowser.Copper --version) || {
