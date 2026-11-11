@@ -115,7 +115,7 @@
     InstallEvent.prototype.addRoutes = () => Promise.resolve();
   }
   // WebKit gives a worker the user agent of the last web page that set
-  // one — Safari's, as Search's tabs send — not the Chrome one the
+  // one — Safari's, as Copper's tabs send — not the Chrome one the
   // extension's pages have. Code that picks its path by it then takes
   // the Safari one: Bitwarden's asks a Safari app for a reply thousands
   // of times a second and floods the browser.
@@ -423,7 +423,7 @@
     deleteID: refuse("instanceID.deleteID"), deleteToken: refuse("instanceID.deleteToken"),
     getCreationTime: refuse("instanceID.getCreationTime"), onTokenRefresh: event() });
   // Rules that show a button on matching pages: every button is always
-  // shown in Search, so there is nothing for them to do.
+  // shown in Copper, so there is nothing for them to do.
   const rules = () => ({ addRules: (r, cb) => { if (cb) cb(r || []); }, removeRules: (i, cb) => { if (cb) cb(); },
     getRules: (i, cb) => { const f = typeof i === "function" ? i : cb; if (f) f([]); } });
   put2("declarativeContent", { onPageChanged: rules(),
@@ -490,7 +490,7 @@
     ContextType: { TAB: "TAB", POPUP: "POPUP", BACKGROUND: "BACKGROUND", OFFSCREEN_DOCUMENT: "OFFSCREEN_DOCUMENT",
       SIDE_PANEL: "SIDE_PANEL", DEVELOPER_TOOLS: "DEVELOPER_TOOLS" },
   });
-  // The popup Search shows is a page of its own, known to WebKit as a
+  // The popup Copper shows is a page of its own, known to WebKit as a
   // tab with no place in the row (no index). Chrome has no current
   // tab in a popup, and lists it among the popup views; extensions lay
   // themselves out by that (Bitwarden, Proton Pass: or else they fill
@@ -642,7 +642,7 @@
     StyleOrigin: { AUTHOR: "AUTHOR", USER: "USER" },
   });
   // The popup an extension sets for its button, told to the browser too:
-  // Search opens a popup itself (see Extensions.press), and has to know
+  // Copper opens a popup itself (see Extensions.press), and has to know
   // which page it is now.
   for (const name of ["action", "browserAction"]) {
     const a = chrome[name];
@@ -699,7 +699,7 @@
 
   // Rules WebKit can't carry out — a header it doesn't know how to set,
   // say — are refused one by one, where Chrome would take them all. The
-  // rest still go in: one rule Search can't honour shouldn't cost an
+  // rest still go in: one rule Copper can't honour shouldn't cost an
   // extension every other rule, or its startup.
   const dnr = chrome.declarativeNetRequest;
   // Before WebKit sees them, rules are put the way it takes them: a
@@ -753,7 +753,7 @@
     });
   }
 
-  // Context menu entries for places Search has no menu for — the old
+  // Context menu entries for places Copper has no menu for — the old
   // toolbar button contexts are the button's menu now, and there is no
   // app launcher at all.
   for (const name of ["contextMenus", "menus"]) {
@@ -799,7 +799,7 @@
   }
 
   // Tabs as Chrome describes them. Every tab has a groupId (-1 when in
-  // no group — Search has none), which code tests before anything else;
+  // no group — Copper has none), which code tests before anything else;
   // and with the "tabs" permission an extension sees every tab's address
   // and title, where WebKit shows them only for sites it has host
   // access to.
@@ -860,8 +860,8 @@
   }
 
   // Permissions. WebKit knows its own and throws on any other name,
-  // where Chrome answers false. The ones Search answers itself are
-  // Search's to grant: those a manifest names are granted, optional
+  // where Chrome answers false. The ones Copper answers itself are
+  // Copper's to grant: those a manifest names are granted, optional
   // ones are asked for.
   if (chrome.permissions) {
     const webkit = new Set(["activeTab", "alarms", "clipboardWrite", "contextMenus", "cookies", "declarativeNetRequest",
