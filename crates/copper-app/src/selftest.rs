@@ -896,8 +896,8 @@ struct Page {
 const PAGES: &[Page] = &[
     Page {
         path: "/studio",
-        title: "Office Commun",
-        heading: "Office Commun",
+        title: "Orchard Studio",
+        heading: "Orchard Studio",
         body: "Independent design studio working across research, identity and production. We work alongside the teams we make things for, from the first question to the live release.",
         hue: 0.0,
         letter: "O",

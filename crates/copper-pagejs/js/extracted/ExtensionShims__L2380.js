@@ -1,5 +1,5 @@
 // from Sources/Search/ExtensionShims.swift:2380 ExtensionShims.userScriptFile
-/* Search: a user script (chrome.userScripts) */
+/* Copper: a user script (chrome.userScripts) */
 search_user_script: {
   const __searchHref = location.href;
   const __searchGlob = (g) => new RegExp("^" + g.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$");
