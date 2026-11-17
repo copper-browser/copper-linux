@@ -93,6 +93,136 @@ pub enum SnapshotRegion {
     FullDocument,
 }
 
+/// A rectangle in view pixels: CSS pixels times the page zoom, the
+/// coordinates of a scale-1 viewport picture (and of
+/// [`crate::PageView::view_size`]). Equal to CSS pixels at 100 %.
+#[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
+pub struct ViewRect {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+impl ViewRect {
+    pub fn new(x: f64, y: f64, width: f64, height: f64) -> Self {
+        ViewRect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+}
+
+/// What a [`crate::PageView::capture`] paints.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureArea {
+    /// The viewport, as on screen.
+    Viewport,
+    /// The whole scrollable document.
+    Document,
+    /// Part of the viewport, from its top-left (inside it).
+    ViewportRect(ViewRect),
+    /// Part of the document, from its top-left (inside it), wherever the
+    /// page is scrolled to.
+    DocumentRect(ViewRect),
+}
+
+impl CaptureArea {
+    /// Whether the area is measured from the document's top-left (else
+    /// from the viewport's).
+    pub fn in_document(self) -> bool {
+        matches!(self, CaptureArea::Document | CaptureArea::DocumentRect(_))
+    }
+
+    /// The rectangle asked for, if any.
+    pub fn rect(self) -> Option<ViewRect> {
+        match self {
+            CaptureArea::ViewportRect(r) | CaptureArea::DocumentRect(r) => Some(r),
+            CaptureArea::Viewport | CaptureArea::Document => None,
+        }
+    }
+}
+
+/// [`crate::PageView::capture`]'s question: an area at a scale.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CaptureRequest {
+    pub area: CaptureArea,
+    /// Picture pixels wanted per view pixel (the caller keeps it sane: 0.01
+    /// to 4). An engine paints at least this where it can, re-rendering
+    /// the page rather than enlarging pixels.
+    pub scale: f64,
+}
+
+/// What [`crate::PageView::capture`] painted. It may cover more than the
+/// area asked for (the whole viewport or document); the caller crops
+/// `origin`-relative and scales to the size it wants.
+#[derive(Clone, PartialEq)]
+pub struct Capture {
+    pub bitmap: Bitmap,
+    /// Where the bitmap's top-left pixel sits in the area's coordinates
+    /// (view pixels from the viewport's or the document's top-left).
+    pub origin: (f64, f64),
+    /// Bitmap pixels per view pixel: the asked scale or more when the
+    /// engine rendered it, less when it could not (the caller then
+    /// enlarges, and says so).
+    pub scale: f64,
+}
+
+impl Capture {
+    /// Keep only the pixels `rect` (view pixels in the area's coordinates)
+    /// needs, plus one around it for scaling, so a small region of a big
+    /// document leaves the UI thread small. Unchanged when `rect` misses.
+    pub fn cropped(self, rect: ViewRect) -> Capture {
+        let s = self.scale;
+        if !(s.is_finite() && s > 0.0) {
+            return self;
+        }
+        let (ox, oy) = self.origin;
+        let x0 = ((rect.x - ox) * s).floor() - 1.0;
+        let y0 = ((rect.y - oy) * s).floor() - 1.0;
+        let x1 = ((rect.x + rect.width - ox) * s).ceil() + 1.0;
+        let y1 = ((rect.y + rect.height - oy) * s).ceil() + 1.0;
+        let x0 = x0.max(0.0);
+        let y0 = y0.max(0.0);
+        let x1 = x1.min(f64::from(self.bitmap.width));
+        let y1 = y1.min(f64::from(self.bitmap.height));
+        if x1 <= x0 || y1 <= y0 {
+            return self;
+        }
+        let full = x0 == 0.0
+            && y0 == 0.0
+            && x1 == f64::from(self.bitmap.width)
+            && y1 == f64::from(self.bitmap.height);
+        if full {
+            return self;
+        }
+        match self
+            .bitmap
+            .crop(x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32)
+        {
+            Some(bitmap) => Capture {
+                bitmap,
+                origin: (ox + x0 / s, oy + y0 / s),
+                scale: s,
+            },
+            None => self,
+        }
+    }
+}
+
+impl fmt::Debug for Capture {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Capture({:?} at {:?}, scale {})",
+            self.bitmap, self.origin, self.scale
+        )
+    }
+}
+
 /// A PNG image with its pixel size. Used for snapshots and favicons.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Image {
@@ -131,6 +261,27 @@ pub struct Bitmap {
 }
 
 impl Bitmap {
+    /// `width` x `height` pixels from (`x`, `y`), clipped to the bitmap,
+    /// rows packed; `None` when nothing is left.
+    pub fn crop(&self, x: u32, y: u32, width: u32, height: u32) -> Option<Bitmap> {
+        let x1 = x.saturating_add(width).min(self.width);
+        let y1 = y.saturating_add(height).min(self.height);
+        if x >= x1 || y >= y1 {
+            return None;
+        }
+        let stride = (x1 - x) as usize * 4;
+        let mut rgba = Vec::with_capacity(stride * (y1 - y) as usize);
+        for row in y..y1 {
+            rgba.extend_from_slice(self.row(row)?.get(x as usize * 4..x1 as usize * 4)?);
+        }
+        Some(Bitmap {
+            width: x1 - x,
+            height: y1 - y,
+            stride,
+            rgba,
+        })
+    }
+
     /// The bytes of row `y` (`width * 4` of them), if it exists.
     pub fn row(&self, y: u32) -> Option<&[u8]> {
         if y >= self.height {
@@ -560,6 +711,59 @@ mod tests {
         assert_eq!(s, UserScript::new("1"));
         let w: World = serde_json::from_str(r#"{"isolated": "copper"}"#).unwrap();
         assert_eq!(w, World::isolated("copper"));
+    }
+
+    /// A bitmap whose pixel (x, y) is `[x, y, 0, 255]`.
+    fn ramp(width: u32, height: u32, stride: usize) -> Bitmap {
+        let mut rgba = vec![0u8; stride * height as usize];
+        for y in 0..height {
+            for x in 0..width {
+                let i = y as usize * stride + x as usize * 4;
+                rgba[i..i + 4].copy_from_slice(&[x as u8, y as u8, 0, 255]);
+            }
+        }
+        Bitmap {
+            width,
+            height,
+            stride,
+            rgba,
+        }
+    }
+
+    #[test]
+    fn bitmap_crop() {
+        let b = ramp(10, 8, 48);
+        let c = b.crop(2, 3, 4, 2).unwrap();
+        assert_eq!((c.width, c.height, c.stride), (4, 2, 16));
+        assert_eq!(&c.rgba[..4], &[2, 3, 0, 255]);
+        assert_eq!(c.row(1).unwrap()[12..16], [5, 4, 0, 255]);
+        let edge = b.crop(8, 6, 10, 10).unwrap();
+        assert_eq!((edge.width, edge.height), (2, 2));
+        assert!(b.crop(10, 0, 1, 1).is_none());
+    }
+
+    #[test]
+    fn capture_crops_to_what_a_rect_needs() {
+        // A document picture at scale 2 whose top-left is at (0, 0).
+        let shot = Capture {
+            bitmap: ramp(100, 100, 400),
+            origin: (0.0, 0.0),
+            scale: 2.0,
+        };
+        let c = shot.clone().cropped(ViewRect::new(10.0, 20.0, 5.0, 5.0));
+        // 20..30 x 40..50 device pixels, one more on each side.
+        assert_eq!((c.bitmap.width, c.bitmap.height), (12, 12));
+        assert_eq!(c.origin, (9.5, 19.5));
+        assert_eq!(&c.bitmap.rgba[..2], &[19, 39]);
+        // A rect that covers it all, or misses it, keeps it whole.
+        assert_eq!(
+            shot.clone().cropped(ViewRect::new(0.0, 0.0, 50.0, 50.0)),
+            shot
+        );
+        assert_eq!(
+            shot.clone().cropped(ViewRect::new(500.0, 0.0, 5.0, 5.0)),
+            shot
+        );
     }
 
     #[test]

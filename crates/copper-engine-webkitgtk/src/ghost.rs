@@ -24,6 +24,9 @@ use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
 
+/// A child laid out at a size of its own, and that size.
+type SizedChild = (glib::WeakRef<gtk4::Widget>, (i32, i32));
+
 mod imp {
     use super::*;
 
@@ -31,6 +34,9 @@ mod imp {
     pub struct GhostHost {
         /// Size given to each child: the stage the page would have on screen.
         pub stage: Cell<(i32, i32)>,
+        /// Children laid out at a size of their own for a moment (a page
+        /// rendering bigger for an agent's HD screenshot, `capture.rs`).
+        pub sizes: RefCell<Vec<SizedChild>>,
         /// The frame clock's `layout` handler (connected while realized).
         pub layout: RefCell<Option<(gtk4::gdk::FrameClock, glib::SignalHandlerId)>>,
     }
@@ -74,15 +80,28 @@ mod imp {
         /// stalled would otherwise stay "without a current allocation" and
         /// GTK refuses to snapshot it.
         pub fn allocate_children(&self) {
-            let (w, h) = self.stage.get();
+            let stage = self.stage.get();
+            self.sizes
+                .borrow_mut()
+                .retain(|(w, _)| w.upgrade().is_some());
             let mut child = self.obj().first_child();
             while let Some(c) = child {
+                let (w, h) = self.size_of(&c).unwrap_or(stage);
                 // GTK wants a measure before every allocate.
                 let _ = c.measure(gtk4::Orientation::Horizontal, -1);
                 let _ = c.measure(gtk4::Orientation::Vertical, w);
                 c.size_allocate(&gtk4::Allocation::new(0, 0, w, h), -1);
                 child = c.next_sibling();
             }
+        }
+
+        /// The size `child` was given instead of the stage's, if any.
+        fn size_of(&self, child: &gtk4::Widget) -> Option<(i32, i32)> {
+            self.sizes
+                .borrow()
+                .iter()
+                .find(|(w, _)| w.upgrade().as_ref() == Some(child))
+                .map(|(_, size)| *size)
         }
 
         /// Allocate the host itself: its window never does.
@@ -180,6 +199,25 @@ impl GhostHost {
 
     pub(crate) fn has_children(&self) -> bool {
         self.first_child().is_some()
+    }
+
+    /// Lay `child` out at `size` (logical pixels) instead of the stage's,
+    /// or back at the stage's with `None`, at once. Nothing is drawn either
+    /// way: the host never draws its children.
+    pub(crate) fn set_child_size(&self, child: &impl IsA<gtk4::Widget>, size: Option<(i32, i32)>) {
+        let child = child.upcast_ref::<gtk4::Widget>();
+        let imp = self.imp();
+        {
+            let mut sizes = imp.sizes.borrow_mut();
+            sizes.retain(|(w, _)| w.upgrade().is_some_and(|w| &w != child));
+            if let Some(size) = size {
+                sizes.push((child.downgrade(), size));
+            }
+        }
+        if child.parent().as_ref() == Some(self.upcast_ref::<gtk4::Widget>()) {
+            imp.allocate_children();
+        }
+        self.queue_allocate();
     }
 
     /// Lay out and snapshot every child now, independent of the window's

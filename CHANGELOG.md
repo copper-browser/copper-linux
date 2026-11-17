@@ -5,6 +5,28 @@ release dates.
 
 ## Unreleased
 
+## 0.6.3 — 2026-11-17
+
+Agents picture any part of a tab, in HD.
+
+### Added
+
+- **Screenshots of any part of a tab, in HD.** `browser_take_screenshot`
+  takes `selector`, `region`, `padding` and `scale` (1–4) as on the Mac: an
+  element comes out whole even when it is taller than the window, a region
+  is in CSS pixels (the page's with `fullPage`), and scale 2 or more is the
+  page drawn again, not enlarged, for an agent's background tab. `filename`
+  may be a folder (`copper-YYYYMMDD-HHMMSS.png`) and its folders are made;
+  the answer starts with what was pictured (`Screenshot 520×280 PNG at scale
+  2 of #box-b.`). `copper shot` takes `--ref`, `--selector`, `--region
+  X,Y,W,H`, `--padding`, `--scale` and `--hd`, and doesn't write again a
+  picture Copper saved. The answer's own image stays small for the model:
+  scale 1 when an HD picture went to a file, never over 8000 px a side, and
+  it says so (`The image here is 240×120 at scale 1; the file has the full
+  picture.`). A full page is from the page's top whatever its scroll, at
+  1 px per CSS px × scale, up to 20000 px tall. (`copper-mcp`
+  `screenshot.rs`, `PageView::capture`, WebKitGTK `capture.rs`.)
+
 ## 0.6.2 — 2026-11-10
 
 Sign in with Claude in the shared crates, and picking a saved account on Google's sign-in page fills it in.

@@ -14,8 +14,8 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use copper_engine_webkitgtk::copper_engine::{
-    Backstage, BackstageMode, Engine, InputEvent, JsonValue, Modifiers, MouseButton, PageEvent,
-    PageOptions, PageView, SnapshotRegion, Trust,
+    Backstage, BackstageMode, CaptureArea, CaptureRequest, Engine, InputEvent, JsonValue,
+    Modifiers, MouseButton, PageEvent, PageOptions, PageView, SnapshotRegion, Trust,
 };
 use copper_engine_webkitgtk::{TrustedInput, WebKitBackstage};
 use gdk4::prelude::*;
@@ -78,6 +78,7 @@ pub fn run<'a>(ctx: &'a mut Ctx, name: &str) -> Pin<Box<dyn Future<Output = Res>
         "backstage-hold" => Box::pin(check_hold(ctx)),
         "backstage-raf" => Box::pin(check_raf(ctx)),
         "backstage-snapshot" => Box::pin(check_snapshot(ctx)),
+        "backstage-capture" => Box::pin(check_capture(ctx)),
         "trusted-click" => Box::pin(check_click(ctx)),
         "trusted-type" => Box::pin(check_type(ctx)),
         "enter-submits" => Box::pin(check_enter(ctx)),
@@ -549,6 +550,60 @@ async fn check_snapshot(ctx: &mut Ctx) -> Res {
         a.px,
         c.px,
         p1.display()
+    ))
+}
+
+/// An agent's HD screenshot: the held page is drawn again at twice the
+/// display's scale with its layout and scroll as they were; the user's tab
+/// is never re-laid out for one (it comes back at the display's scale).
+async fn check_capture(ctx: &mut Ctx) -> Res {
+    let b = bench(ctx)?;
+    let at = |scale| CaptureRequest {
+        area: CaptureArea::Viewport,
+        scale,
+    };
+    let layout = "[innerWidth, innerHeight, scrollX, scrollY]";
+    let before = b.agent.js(&format!("scrollTo(0, 40); {layout}")).await?;
+    let base = b
+        .agent
+        .page
+        .capture(at(1.0))
+        .await
+        .map_err(|e| e.to_string())?;
+    let dsf = base.scale;
+    let hd = b
+        .agent
+        .page
+        .capture(at(2.0 * dsf))
+        .await
+        .map_err(|e| e.to_string())?;
+    let after = b.agent.js(layout).await?;
+    ensure((hd.scale / dsf - 2.0).abs() < 0.01, || {
+        format!(
+            "held page at scale {} on a display of {dsf} ({}x{})",
+            hd.scale, hd.bitmap.width, hd.bitmap.height
+        )
+    })?;
+    ensure(hd.bitmap.width == base.bitmap.width * 2, || {
+        format!("{} px wide, at 1x {}", hd.bitmap.width, base.bitmap.width)
+    })?;
+    ensure(after == before, || format!("layout {before} -> {after}"))?;
+    let user = b
+        .user
+        .page
+        .capture(at(2.0 * dsf))
+        .await
+        .map_err(|e| e.to_string())?;
+    ensure((user.scale - dsf).abs() < 0.01, || {
+        format!("the user's tab came back at scale {}", user.scale)
+    })?;
+    let same = user_unchanged(b).await?;
+    Ok(format!(
+        "held page drawn at {:.2}x a {dsf}x display ({}x{}), layout {after} kept; the user's tab at {:.2}x; {same}",
+        hd.scale / dsf,
+        hd.bitmap.width,
+        hd.bitmap.height,
+        user.scale
     ))
 }
 

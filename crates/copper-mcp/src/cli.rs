@@ -15,6 +15,7 @@ use serde_json::{Map, Value, json};
 
 use crate::client;
 use crate::config::{self, Endpoint, PATH};
+use crate::screenshot;
 use crate::who;
 
 /// What one command line asks for.
@@ -72,7 +73,13 @@ pub const USAGE: &str = "Usage: copper [--json] [--launch] [--tab ID] <command> 
   snapshot [--interactive] [-n N] [--selector CSS]
   text                                      read page text
   find TEXT                                 find matching page elements
-  shot [PATH] [--full] [--jpeg]             save a screenshot
+  shot [PATH] [--full] [--jpeg] [--ref REF | --selector CSS [--frame F] | --region X,Y,W,H]
+       [--padding N] [--scale N | --hd]
+                                            save a screenshot (default /tmp/copper-<time>.png): the viewport,
+                                            the whole page (--full), one element or a region in CSS px (the
+                                            page's with --full), with --padding px round it. --scale 1-4
+                                            draws it again at that many pixels per CSS px (--hd = 2);
+                                            a folder PATH gets copper-YYYYMMDD-HHMMSS.png in it
   eval 'JS'                                 evaluate JavaScript
   click REF | --selector CSS                click an element
   type REF TEXT [--submit]                  type into an element
@@ -564,43 +571,7 @@ pub fn make_request(command: &str, args: &[String]) -> Result<Spec, Early> {
             }
             Ok(call("browser_find", json!({ "text": args.join(" ") })))
         }
-        "shot" => {
-            let mut path: Option<&String> = None;
-            let mut arguments = Map::new();
-            arguments.insert("type".into(), json!("png"));
-            for arg in args {
-                match arg.as_str() {
-                    "--full" => {
-                        arguments.insert("fullPage".into(), json!(true));
-                    }
-                    "--jpeg" => {
-                        arguments.insert("type".into(), json!("jpeg"));
-                    }
-                    other => {
-                        if other.starts_with('-') || path.is_some() {
-                            return bad("shot takes one optional PATH");
-                        }
-                        path = Some(arg);
-                    }
-                }
-            }
-            let suffix = if arguments["type"] == "jpeg" {
-                "jpg"
-            } else {
-                "png"
-            };
-            let output = path.cloned().unwrap_or_else(|| {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| d.as_secs());
-                temp_image(&format!("copper-{now}.{suffix}"))
-            });
-            arguments.insert("filename".into(), json!(output));
-            let mut spec = call("browser_take_screenshot", Value::Object(arguments));
-            spec.image_path = Some(output);
-            spec.image_command = true;
-            Ok(spec)
-        }
+        "shot" => shot(args),
         "eval" => {
             let [function] = args else {
                 return bad("eval needs JavaScript");
@@ -673,7 +644,7 @@ pub fn make_request(command: &str, args: &[String]) -> Result<Spec, Early> {
             if args.len() > 1 && raw.is_empty() {
                 return bad("call JSON-ARGS is empty");
             }
-            let arguments = if raw.is_empty() {
+            let mut arguments = if raw.is_empty() {
                 Map::new()
             } else {
                 match serde_json::from_str::<Value>(&raw) {
@@ -681,14 +652,19 @@ pub fn make_request(command: &str, args: &[String]) -> Result<Spec, Early> {
                     _ => return bad("call JSON-ARGS must be a JSON object"),
                 }
             };
-            let image_path = (name == "browser_take_screenshot")
-                .then(|| {
-                    arguments
-                        .get("filename")
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                })
-                .flatten();
+            // A relative `filename`, or ~/…, is made the path the shell
+            // meant; Copper names a folder's file and says where it saved.
+            let mut image_path = None;
+            if name == "browser_take_screenshot"
+                && let Some(given) = arguments
+                    .get("filename")
+                    .and_then(Value::as_str)
+                    .filter(|f| !f.is_empty())
+            {
+                let path = shot_path(given);
+                arguments.insert("filename".into(), json!(path));
+                image_path = Some(path);
+            }
             let mut spec = call(name, Value::Object(arguments));
             spec.image_path = image_path;
             Ok(spec)
@@ -746,6 +722,124 @@ pub fn make_request(command: &str, args: &[String]) -> Result<Spec, Early> {
         c if ELSEWHERE.contains(&c) => bad(format!("{c} is not available in this build yet")),
         other => bad(format!("unknown command: {other}")),
     }
+}
+
+/// `copper shot`'s options, for its help line and its usage errors.
+const SHOT_USAGE: &str = "[PATH] [--full] [--jpeg] [--ref REF | --selector CSS [--frame F] | --region X,Y,W,H] [--padding N] [--scale N | --hd]";
+
+/// A screenshot's path as the shell meant it (`CLI.shotPath`): `~`
+/// expanded, a relative one made absolute against the working folder, a
+/// trailing separator (a folder) kept. Copper names a folder's file.
+fn shot_path(path: &str) -> String {
+    let expanded = screenshot::expand(path);
+    let absolute = std::path::absolute(&expanded).unwrap_or(expanded);
+    let mut text = absolute.to_string_lossy().into_owned();
+    let folder = |p: &str| p.ends_with('/') || p.ends_with(std::path::MAIN_SEPARATOR);
+    if folder(path) && !folder(&text) {
+        text.push(std::path::MAIN_SEPARATOR);
+    }
+    text
+}
+
+/// Where this command writes a screenshot itself, when Copper could not:
+/// `path`, or for a folder a new name in it, as Copper would have named it.
+fn shot_destination(path: &str, jpeg: bool) -> String {
+    screenshot::destination(path, jpeg, &screenshot::stamp())
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// `copper shot …` (`CLI.swift` `shot`): each flag is one of
+/// `browser_take_screenshot`'s arguments, checked here as Copper checks
+/// them so a bad call exits 2 like any other usage error. `--hd` is
+/// `--scale 2`; no PATH is a file in the temp folder.
+fn shot(args: &[String]) -> Result<Spec, Early> {
+    let usage = format!("usage: copper shot {SHOT_USAGE}");
+    let wrong = |problem: &str| bad(format!("{problem} — {usage}"));
+    let mut path: Option<&String> = None;
+    let mut arguments = Map::new();
+    arguments.insert("type".into(), json!("png"));
+    let mut hd = false;
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        let flag = arg.as_str();
+        match flag {
+            "--full" => {
+                arguments.insert("fullPage".into(), json!(true));
+            }
+            "--jpeg" => {
+                arguments.insert("type".into(), json!("jpeg"));
+            }
+            "--hd" => hd = true,
+            "--ref" | "--selector" | "--frame" => {
+                let Some(value) = rest.next().filter(|v| !v.is_empty()) else {
+                    return wrong(&format!("shot {flag} needs a value"));
+                };
+                arguments.insert(flag[2..].into(), json!(value));
+            }
+            "--region" => {
+                let numbers: Option<Vec<f64>> = rest.next().map(|v| {
+                    v.split(',')
+                        .filter_map(|n| n.trim().parse::<f64>().ok().filter(|n| n.is_finite()))
+                        .collect()
+                });
+                let Some(&[x, y, width, height]) = numbers
+                    .as_deref()
+                    .and_then(|n| <&[f64; 4]>::try_from(n).ok())
+                else {
+                    return wrong("shot --region needs X,Y,W,H: four numbers in CSS pixels");
+                };
+                arguments.insert(
+                    "region".into(),
+                    json!({ "x": x, "y": y, "width": width, "height": height }),
+                );
+            }
+            "--padding" | "--scale" => {
+                let Some(n) = rest
+                    .next()
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .filter(|n| n.is_finite())
+                else {
+                    return wrong(&format!("shot {flag} needs a number"));
+                };
+                arguments.insert(flag[2..].into(), json!(n));
+            }
+            _ if flag.starts_with('-') || path.is_some() => {
+                return wrong("shot takes one optional PATH and these options");
+            }
+            _ => path = Some(arg),
+        }
+    }
+    if hd {
+        if arguments.contains_key("scale") {
+            return wrong("shot takes --scale N or --hd, not both");
+        }
+        arguments.insert("scale".into(), json!(2));
+    }
+    if arguments.contains_key("frame") && !arguments.contains_key("selector") {
+        return wrong("shot --frame goes with --selector");
+    }
+    if let Err(problem) = screenshot::ShotArgs::parse(&arguments) {
+        return wrong(&problem);
+    }
+    let jpeg = arguments["type"] == "jpeg";
+    let output = match path {
+        Some(p) => shot_path(p),
+        None => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            temp_image(&format!(
+                "copper-{now}.{}",
+                if jpeg { "jpg" } else { "png" }
+            ))
+        }
+    };
+    arguments.insert("filename".into(), json!(output));
+    let mut spec = call("browser_take_screenshot", Value::Object(arguments));
+    spec.image_path = Some(output);
+    spec.image_command = true;
+    Ok(spec)
 }
 
 /// The whole command line (`CLI.run`'s front half). `launch_env`: whether
@@ -1125,6 +1219,56 @@ fn expand(path: &str) -> std::path::PathBuf {
     copper_core::platform::expand_tilde(path)
 }
 
+/// The file Copper says it saved a screenshot asked for at `asked` to
+/// (` Saved to <path>.` in its answer, `CLI.savedShot`): `asked` itself,
+/// or for a folder the `copper-YYYYMMDD-HHMMSS[-N].png|jpg` it made there.
+/// `None` when it saved nothing there.
+fn saved_to(texts: &[&str], asked: &str) -> Option<String> {
+    let folder = asked
+        .strip_suffix(['/', std::path::MAIN_SEPARATOR])
+        .unwrap_or(asked);
+    for text in texts {
+        if text.contains(&format!("Saved to {asked}.")) {
+            return Some(asked.to_string());
+        }
+        for sep in ['/', std::path::MAIN_SEPARATOR] {
+            let lead = format!("Saved to {folder}{sep}");
+            let Some(at) = text.find(&lead) else {
+                continue;
+            };
+            let rest = &text[at + lead.len()..];
+            let name = rest.split(". ").next().unwrap_or(rest);
+            let name = name.strip_suffix('.').unwrap_or(name);
+            if generated_name(name) {
+                return Some(format!("{folder}{sep}{name}"));
+            }
+        }
+    }
+    None
+}
+
+/// `copper-YYYYMMDD-HHMMSS.png`, `-N` before the extension allowed, or
+/// `.jpg`: a name Copper makes in a folder.
+fn generated_name(name: &str) -> bool {
+    let Some(stem) = name
+        .strip_suffix(".png")
+        .or_else(|| name.strip_suffix(".jpg"))
+        .and_then(|n| n.strip_prefix("copper-"))
+    else {
+        return false;
+    };
+    let digits = |s: &str, n: usize| s.len() == n && s.bytes().all(|b| b.is_ascii_digit());
+    let mut parts = stem.split('-');
+    let (Some(day), Some(time)) = (parts.next(), parts.next()) else {
+        return false;
+    };
+    let extra = parts.next();
+    digits(day, 8)
+        && digits(time, 6)
+        && extra.is_none_or(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        && parts.next().is_none()
+}
+
 fn render(env: &mut Env<'_>, response: Value, spec: &Spec, json_out: bool) -> i32 {
     let Some(mut result) = response.get("result").cloned().filter(Value::is_object) else {
         error(env, "Copper returned no result");
@@ -1149,6 +1293,12 @@ fn render(env: &mut Env<'_>, response: Value, spec: &Spec, json_out: bool) -> i3
     let mut paths: Vec<String> = Vec::new();
     let mut text: Vec<String> = Vec::new();
     if let Some(content) = result["content"].as_array().cloned() {
+        // A picture Copper saved where it was asked is not written again.
+        let said: Vec<&str> = content.iter().filter_map(|c| c["text"].as_str()).collect();
+        let saved = spec
+            .image_path
+            .as_deref()
+            .and_then(|asked| saved_to(&said, asked));
         let mut transformed = Vec::new();
         for (index, item) in content.into_iter().enumerate() {
             match item["type"].as_str() {
@@ -1164,7 +1314,19 @@ fn render(env: &mut Env<'_>, response: Value, spec: &Spec, json_out: bool) -> i3
                         transformed.push(item);
                         continue;
                     };
-                    let path = image_path(spec, item["mimeType"].as_str(), index);
+                    if index == 0
+                        && let Some(path) = &saved
+                    {
+                        transformed.push(json!({ "type": "image", "path": path }));
+                        paths.push(path.clone());
+                        continue;
+                    }
+                    let mut path = image_path(spec, item["mimeType"].as_str(), index);
+                    if index == 0 && spec.image_path.is_some() {
+                        // Where Copper would have put it: a folder's new file.
+                        let jpeg = item["mimeType"] == "image/jpeg";
+                        path = shot_destination(&path, jpeg);
+                    }
                     let file = expand(&path);
                     let written = file
                         .parent()
@@ -1292,6 +1454,216 @@ mod tests {
             };
             assert!(parse(&s(&extra), false).is_ok(), "{verb}");
         }
+    }
+
+    #[test]
+    fn shot_flags_map_onto_the_tool() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("card.png");
+        let f = file.to_str().unwrap();
+        let p = parse(
+            &s(&[
+                "shot",
+                f,
+                "--selector",
+                ".pricing-card",
+                "--padding",
+                "12",
+                "--hd",
+            ]),
+            false,
+        )
+        .unwrap();
+        assert!(p.spec.image_command);
+        assert_eq!(p.spec.image_path.as_deref(), Some(f));
+        assert_eq!(
+            args_of(&p),
+            json!({"type": "png", "selector": ".pricing-card", "padding": 12.0, "scale": 2, "filename": f})
+        );
+        let p = parse(
+            &s(&[
+                "--tab",
+                "1a2b",
+                "shot",
+                f,
+                "--region",
+                "100,-5.5,200,100",
+                "--scale",
+                "1.5",
+                "--full",
+                "--jpeg",
+            ]),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            args_of(&p),
+            json!({"type": "jpeg", "fullPage": true, "scale": 1.5, "filename": f, "tab": "1a2b",
+                   "region": {"x": 100.0, "y": -5.5, "width": 200.0, "height": 100.0}})
+        );
+        let p = parse(&s(&["shot", f, "--ref", "e3"]), false).unwrap();
+        assert_eq!(args_of(&p)["ref"], "e3");
+        // A folder goes as it is (Copper names its file); a relative path
+        // is made absolute, a trailing separator kept.
+        let d = dir.path().to_str().unwrap();
+        let p = parse(&s(&["shot", d, "--jpeg"]), false).unwrap();
+        assert_eq!(p.spec.image_path.as_deref(), Some(d));
+        assert_eq!(args_of(&p)["filename"], d);
+        let here = std::env::current_dir().unwrap();
+        let p = parse(&s(&["shot", "rel.png"]), false).unwrap();
+        assert_eq!(p.spec.image_path.as_deref(), here.join("rel.png").to_str());
+        let p = parse(&s(&["shot", "out/"]), false).unwrap();
+        let out = format!(
+            "{}{}",
+            here.join("out").display(),
+            std::path::MAIN_SEPARATOR
+        );
+        assert_eq!(p.spec.image_path.as_deref(), Some(out.as_str()));
+        // `call` too, so the file Copper saves is where the shell meant.
+        let call_args = format!(r#"{{"filename": {}}}"#, serde_json::to_string(d).unwrap());
+        let p = parse(&s(&["call", "browser_take_screenshot", &call_args]), false).unwrap();
+        assert_eq!(args_of(&p)["filename"], d);
+        assert_eq!(p.spec.image_path.as_deref(), Some(d));
+        let p = parse(
+            &s(&[
+                "call",
+                "browser_take_screenshot",
+                r#"{"filename": "rel/x.png"}"#,
+            ]),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            args_of(&p)["filename"],
+            here.join("rel/x.png").to_str().unwrap()
+        );
+    }
+
+    #[test]
+    fn shot_usage_errors() {
+        for (a, e) in [
+            (
+                &["shot", "--ref", "e1", "--region", "1,2,3,4"][..],
+                "give one of ref, selector or region",
+            ),
+            (
+                &["shot", "--ref", "e1", "--frame", "f2"][..],
+                "shot --frame goes with --selector",
+            ),
+            (&["shot", "--scale", "9"][..], "scale must be from 1 to 4"),
+            (&["shot", "--scale", "x"][..], "shot --scale needs a number"),
+            (
+                &["shot", "--scale", "2", "--hd"][..],
+                "shot takes --scale N or --hd, not both",
+            ),
+            (
+                &["shot", "--padding", "-1"][..],
+                "padding must be 0 or more",
+            ),
+            (
+                &["shot", "--region", "1,2,3"][..],
+                "shot --region needs X,Y,W,H: four numbers in CSS pixels",
+            ),
+            (
+                &["shot", "--region", "1,2,0,3"][..],
+                "region width and height must be more than 0",
+            ),
+            (&["shot", "--selector"][..], "shot --selector needs a value"),
+            (
+                &["shot", "--wide"][..],
+                "shot takes one optional PATH and these options",
+            ),
+            (
+                &["shot", "/tmp/a.png", "/tmp/b.png"][..],
+                "shot takes one optional PATH and these options",
+            ),
+        ] {
+            match parse(&s(a), false) {
+                Err(Early::Usage(t)) => {
+                    assert_eq!(t, format!("{e} — usage: copper shot {SHOT_USAGE}"), "{a:?}");
+                }
+                other => panic!("{a:?}: {other:?}"),
+            }
+        }
+        assert!(USAGE.contains("[--padding N] [--scale N | --hd]"));
+    }
+
+    #[test]
+    fn a_picture_copper_saved_is_not_written_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = base64::engine::general_purpose::STANDARD.encode(b"picture");
+        let answer = |text: String| {
+            json!({"result": {"content": [
+                {"type": "image", "data": data, "mimeType": "image/png"},
+                {"type": "text", "text": text},
+            ]}})
+        };
+        // What `render` prints for each answer, and its exit code.
+        let shown = |spec: &Spec, said: String| {
+            let mut out = Vec::new();
+            let mut err = Vec::new();
+            let none = || None;
+            let launch = || Ok(());
+            let mut env = Env {
+                endpoint: &none,
+                launch: &launch,
+                launch_env: false,
+                out: &mut out,
+                err: &mut err,
+            };
+            let code = render(&mut env, answer(said), spec, false);
+            (code, String::from_utf8(out).unwrap())
+        };
+        let file = dir.path().join("c11.png");
+        let f = file.to_str().unwrap();
+        let spec = parse(&s(&["shot", f]), false).unwrap().spec;
+        let said = format!("Screenshot 4×2 PNG at scale 1 of the viewport. Saved to {f}. ### Page");
+        assert_eq!(shown(&spec, said), (0, format!("{f}\n")));
+        assert!(!file.exists(), "the CLI wrote what Copper saved");
+        // Copper couldn't save: this command writes it.
+        let said = format!(
+            "Screenshot 4×2 PNG at scale 1 of the viewport. Couldn't save to {f}: denied. P"
+        );
+        assert_eq!(shown(&spec, said), (0, format!("{f}\n")));
+        assert_eq!(std::fs::read(&file).unwrap(), b"picture");
+        // `call` with a folder Copper saved into: its file, not the folder.
+        let d = dir.path().to_str().unwrap();
+        let call_args = format!(r#"{{"filename": {}}}"#, serde_json::to_string(d).unwrap());
+        let spec = parse(&s(&["call", "browser_take_screenshot", &call_args]), false)
+            .unwrap()
+            .spec;
+        let inside = dir.path().join("copper-20261117-131500.png");
+        let said = format!(
+            "Screenshot 4×2 PNG at scale 1 of the viewport. Saved to {}. ### Page",
+            inside.display()
+        );
+        let (code, out) = shown(&spec, said);
+        assert_eq!(code, 0);
+        assert!(out.starts_with(&format!("{}\n", inside.display())), "{out}");
+        assert!(!inside.exists() && dir.path().is_dir());
+        // `CLI.savedShot`'s cases.
+        let page = " ### Page\n- URL: about:blank";
+        let asked =
+            format!("Screenshot 1×1 PNG at scale 1 of the viewport. Saved to /tmp/a b.png.{page}");
+        assert_eq!(
+            saved_to(&[&asked], "/tmp/a b.png").as_deref(),
+            Some("/tmp/a b.png")
+        );
+        let made = format!(
+            "Screenshot 1×1 JPEG at scale 1 of the viewport. Saved to /tmp/shots/copper-20261118-110640-2.jpg.{page}"
+        );
+        let file = Some("/tmp/shots/copper-20261118-110640-2.jpg");
+        assert_eq!(saved_to(&[&made], "/tmp/shots").as_deref(), file);
+        assert_eq!(saved_to(&[&made], "/tmp/shots/").as_deref(), file);
+        let failed = format!(
+            "Screenshot 1×1 PNG at scale 1 of the viewport. Couldn't save to /tmp/a.png: no room.{page}"
+        );
+        assert_eq!(saved_to(&[&failed], "/tmp/a.png"), None);
+        assert_eq!(saved_to(&[&made], "/tmp/other"), None);
+        assert!(generated_name("copper-20261118-110640.png"));
+        assert!(!generated_name("copper-20261118-110640-.png"));
+        assert!(!generated_name("copper-2026111-110640.png"));
+        assert!(!generated_name("shot.png"));
     }
 
     #[test]

@@ -9,7 +9,7 @@
 use std::pin::pin;
 use std::time::{Duration, Instant};
 
-use copper_engine::{InputEvent, MouseButton, SnapshotRegion};
+use copper_engine::{Bitmap, CaptureRequest, InputEvent, MouseButton, ViewRect};
 use copper_pagejs::page::{self as pj, Locator, Rect};
 use copper_pagejs::render::{pretty_json, render};
 use copper_pagejs::{Call, trail};
@@ -22,8 +22,34 @@ use crate::catalogue;
 use crate::drive::{looks_secret, string_list};
 use crate::host::{Content, Host, Page, TabId, TabInfo};
 use crate::input;
+use crate::screenshot::{self, Answer, Geometry, Saved, ShotArgs, Subject};
 use crate::shot;
 use crate::{CallCtx, Failure, Mcp};
+
+/// How long saving a screenshot may take before the call gives up on it.
+const SAVE_LIMIT: Duration = Duration::from_secs(15);
+
+/// A screenshot for the worker thread to finish.
+struct Develop {
+    bitmap: Bitmap,
+    /// The picture's part of `bitmap`, in its pixels.
+    src: (f64, f64, f64, f64),
+    /// The picture's size, its CSS size and its scale.
+    size: (u32, u32),
+    css: (f64, f64),
+    scale: f64,
+    jpeg: bool,
+    /// Where to save it, if anywhere.
+    path: Option<String>,
+}
+
+/// What the worker made: the answer's image, the save, and the answer
+/// image's size and scale when it is not the picture.
+struct Developed {
+    image: Vec<u8>,
+    saved: Option<Saved>,
+    view: Option<((u32, u32), f64)>,
+}
 
 /// Run a curated call in the page and decode its result.
 pub(crate) async fn js<P: Page, T: DeserializeOwned>(
@@ -450,36 +476,7 @@ impl<H: Host> Mcp<H> {
                 }
                 Ok(vec![Content::Text(format!("Dragged {a} to {b}"))])
             }
-            "browser_take_screenshot" => {
-                let jpeg = arg_str(args, "type") == Some("jpeg");
-                let full = arg_bool(args, "fullPage").unwrap_or(false);
-                let mut rect = None;
-                if let Some(reference) = arg_str(args, "ref") {
-                    let r = self
-                        .prepare_target(&page, &Locator::Ref(reference.into()))
-                        .await?;
-                    rect = Some((r.x, r.y, r.width, r.height));
-                }
-                let region = if full && rect.is_none() {
-                    SnapshotRegion::FullDocument
-                } else {
-                    SnapshotRegion::Visible
-                };
-                let image = page.snapshot(region).await.map_err(Failure)?;
-                let (view_width, _) = page.view_size();
-                let data =
-                    shot::agent_picture(&image.png, view_width, rect, jpeg).map_err(Failure)?;
-                if let Some(path) = arg_str(args, "filename") {
-                    let _ = std::fs::write(expand_tilde(path), &data);
-                }
-                Ok(vec![
-                    Content::Image {
-                        data,
-                        mime: if jpeg { "image/jpeg" } else { "image/png" }.into(),
-                    },
-                    Content::Text(self.page_line(&id)),
-                ])
-            }
+            "browser_take_screenshot" => self.screenshot(&page, &id, args).await,
             "browser_evaluate" => {
                 let function = arg_str(args, "function").ok_or("function required")?;
                 let result = js_value(&page, &pj::evaluate(function, arg_str(args, "ref"))).await?;
@@ -547,6 +544,203 @@ impl<H: Host> Mcp<H> {
             }
             _ => Err(Failure(format!("Unknown tool {name}"))),
         }
+    }
+
+    /// `browser_take_screenshot`: an element, a region, the viewport or
+    /// the whole page, at 1x to 4x, maybe saved. `screenshot.rs` has the
+    /// rules (all in CSS pixels); the engine paints (`PageView::capture`,
+    /// in view pixels: CSS times the zoom); a worker thread crops, scales,
+    /// encodes and saves.
+    async fn screenshot(
+        &self,
+        page: &H::Page,
+        id: &TabId,
+        args: &Map<String, Value>,
+    ) -> Result<Vec<Content>, Failure> {
+        let ask = ShotArgs::parse(args).map_err(Failure)?;
+        let zoom = page.zoom().max(0.01);
+        let target = match &ask.subject {
+            Subject::Ref(r) => Some(Locator::Ref(r.clone())),
+            Subject::Selector(css) => Some(Locator::Css(css.clone())),
+            Subject::Page | Subject::Region(_) => None,
+        };
+        let element = match &target {
+            Some(target) => {
+                let r = self.prepare_target(page, target).await?;
+                Some(ViewRect::new(
+                    r.x / zoom,
+                    r.y / zoom,
+                    r.width / zoom,
+                    r.height / zoom,
+                ))
+            }
+            None => None,
+        };
+        let (vw, vh) = page.view_size();
+        let viewport = (vw / zoom, vh / zoom);
+        // The page's size and scroll: for an element and anything fullPage.
+        let metrics = if element.is_some() || ask.full_page {
+            Some(
+                js(page, &pj::metrics())
+                    .await
+                    .map_err(|_| Failure::new("couldn't measure the page"))?,
+            )
+        } else {
+            None
+        };
+        let geometry = Geometry {
+            viewport,
+            document: metrics.map_or(viewport, |m| (m.width, m.height)),
+            scroll: metrics.map_or((0.0, 0.0), |m| (m.x, m.y)),
+        };
+        let label = target.as_ref().map(Locator::script).unwrap_or_default();
+        let plan = screenshot::plan(&ask, &geometry, element, &label).map_err(Failure)?;
+        let first = screenshot::fit(plan.rect.width, plan.rect.height, ask.scale);
+        let captured = page
+            .capture(CaptureRequest {
+                area: plan.area(zoom),
+                scale: first.scale / zoom,
+            })
+            .await
+            .map_err(Failure)?;
+        // Picture pixels per CSS pixel the engine painted at.
+        let mut painted = captured.scale * zoom;
+        if !(painted.is_finite() && painted > 0.0) || captured.bitmap.width == 0 {
+            return Err("the page gave an empty picture".into());
+        }
+        // A scale read off a picture's whole pixels is off by up to one
+        // pixel across it: within that, it is the scale asked for (else a
+        // tall picture comes out a few pixels short).
+        let across = f64::from(captured.bitmap.width) / painted;
+        if (painted - first.scale).abs() * across <= 1.0 {
+            painted = first.scale;
+        }
+        // What was painted, in CSS pixels (and the pixel rounding may have
+        // taken off its far edges); the picture is what of the plan it
+        // holds (all of it, unless the page changed meanwhile).
+        let extent = ViewRect::new(
+            captured.origin.0 / zoom,
+            captured.origin.1 / zoom,
+            (f64::from(captured.bitmap.width) + 1.0) / painted,
+            (f64::from(captured.bitmap.height) + 1.0) / painted,
+        );
+        let rect = screenshot::intersect(plan.rect, extent)
+            .ok_or_else(|| Failure::new("the page gave an empty picture"))?;
+        let fit = screenshot::fit(rect.width, rect.height, first.scale);
+        let lowered = (fit.scale < ask.scale).then(|| {
+            let limit = first.lowered.or(fit.lowered);
+            (ask.scale, limit.unwrap_or(screenshot::Limit::Side))
+        });
+        let upscaled = (painted < fit.scale * 0.995).then_some(painted);
+        let src = (
+            (rect.x - extent.x) * painted,
+            (rect.y - extent.y) * painted,
+            rect.width * painted,
+            rect.height * painted,
+        );
+        let developed = self
+            .develop(Develop {
+                bitmap: captured.bitmap,
+                src,
+                size: fit.size,
+                css: (rect.width, rect.height),
+                scale: fit.scale,
+                jpeg: ask.jpeg,
+                path: ask.filename.clone(),
+            })
+            .await?;
+        let answer = Answer {
+            size: fit.size,
+            format: ask.format(),
+            scale: fit.scale,
+            subject: ask.subject.words(ask.full_page),
+            saved: developed.saved,
+            lowered,
+            upscaled,
+            view: developed.view,
+        };
+        Ok(vec![
+            Content::Image {
+                data: developed.image,
+                mime: ask.mime().into(),
+            },
+            Content::Text(answer.text(&self.page_line(id))),
+        ])
+    }
+
+    /// Crop, scale, encode and save the picture on a worker thread, and
+    /// make the answer's own image ([`screenshot::view_fit`]: scale 1 when
+    /// the HD picture went to a file, at most 8000 px a side). The save is
+    /// bounded like the Mac's (`OffMainWrite`): a folder that hangs (a
+    /// network or removable volume) fails the call after [`SAVE_LIMIT`]
+    /// instead of holding up every other call.
+    async fn develop(&self, job: Develop) -> Result<Developed, Failure> {
+        let (encoded_tx, encoded_rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel::<Result<Developed, String>>();
+        let path = job.path.clone();
+        std::thread::Builder::new()
+            .name("copper-screenshot".into())
+            .spawn(move || {
+                let encode = |size: (u32, u32)| {
+                    let picture = shot::resample(&job.bitmap, job.src, size);
+                    if job.jpeg {
+                        shot::encode_jpeg(&picture)
+                    } else {
+                        shot::encode_png(&picture)
+                    }
+                };
+                let full = match encode(job.size) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        let _ = encoded_tx.send(Err(e));
+                        return;
+                    }
+                };
+                let _ = encoded_tx.send(Ok(()));
+                let saved = job
+                    .path
+                    .as_deref()
+                    .map(|to| screenshot::save(&full, to, job.jpeg));
+                let to_file = matches!(saved, Some(Saved::To(_)));
+                let (scale, size) = screenshot::view_fit(job.css.0, job.css.1, job.scale, to_file);
+                let done = if size == job.size {
+                    Ok(Developed {
+                        image: full,
+                        saved,
+                        view: None,
+                    })
+                } else {
+                    encode(size).map(|image| Developed {
+                        image,
+                        saved,
+                        view: Some((size, scale)),
+                    })
+                };
+                let _ = done_tx.send(done);
+            })
+            .map_err(|e| Failure(format!("couldn't make the picture: {e}")))?;
+        encoded_rx
+            .await
+            .map_err(|_| Failure::new("couldn't make the picture"))?
+            .map_err(|e| Failure(format!("couldn't encode the picture: {e}")))?;
+        let done = match path {
+            None => done_rx.await,
+            Some(path) => {
+                let wait = pin!(done_rx);
+                let cap = pin!(self.host.sleep(SAVE_LIMIT));
+                match select(wait, cap).await {
+                    Either::Left((done, _)) => done,
+                    Either::Right(_) => {
+                        return Err(Failure(format!(
+                            "couldn't write {path} within {} s — the folder isn't answering (a network or removable volume?); try a path under /tmp or your home folder",
+                            SAVE_LIMIT.as_secs()
+                        )));
+                    }
+                }
+            }
+        };
+        done.map_err(|_| Failure::new("couldn't make the picture"))?
+            .map_err(|e| Failure(format!("couldn't encode the picture: {e}")))
     }
 
     async fn tabs_tool(
@@ -683,8 +877,4 @@ pub(crate) fn sorted_compact(value: &Value) -> String {
 /// Pretty, sorted, slashes unescaped (`[.prettyPrinted, .sortedKeys]`).
 pub(crate) fn sorted_pretty(value: &Value) -> String {
     pretty_json(value)
-}
-
-fn expand_tilde(path: &str) -> std::path::PathBuf {
-    copper_core::platform::expand_tilde(path)
 }

@@ -1,9 +1,8 @@
-//! Screenshots as the agent gets them (`Tools.Page.screenshot`): one image
-//! pixel per view point (so a point read off the picture can be clicked),
-//! optionally cropped to an element, PNG or JPEG (quality 0.8).
-//!
-//! The engine paints at the device scale; this scales the picture down to
-//! view points and crops it. Plain RGBA arithmetic — no image framework.
+//! Pictures as the agent gets them: cropped out of what the engine painted
+//! and scaled to the size asked for (`screenshot.rs` decides which), PNG or
+//! JPEG (quality 0.8). Plain RGBA arithmetic — no image framework.
+
+use copper_engine::Bitmap;
 
 /// Decoded RGBA8 pixels.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -150,36 +149,111 @@ pub fn crop(img: &Rgba, x: f64, y: f64, w: f64, h: f64) -> Option<Rgba> {
     })
 }
 
-/// The agent's picture from the engine's PNG.
-///
-/// * `view_width` — the view's width in points; the picture is scaled so
-///   one pixel is one point (the device scale comes back out).
-/// * `rect` — crop to this box, in view points, after scaling.
-pub fn agent_picture(
-    png_bytes: &[u8],
-    view_width: f64,
-    rect: Option<(f64, f64, f64, f64)>,
-    jpeg: bool,
-) -> Result<Vec<u8>, String> {
-    let mut img = decode_png(png_bytes)?;
-    let mut touched = false;
-    if view_width >= 1.0 && (f64::from(img.width) - view_width).abs() >= 1.0 {
-        let factor = view_width / f64::from(img.width);
-        let h = (f64::from(img.height) * factor).round() as u32;
-        img = scale(&img, view_width.round() as u32, h);
-        touched = true;
-    }
-    if let Some((x, y, w, h)) = rect {
-        img = crop(&img, x, y, w, h).ok_or("the element is outside the view")?;
-        touched = true;
-    }
-    if jpeg {
-        encode_jpeg(&img)
-    } else if !touched {
-        // Re-encoding costs time; an untouched picture goes out as it came.
-        Ok(png_bytes.to_vec())
+/// One output pixel's source pixels along one axis, with their weights.
+type Taps = Vec<(usize, f32)>;
+
+/// Catmull-Rom: sharp, no ringing to speak of on text.
+fn cubic(x: f64) -> f64 {
+    let x = x.abs();
+    if x < 1.0 {
+        1.5 * x * x * x - 2.5 * x * x + 1.0
+    } else if x < 2.0 {
+        -0.5 * x * x * x + 2.5 * x * x - 4.0 * x + 2.0
     } else {
-        encode_png(&img)
+        0.0
+    }
+}
+
+/// The taps of `out` pixels covering source pixels `start .. start + len`
+/// (fractional) of a line `limit` pixels long. Shrinking (or 1:1) averages
+/// the source area each output pixel covers, so whole pixels copy exactly;
+/// enlarging interpolates with [`cubic`]. Past the edges, the edge pixel.
+fn taps(start: f64, len: f64, out: u32, limit: u32) -> Vec<Taps> {
+    let n = out.max(1);
+    let ratio = len / f64::from(n);
+    let last = i64::from(limit.max(1) - 1);
+    let at = |j: i64| j.clamp(0, last) as usize;
+    (0..n)
+        .map(|i| {
+            let a = start + f64::from(i) * ratio;
+            let b = a + ratio;
+            let mut taps: Vec<(usize, f64)> = Vec::new();
+            if ratio >= 1.0 - 1e-9 {
+                for j in (a.floor() as i64)..(b.ceil() as i64) {
+                    let cover = b.min(j as f64 + 1.0) - a.max(j as f64);
+                    if cover > 1e-9 {
+                        taps.push((at(j), cover));
+                    }
+                }
+            } else {
+                // The output pixel's centre, in source pixel-centre terms.
+                let c = a + ratio / 2.0 - 0.5;
+                let j0 = c.floor() as i64;
+                for j in j0 - 1..=j0 + 2 {
+                    taps.push((at(j), cubic(c - j as f64)));
+                }
+            }
+            let sum: f64 = taps.iter().map(|(_, w)| w).sum();
+            if taps.is_empty() || sum.abs() < 1e-12 {
+                return vec![(at(a.floor() as i64), 1.0)];
+            }
+            taps.into_iter()
+                .map(|(j, w)| (j, (w / sum) as f32))
+                .collect()
+        })
+        .collect()
+}
+
+/// The rectangle `src` = (x, y, width, height) of `bitmap`, in its pixels
+/// (fractions allowed), as an `out` = (width, height) picture: shrunk by
+/// area averaging (1:1 copies exactly), enlarged with Catmull-Rom. Slow for
+/// a big picture: run it off the UI thread.
+pub fn resample(bitmap: &Bitmap, src: (f64, f64, f64, f64), out: (u32, u32)) -> Rgba {
+    let (ow, oh) = (out.0.max(1), out.1.max(1));
+    let mut pixels = vec![0u8; ow as usize * oh as usize * 4];
+    if bitmap.width == 0 || bitmap.height == 0 {
+        return Rgba {
+            width: ow,
+            height: oh,
+            pixels,
+        };
+    }
+    let xs = taps(src.0, src.2, ow, bitmap.width);
+    let ys = taps(src.1, src.3, oh, bitmap.height);
+    let first = xs.iter().flatten().map(|(j, _)| *j).min().unwrap_or(0);
+    let end = xs.iter().flatten().map(|(j, _)| *j + 1).max().unwrap_or(1);
+    // One row of the needed columns, summed down the source rows.
+    let mut acc = vec![0f32; (end - first) * 4];
+    for (oy, row_taps) in ys.iter().enumerate() {
+        acc.fill(0.0);
+        for &(row, wy) in row_taps {
+            let Some(line) = bitmap.row(row as u32) else {
+                continue;
+            };
+            let line = &line[first * 4..end * 4];
+            for (a, &v) in acc.iter_mut().zip(line) {
+                *a += wy * f32::from(v);
+            }
+        }
+        let o = oy * ow as usize * 4;
+        for (ox, col_taps) in xs.iter().enumerate() {
+            let mut px = [0f32; 4];
+            for &(col, wx) in col_taps {
+                let p = (col - first) * 4;
+                for (c, v) in px.iter_mut().enumerate() {
+                    *v += wx * acc[p + c];
+                }
+            }
+            let at = o + ox * 4;
+            for (c, v) in px.iter().enumerate() {
+                pixels[at + c] = v.round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+    Rgba {
+        width: ow,
+        height: oh,
+        pixels,
     }
 }
 
@@ -200,20 +274,78 @@ mod tests {
         }
     }
 
+    fn bitmap(w: u32, h: u32, f: impl Fn(u32, u32) -> [u8; 4]) -> Bitmap {
+        let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                rgba.extend_from_slice(&f(x, y));
+            }
+        }
+        Bitmap {
+            width: w,
+            height: h,
+            stride: w as usize * 4,
+            rgba,
+        }
+    }
+
+    fn at(img: &Rgba, x: u32, y: u32) -> [u8; 4] {
+        let i = ((y * img.width + x) * 4) as usize;
+        img.pixels[i..i + 4].try_into().unwrap()
+    }
+
     #[test]
     fn round_trip_scale_crop() {
         let img = solid(8, 6, [10, 20, 30, 255]);
         let png = encode_png(&img).unwrap();
         assert_eq!(decode_png(&png).unwrap(), img);
-        let half = agent_picture(&png, 4.0, None, false).unwrap();
-        let half = decode_png(&half).unwrap();
+        let half = scale(&img, 4, 3);
         assert_eq!((half.width, half.height), (4, 3));
         assert_eq!(&half.pixels[..4], &[10, 20, 30, 255]);
-        let cut = agent_picture(&png, 8.0, Some((2.0, 1.0, 3.0, 2.0)), false).unwrap();
-        let cut = decode_png(&cut).unwrap();
+        let cut = crop(&img, 2.0, 1.0, 3.0, 2.0).unwrap();
         assert_eq!((cut.width, cut.height), (3, 2));
-        let jpeg = agent_picture(&png, 8.0, None, true).unwrap();
+        let jpeg = encode_jpeg(&img).unwrap();
         assert_eq!(&jpeg[..2], &[0xFF, 0xD8]);
         assert!(crop(&img, 20.0, 20.0, 2.0, 2.0).is_none());
+    }
+
+    #[test]
+    fn resample_copies_whole_pixels_exactly() {
+        let b = bitmap(10, 8, |x, y| [x as u8 * 10, y as u8 * 10, 7, 255]);
+        let r = resample(&b, (2.0, 3.0, 4.0, 2.0), (4, 2));
+        assert_eq!((r.width, r.height), (4, 2));
+        assert_eq!(at(&r, 0, 0), [20, 30, 7, 255]);
+        assert_eq!(at(&r, 3, 1), [50, 40, 7, 255]);
+    }
+
+    #[test]
+    fn resample_shrinks_by_area() {
+        // A 2x picture of a 2-wide red | blue split, shrunk to 1x.
+        let b = bitmap(4, 2, |x, _| {
+            if x < 2 {
+                [255, 0, 0, 255]
+            } else {
+                [0, 0, 255, 255]
+            }
+        });
+        let r = resample(&b, (0.0, 0.0, 4.0, 2.0), (2, 1));
+        assert_eq!(at(&r, 0, 0), [255, 0, 0, 255]);
+        assert_eq!(at(&r, 1, 0), [0, 0, 255, 255]);
+        // Half a pixel in: the left output pixel straddles the seam.
+        let r = resample(&b, (1.0, 0.0, 2.0, 2.0), (1, 1));
+        assert_eq!(at(&r, 0, 0), [128, 0, 128, 255]);
+    }
+
+    #[test]
+    fn resample_enlarges_smoothly() {
+        let b = bitmap(2, 1, |x, _| if x == 0 { [0; 4] } else { [255; 4] });
+        let r = resample(&b, (0.0, 0.0, 2.0, 1.0), (8, 4));
+        assert_eq!((r.width, r.height), (8, 4));
+        // Flat at the ends, a ramp in between.
+        assert_eq!(at(&r, 0, 0)[0], 0);
+        assert_eq!(at(&r, 7, 3)[0], 255);
+        let mid: Vec<u8> = (0..8).map(|x| at(&r, x, 1)[0]).collect();
+        assert!(mid.windows(2).all(|w| w[0] <= w[1]), "{mid:?}");
+        assert!(mid[3] > 40 && mid[4] < 215, "{mid:?}");
     }
 }

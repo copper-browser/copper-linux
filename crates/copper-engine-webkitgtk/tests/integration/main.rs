@@ -63,6 +63,7 @@ const CHECKS: &[&str] = &[
     "backstage-hold",
     "backstage-raf",
     "backstage-snapshot",
+    "backstage-capture",
     "trusted-click",
     "trusted-type",
     "enter-submits",

@@ -18,6 +18,7 @@
 
 mod backstage;
 mod caps;
+mod capture;
 mod convert;
 mod ghost;
 mod hands;

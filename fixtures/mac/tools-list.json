@@ -706,27 +706,65 @@
         "name": "browser_tabs"
       },
       {
-        "description": "Take a screenshot of the current page (PNG). Coordinates in the image are CSS pixels of the page.",
+        "description": "Screenshot of the page, or of part of it: an element (ref or selector) or a region; fullPage for the whole page. scale 2 or more gives an HD picture.",
         "inputSchema": {
           "properties": {
             "filename": {
-              "description": "Also save to this path",
+              "description": "Also save to this path (absolute or ~/…; a folder gets a new file name)",
+              "type": "string"
+            },
+            "frame": {
+              "description": "With selector: its frame (f2)",
               "type": "string"
             },
             "fullPage": {
-              "description": "Whole scrollable page rather than the viewport",
+              "description": "Whole scrollable page rather than the viewport; a region is then in the page's coordinates",
               "type": "boolean"
             },
+            "padding": {
+              "description": "CSS pixels of margin around the element or region (default 0)",
+              "type": "number"
+            },
             "reason": {
-              "description": "One short sentence on what you are doing and why — shown to the user watching the browser",
               "type": "string"
             },
             "ref": {
               "description": "Screenshot just this element",
               "type": "string"
             },
+            "region": {
+              "description": "A rectangle in CSS pixels from the viewport's top-left (the page's with fullPage)",
+              "properties": {
+                "height": {
+                  "type": "number"
+                },
+                "width": {
+                  "type": "number"
+                },
+                "x": {
+                  "type": "number"
+                },
+                "y": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "x",
+                "y",
+                "width",
+                "height"
+              ],
+              "type": "object"
+            },
+            "scale": {
+              "description": "Pixels per CSS pixel, 1 to 4 (default 1: the picture's coordinates are CSS pixels); 2 is HD",
+              "type": "number"
+            },
+            "selector": {
+              "description": "CSS selector of the element to screenshot, when you have no ref",
+              "type": "string"
+            },
             "tab": {
-              "description": "Tab id (or index) from browser_tabs list; omit for your own tab — the one you opened or selected — or else the user's current tab",
               "type": "string"
             },
             "type": {
@@ -738,7 +776,6 @@
               "type": "string"
             }
           },
-          "required": [],
           "type": "object"
         },
         "name": "browser_take_screenshot"

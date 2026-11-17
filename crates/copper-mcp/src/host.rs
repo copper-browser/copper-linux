@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use copper_core::cloud::CloudProvided;
 use copper_core::intelligence::IntelligenceKeys;
-use copper_engine::{Image, InputEvent, SnapshotRegion};
+use copper_engine::{Capture, CaptureRequest, InputEvent};
 use copper_pagejs::jev::Extras;
 use serde_json::{Map, Value};
 
@@ -112,8 +112,9 @@ pub trait Page: Clone + 'static {
         world: Option<&str>,
     ) -> impl Future<Output = Result<Value, String>>;
 
-    /// Paint the page into a PNG (the agent's screenshot).
-    fn snapshot(&self, region: SnapshotRegion) -> impl Future<Output = Result<Image, String>>;
+    /// Paint an area of the page at a scale, as raw pixels, for the
+    /// agent's screenshot (see `PageView::capture`).
+    fn capture(&self, request: CaptureRequest) -> impl Future<Output = Result<Capture, String>>;
 
     /// Deliver real input (see `PageView::input`).
     fn input(&self, event: InputEvent) -> impl Future<Output = Result<(), String>>;
@@ -122,7 +123,7 @@ pub trait Page: Clone + 'static {
     fn zoom(&self) -> f64;
 
     /// The view's size in logical pixels (its GTK allocation): CSS pixels
-    /// times the zoom. Screenshots come back at this size.
+    /// times the zoom. A scale-1 screenshot of the viewport has this size.
     fn view_size(&self) -> (f64, f64);
 
     /// Whether input can go in as real events (`Input.canPost`): the view is
@@ -370,8 +371,8 @@ impl<P: copper_engine::PageView + 'static> Page for EnginePage<P> {
         async move { future.await.map_err(engine_error) }
     }
 
-    fn snapshot(&self, region: SnapshotRegion) -> impl Future<Output = Result<Image, String>> {
-        let future = self.page.snapshot(region);
+    fn capture(&self, request: CaptureRequest) -> impl Future<Output = Result<Capture, String>> {
+        let future = self.page.capture(request);
         async move { future.await.map_err(engine_error) }
     }
 

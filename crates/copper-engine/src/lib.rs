@@ -52,10 +52,10 @@ pub use events::{
 pub use input::{InputEvent, Modifiers, MouseButton, Trust, TrustedInput};
 pub use paths::EnginePaths;
 pub use types::{
-    Bitmap, Cookie, DownloadId, FindOptions, Frames, Image, InjectionTime, PageId, PageOptions,
-    PermissionId, ProfileId, SameSite, SchemeBody, SchemeHandler, SchemeRequest, SchemeResponse,
-    ScriptId, SnapshotRegion, StyleLevel, StyleSheetId, UserScript, UserStyleSheet,
-    WebsiteDataKinds, World,
+    Bitmap, Capture, CaptureArea, CaptureRequest, Cookie, DownloadId, FindOptions, Frames, Image,
+    InjectionTime, PageId, PageOptions, PermissionId, ProfileId, SameSite, SchemeBody,
+    SchemeHandler, SchemeRequest, SchemeResponse, ScriptId, SnapshotRegion, StyleLevel,
+    StyleSheetId, UserScript, UserStyleSheet, ViewRect, WebsiteDataKinds, World,
 };
 
 /// JSON value returned by script evaluation and carried by script messages.
@@ -277,6 +277,16 @@ pub trait PageView: Clone + 'static {
     /// encoding on the main thread: for callers that crop, scale and encode
     /// on a worker. Needs the page to be mapped, like `snapshot(Visible)`.
     fn snapshot_bitmap(&self) -> LocalFuture<Result<Bitmap>>;
+    /// Paint an area of the page at `request.scale` picture pixels per view
+    /// pixel, for an agent's screenshot. Raw pixels, so the caller crops,
+    /// scales and encodes off the UI thread.
+    ///
+    /// Above the display's own scale an engine re-renders the page (sharp
+    /// text) where it can do so unseen; a page the user is looking at is
+    /// never resized or zoomed for it, and comes back at the display's
+    /// scale ([`Capture::scale`] says which). Viewport areas need the page
+    /// mapped or held by the [`Backstage`], like `snapshot(Visible)`.
+    fn capture(&self, request: CaptureRequest) -> LocalFuture<Result<Capture>>;
     /// Highlight matches of `query`, select the first; resolves to the number
     /// of matches (0 = not found, capped at `opts.max_matches`).
     fn find(&self, query: &str, opts: FindOptions) -> LocalFuture<Result<u32>>;

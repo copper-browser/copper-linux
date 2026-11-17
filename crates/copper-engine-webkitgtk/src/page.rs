@@ -5,12 +5,12 @@ use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
 use copper_engine::{
-    Bitmap, ConsoleLevel, ConsoleMessage, CrashReason, DownloadId, EngineError, EventSink,
-    EventStream, FindOptions, Frames, InjectionTime, InputEvent, JsonMap, JsonValue, LinkHover,
-    LoadState, LocalFuture, NewWindowHandler, NewWindowRequest, PageEvent, PageId, PageOptions,
-    PageView, PermissionId, PermissionKind, Profile, Result, ScriptId, Snapshot, SnapshotRegion,
-    StyleLevel, StyleSheetId, Trust, TrustedInput, UserScript, UserStyleSheet, WeakPage,
-    WebsiteDataKinds, WindowDisposition, World,
+    Bitmap, Capture, CaptureRequest, ConsoleLevel, ConsoleMessage, CrashReason, DownloadId,
+    EngineError, EventSink, EventStream, FindOptions, Frames, InjectionTime, InputEvent, JsonMap,
+    JsonValue, LinkHover, LoadState, LocalFuture, NewWindowHandler, NewWindowRequest, PageEvent,
+    PageId, PageOptions, PageView, PermissionId, PermissionKind, Profile, Result, ScriptId,
+    Snapshot, SnapshotRegion, StyleLevel, StyleSheetId, Trust, TrustedInput, UserScript,
+    UserStyleSheet, WeakPage, WebsiteDataKinds, WindowDisposition, World,
 };
 use glib::prelude::*;
 use webkit6::prelude::*;
@@ -1024,6 +1024,10 @@ impl PageView for WebKitPage {
     fn snapshot_bitmap(&self) -> LocalFuture<Result<Bitmap>> {
         let fut = self.snapshot_texture();
         Box::pin(async move { Ok(convert::texture_to_bitmap(&fut.await?)) })
+    }
+
+    fn capture(&self, request: CaptureRequest) -> LocalFuture<Result<Capture>> {
+        crate::capture::capture(self, request)
     }
 
     fn find(&self, query: &str, opts: FindOptions) -> LocalFuture<Result<u32>> {

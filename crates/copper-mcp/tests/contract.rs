@@ -10,7 +10,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use copper_core::intelligence::IntelligenceKeys;
-use copper_engine::{Image, InputEvent, SnapshotRegion};
+use copper_engine::{Bitmap, Capture, CaptureArea, CaptureRequest, InputEvent};
 use copper_mcp::client;
 use copper_mcp::config::Endpoint;
 use copper_mcp::host::{GroupInfo, Host, IntelligenceSource, Page, TabId, TabInfo};
@@ -63,6 +63,51 @@ fn invoked(body: &str) -> Option<(Script, Value)> {
     None
 }
 
+/// Where the fake page is scrolled to (CSS pixels; zoom 100 %).
+const SCROLL_Y: f64 = 1160.0;
+
+/// The colour of the fake page at a point: one per 100-px cell.
+fn cell(x: f64, y: f64) -> [u8; 4] {
+    [(x / 100.0) as u8 * 20, (y / 100.0) as u8 * 7, 50, 255]
+}
+
+/// The fake engine: a 1280 x 3200 page in a 1280 x 800 view, painted at
+/// most at scale 2 (so 3 is enlarged). A rectangle of the document comes
+/// back on its own, with its origin; anything else as a whole.
+fn paint(request: CaptureRequest) -> Capture {
+    let s = request.scale.min(2.0);
+    let (origin, size, top) = match request.area {
+        CaptureArea::Viewport | CaptureArea::ViewportRect(_) => {
+            ((0.0, 0.0), (1280.0, 800.0), SCROLL_Y)
+        }
+        CaptureArea::Document => ((0.0, 0.0), (1280.0, 3200.0), 0.0),
+        CaptureArea::DocumentRect(r) => (
+            (r.x.floor(), r.y.floor()),
+            (r.width.ceil() + 1.0, r.height.ceil() + 1.0),
+            0.0,
+        ),
+    };
+    let (w, h) = ((size.0 * s) as u32, (size.1 * s) as u32);
+    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+    for py in 0..h {
+        for px in 0..w {
+            let x = origin.0 + (f64::from(px) + 0.5) / s;
+            let y = top + origin.1 + (f64::from(py) + 0.5) / s;
+            rgba.extend_from_slice(&cell(x, y));
+        }
+    }
+    Capture {
+        bitmap: Bitmap {
+            width: w,
+            height: h,
+            stride: w as usize * 4,
+            rgba,
+        },
+        origin,
+        scale: s,
+    }
+}
+
 impl Page for FakePage {
     fn call_async(
         &self,
@@ -87,8 +132,17 @@ impl Page for FakePage {
                 Script::Rect => match args["target"].as_str() {
                     Some("ref:e1") => json!({"x": 10, "y": 20, "width": 100, "height": 30}),
                     Some("ref:e2") => json!({"x": 0, "y": 100, "width": 200, "height": 20}),
+                    // grid.html's boxes, from the viewport scrolled to SCROLL_Y.
+                    Some("css:#box-b") => {
+                        json!({"x": 400, "y": 1500.0 - SCROLL_Y, "width": 240, "height": 120})
+                    }
+                    Some("css:#tall") => {
+                        json!({"x": 700, "y": 400.0 - SCROLL_Y, "width": 120, "height": 1800})
+                    }
+                    Some("css:#flat") => json!({"x": 10, "y": 10, "width": 0, "height": 0}),
                     _ => json!({"error": "not found"}),
                 },
+                Script::Metrics => json!({"x": 0, "y": SCROLL_Y, "width": 1280, "height": 3200}),
                 Script::Focus | Script::SetValue | Script::Submit => json!("ok"),
                 Script::HasText => json!(true),
                 Script::Text => json!("Example Domain"),
@@ -118,8 +172,8 @@ impl Page for FakePage {
         }
     }
 
-    async fn snapshot(&self, _region: SnapshotRegion) -> Result<Image, String> {
-        Err("no pixels in the fake".to_string())
+    async fn capture(&self, request: CaptureRequest) -> Result<Capture, String> {
+        Ok(paint(request))
     }
 
     fn input(&self, event: InputEvent) -> impl Future<Output = Result<(), String>> {
@@ -389,6 +443,40 @@ async fn tool(port: u16, name: &str, arguments: Value) -> (String, bool) {
     (text, result["isError"].as_bool().unwrap())
 }
 
+/// A screenshot call: the picture (decoded), the text and isError.
+async fn picture(port: u16, arguments: Value) -> (Option<copper_mcp::shot::Rgba>, String, bool) {
+    let reply = rpc(
+        port,
+        9,
+        "tools/call",
+        json!({"name": "browser_take_screenshot", "arguments": arguments}),
+    )
+    .await;
+    let result = &reply["result"];
+    let content = result["content"].as_array().unwrap();
+    let image = content
+        .iter()
+        .find(|c| c["mimeType"] == "image/png")
+        .map(|c| {
+            use base64::Engine as _;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(c["data"].as_str().unwrap())
+                .unwrap();
+            copper_mcp::shot::decode_png(&bytes).unwrap()
+        });
+    let text = content
+        .iter()
+        .filter_map(|c| c["text"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    (image, text, result["isError"].as_bool().unwrap())
+}
+
+fn pixel(img: &copper_mcp::shot::Rgba, x: u32, y: u32) -> [u8; 4] {
+    let i = ((y * img.width + x) * 4) as usize;
+    img.pixels[i..i + 4].try_into().unwrap()
+}
+
 fn mac_tools() -> BTreeMap<String, Value> {
     let raw: Value = serde_json::from_str(copper_mcp::catalogue::MAC_TOOLS_LIST).unwrap();
     raw["result"]["tools"]
@@ -429,12 +517,14 @@ async fn tools_list_is_the_mac_catalogue_minus_voice() {
             // 36024 with canvas_read's paging options, 2026-10-16; 36366 with
             // the integrated Mac build's canvas_read text, jev_run/jev_step
             // kept at the options Linux implements; 37493 with their model,
-            // strategy and json, 2026-10-30 — vision is still left out).
+            // strategy and json, 2026-10-30 — vision is still left out;
+            // 38065 with browser_take_screenshot's selector, frame, region,
+            // padding and scale, 2026-11-17).
             let all: Vec<Value> = mac.values().cloned().collect();
             let wire = copper_pagejs::render::compact_json(
                 &json!({"jsonrpc": "2.0", "id": 2, "result": {"tools": all}}),
             );
-            assert_eq!(wire.len(), 37493);
+            assert_eq!(wire.len(), 38065);
         })
         .await;
 }
@@ -657,6 +747,109 @@ async fn scripted_session_tabs_navigate_snapshot_click_type() {
             let set = w.calls.iter().find(|c| c.1 == "page/set_value.js").unwrap();
             assert_eq!(set.2, json!({"target": "ref:e2", "text": "copper"}));
             assert!(w.calls.iter().all(|c| c.0 == "0000abc2"));
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn screenshots_of_any_part_at_any_scale() {
+    local()
+        .run_until(async {
+            let r = start(false);
+            let port = r.server.port;
+            let page = "### Page\n- URL: https://home.test/\n- Title: Home\n- Tab: 00000000";
+
+            // The old calls: the viewport, the whole page, an element.
+            let (img, text, error) = picture(port, json!({})).await;
+            assert!(!error, "{text}");
+            let img = img.unwrap();
+            assert_eq!((img.width, img.height), (1280, 800));
+            assert_eq!(text, format!("Screenshot 1280×800 PNG at scale 1 of the viewport. {page}"));
+            assert_eq!(pixel(&img, 150, 150), cell(150.0, SCROLL_Y + 150.0));
+            let (img, text, _) = picture(port, json!({"fullPage": true})).await;
+            let img = img.unwrap();
+            assert_eq!((img.width, img.height), (1280, 3200));
+            assert!(text.starts_with("Screenshot 1280×3200 PNG at scale 1 of the whole page. ### Page"), "{text}");
+            assert_eq!(pixel(&img, 520, 1560), cell(520.0, 1560.0));
+            let (img, text, _) = picture(port, json!({"ref": "e1"})).await;
+            assert_eq!(img.map(|i| (i.width, i.height)), Some((100, 30)));
+            assert!(text.starts_with("Screenshot 100×30 PNG at scale 1 of e1. "), "{text}");
+
+            // An element in view, padded, in HD: re-rendered at 2.
+            let (img, text, error) = picture(port, json!({"selector": "#box-b", "padding": 10, "scale": 2})).await;
+            assert!(!error, "{text}");
+            let img = img.unwrap();
+            assert_eq!((img.width, img.height), (520, 280));
+            assert_eq!(text, format!("Screenshot 520×280 PNG at scale 2 of #box-b. {page}"));
+            assert_eq!(pixel(&img, 260, 140), cell(520.0, 1560.0));
+            assert_eq!(pixel(&img, 1, 1), cell(390.0, 1490.0));
+
+            // Taller than the viewport: whole, from the page.
+            let (img, text, _) = picture(port, json!({"selector": "#tall"})).await;
+            let img = img.unwrap();
+            assert_eq!((img.width, img.height), (120, 1800), "{text}");
+            assert_eq!(pixel(&img, 60, 5), cell(760.0, 405.0));
+            assert_eq!(pixel(&img, 60, 1795), cell(760.0, 2195.0));
+
+            // A region of the page, and one past what the engine can paint.
+            let region = json!({"x": 0, "y": 2000, "width": 300, "height": 300});
+            let (img, text, _) = picture(port, json!({"fullPage": true, "region": region})).await;
+            let img = img.unwrap();
+            assert_eq!((img.width, img.height), (300, 300));
+            assert!(text.starts_with("Screenshot 300×300 PNG at scale 1 of the region 0,2000 300×300. "), "{text}");
+            assert_eq!(pixel(&img, 150, 150), cell(150.0, 2150.0));
+            let region = json!({"x": 40, "y": 360, "width": 600, "height": 80});
+            let (img, text, _) = picture(port, json!({"region": region, "scale": 3})).await;
+            assert_eq!(img.map(|i| (i.width, i.height)), Some((1800, 240)));
+            assert_eq!(
+                text,
+                format!("Screenshot 1800×240 PNG at scale 3 of the region 40,360 600×80. Upscaled: this page renders at most at scale 2 here. {page}")
+            );
+
+            // Saved into a folder, as JPEG.
+            let dir = tempfile::tempdir().unwrap();
+            let folder = dir.path().to_str().unwrap();
+            let (img, text, error) = picture(port, json!({"type": "jpeg", "filename": folder})).await;
+            assert!(!error && img.is_none(), "a JPEG: {text}");
+            let files: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().path()).collect();
+            assert_eq!(files.len(), 1);
+            let name = files[0].file_name().unwrap().to_str().unwrap().to_string();
+            assert!(name.starts_with("copper-") && name.ends_with(".jpg") && name.len() == 26, "{name}");
+            assert!(text.starts_with(&format!(
+                "Screenshot 1280×800 JPEG at scale 1 of the viewport. Saved to {}. ### Page",
+                files[0].display()
+            )), "{text}");
+            assert_eq!(&std::fs::read(&files[0]).unwrap()[..2], &[0xFF, 0xD8]);
+
+            // Saved in HD: the file has the picture, the answer scale 1.
+            let file = dir.path().join("hd").join("box-b.png");
+            let (img, text, _) = picture(
+                port,
+                json!({"selector": "#box-b", "scale": 2, "filename": file.to_str().unwrap()}),
+            )
+            .await;
+            assert_eq!(img.map(|i| (i.width, i.height)), Some((240, 120)));
+            assert!(text.starts_with(&format!(
+                "Screenshot 480×240 PNG at scale 2 of #box-b. Saved to {}. The image here is 240×120 at scale 1; the file has the full picture. ### Page",
+                file.display()
+            )), "{text}");
+            let saved = copper_mcp::shot::decode_png(&std::fs::read(&file).unwrap()).unwrap();
+            assert_eq!((saved.width, saved.height), (480, 240));
+            assert_eq!(pixel(&saved, 240, 120), cell(520.0, 1560.0));
+
+            // The errors.
+            for (arguments, want) in [
+                (json!({"ref": "e1", "region": {"x": 1, "y": 1, "width": 2, "height": 2}}), "give one of ref, selector or region"),
+                (json!({"region": {"x": 5000, "y": 5000, "width": 10, "height": 10}}), "the region is outside the viewport"),
+                (json!({"scale": 9}), "scale must be from 1 to 4"),
+                (json!({"selector": "#box-b", "padding": -1}), "padding must be 0 or more"),
+                (json!({"filename": "rel/x.png"}), "filename must be an absolute path or start with ~/"),
+                (json!({"selector": "#flat"}), "css:#flat has no size: there is nothing to picture"),
+            ] {
+                let (img, text, error) = picture(port, arguments.clone()).await;
+                assert!(error && img.is_none(), "{arguments}: {text}");
+                assert_eq!(text, want, "{arguments}");
+            }
         })
         .await;
 }

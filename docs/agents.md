@@ -105,7 +105,7 @@ tab again, and may sleep.
 | `browser_fill_form` | `[{ref, type, value}]` for textbox, checkbox, radio, combobox and slider. |
 | `browser_press_key` | `Enter`, `Escape`, `ArrowDown`, `Control+a`, `a` and so on, as real key events. |
 | `browser_hover`, `browser_drag`, `browser_select_option`, `browser_scroll` | Hover, drag, choose an option, scroll. |
-| `browser_take_screenshot` | PNG or JPEG at 1×, so image pixels are CSS pixels. `ref` shoots one element; `fullPage` the whole page. |
+| `browser_take_screenshot` | PNG or JPEG of the viewport, the whole page (`fullPage`), one element (`ref` or `selector`, whole even when taller than the window) or a `region` in CSS px, with `padding` round it, at `scale` 1–4 (2 is HD), saved to `filename` if you give one. See [Screenshots](#screenshots). |
 | `browser_evaluate` | Runs `function: "() => …"`, or `(element) => …` with a `ref`. |
 | `browser_wait_for` | Waits for `text`, for `textGone`, or for `time`. |
 | `browser_get_text`, `browser_find`, `browser_console_messages` | Read without a snapshot: page text, refs for text you name, console messages. |
@@ -116,6 +116,39 @@ tab again, and may sleep.
 | `browser_sign_in`, `browser_autofill` | Fill a saved sign-in, card, identity or custom field without the secret ever leaving Copper (below). |
 | `cloud_history_delete` | Deletes your history on Copper Cloud ([cloud.md](cloud.md)). History on this computer stays. Loopback clients only. |
 | `canvas_*` | Read and draw on your canvases: `canvas_list` (with the `invitations` waiting for your answer, `{canvas, from}`, when signed in to Copper Cloud), `canvas_open`, `canvas_read`, `canvas_apply`, `canvas_select`, `canvas_focus`, `canvas_create`, `canvas_invite`, `canvas_share_link`, `canvas_join`, `canvas_screenshot`, `canvas_chat`. A big canvas reads in pages: `canvas_read` with `overview` first, then `frame` or `region`, or follow `next` as `cursor`; `ids`, `types` and `query` narrow any read. A canvas that is closed, asleep or still loading is opened behind your tab and waited for (up to a minute for a huge one). |
+
+### Screenshots
+
+`browser_take_screenshot` pictures any part of a tab, in CSS pixels: at
+scale 1 a picture pixel is a CSS pixel, so a point read off it can be
+clicked. A `region` is measured from the viewport's top-left, or from the
+page's with `fullPage`. `scale` 2 or more draws the page again with that many
+pixels per CSS pixel, so text stays sharp; a picture is kept under 16384 px a
+side and 64 megapixels by lowering the scale, and the answer says so.
+`filename` may be a folder: the picture goes in as
+`copper-YYYYMMDD-HHMMSS.png` (`-2`, `-3`… for more in the same second). The
+answer starts with what was pictured:
+`Screenshot 840×440 PNG at scale 2 of the region 100,100 420×220.` The
+image in the answer is for the model to look at: when an HD picture went to
+a file it is the same area at scale 1, and it is never more than 8000 px on
+a side; a sentence says so when it differs from the picture
+(`The image here is 420×220 at scale 1; the file has the full picture.`).
+
+```sh
+copper shot ~/Desktop/card.png --selector '.pricing-card' --padding 12 --hd
+```
+
+WebKitGTK paints at the display's own scale, so for a sharper picture of an
+agent's background tab Copper lays that page out k times bigger at k times
+the zoom for the moment of the picture: the page keeps its CSS size and
+layout (it sees a few `resize` events) and its scroll position is put back.
+The tab on your screen is never resized for a picture: above the display's
+scale it is enlarged instead, and the answer ends with `Upscaled: this page
+renders at most at scale 1 here.` Measured on grid.html, 600×80 CSS px of
+13 px text at scale 3: the variance of the Laplacian is 4835 for the
+re-rendered picture against 398 for the scale-1 picture enlarged 3×
+(bicubic), 12 times the detail. `frame` is not supported yet: give a
+selector in the page itself, a ref or a region.
 
 Each tool takes an optional `reason`: one short sentence on what the agent is
 doing and why. Copper never acts on it; it only shows it to you. While an
@@ -273,6 +306,7 @@ copper run "find the March invoice and stop when it is visible"
 copper observe
 copper snapshot --interactive
 copper shot page.png
+copper shot ~/Desktop/card.png --selector '.pricing-card' --padding 12 --hd
 copper signin --otp
 copper call browser_navigate '{"url":"https://example.com"}'
 ```

@@ -299,12 +299,18 @@ pub fn words(tool: &str, args: &Map<String, Value>) -> (String, Option<String>) 
         }
         "browser_navigate_back" => "Going back".into(),
         "browser_navigate_forward" => "Going forward".into(),
-        "browser_take_screenshot" => if flag("fullPage") {
-            "Taking a full-page screenshot"
-        } else {
-            "Taking a screenshot"
+        // What is pictured: a region, an element, the page or the view.
+        "browser_take_screenshot" => {
+            if args.get("region").is_some_and(|r| !r.is_null()) {
+                "Taking a screenshot of a region".into()
+            } else if !named.is_empty() {
+                format!("Taking a screenshot of {named}")
+            } else if flag("fullPage") {
+                "Taking a full-page screenshot".into()
+            } else {
+                "Taking a screenshot".into()
+            }
         }
-        .into(),
         "browser_evaluate" => "Running a script in the page".into(),
         "browser_wait_for" => {
             if let Some(text) = arg_str(args, "text").filter(|t| !t.is_empty()) {
@@ -560,6 +566,23 @@ mod tests {
         assert_eq!(
             words("browser_wait_for", &m(json!({"time": 2}))).0,
             "Waiting 2 s"
+        );
+        assert_eq!(
+            words(
+                "browser_take_screenshot",
+                &m(json!({"selector": "#box-b", "scale": 2}))
+            )
+            .0,
+            "Taking a screenshot of '#box-b'"
+        );
+        let region = json!({"region": {"x": 1, "y": 2, "width": 3, "height": 4}});
+        assert_eq!(
+            words("browser_take_screenshot", &m(region)).0,
+            "Taking a screenshot of a region"
+        );
+        assert_eq!(
+            words("browser_take_screenshot", &m(json!({"fullPage": true}))).0,
+            "Taking a full-page screenshot"
         );
         assert_eq!(
             words("browser_mystery_tool", &m(json!({}))).0,

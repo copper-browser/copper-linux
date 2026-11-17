@@ -110,6 +110,23 @@ pub fn document_height() -> Call<f64> {
     Call::new(Script::DocumentHeight, json!({}))
 }
 
+/// Where the page is scrolled to and how big the document is, in CSS
+/// pixels (the document at least the viewport's size).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Metrics {
+    /// `scrollX`, `scrollY`.
+    pub x: f64,
+    pub y: f64,
+    /// The document's scrollable size.
+    pub width: f64,
+    pub height: f64,
+}
+
+/// [`Metrics`] for a screenshot of an element or a region.
+pub fn metrics() -> Call<Metrics> {
+    Call::new(Script::Metrics, json!({}))
+}
+
 /// DOM click. `button`: "left" | "right" | "middle".
 pub fn click(target: &Locator, double: bool, button: &str) -> Call<String> {
     Call::new(

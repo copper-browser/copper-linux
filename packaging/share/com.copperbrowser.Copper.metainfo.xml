@@ -51,6 +51,15 @@
   </requires>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.6.3" date="2026-11-17">
+      <description>
+        <p>Agents picture any part of a tab, in HD.</p>
+        <ul>
+          <li>browser_take_screenshot and copper shot take one element, a region or the whole page, with padding and a scale from 1 to 4 (copper shot --hd).</li>
+          <li>An element taller than the window comes out whole, and a folder given as the file gets a new name in it.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.6.2" date="2026-11-10">
       <description>
         <p>Sign in with Claude, and Google sign-ins fill in.</p>

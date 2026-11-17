@@ -113,6 +113,8 @@ scripts! {
     Rect = "page/rect.js", Call, Page, HELPER;
     /// Document height for a full-page screenshot, capped at 20000.
     DocumentHeight = "page/document_height.js", Call, Page, None;
+    /// Scroll position and document size, for a screenshot of part of the page.
+    Metrics = "page/metrics.js", Call, Page, None;
     /// DOM click (no real input available).
     Click = "page/click.js", Call, Page, HELPER;
     /// DOM hover.
