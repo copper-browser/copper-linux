@@ -5,6 +5,28 @@ release dates.
 
 ## Unreleased
 
+## 0.6.4 — 2026-11-17
+
+Agents never see a secret Copper filled.
+
+### Fixed
+
+- **A secret Copper filled never reads back out to an agent.** A password,
+  one-time code, card number or code, or vault field Copper put into a page
+  reads as `•••• (secret, hidden)` in everything an agent or a model is
+  handed: `browser_snapshot`, `browser_get_text`, `browser_find`,
+  `browser_evaluate`, console and network listings, Jev's and
+  `jev_extract`'s reads, screenshots (the boxes are masked for the picture
+  and put back after), errors, the agent pane and the driver timeline.
+  Password, code and card boxes read as the placeholder even when Copper
+  didn't fill them, and every secret Copper filled is also taken out of any
+  text the page copies it into, for as long as the tab lives and only in
+  memory (`copper-mcp` `secrets.rs`). `browser_sign_in` puts a password only
+  into a real, shown password box beside the account it belongs to: it
+  refuses a text box, a box holding another account, and a page that copies
+  the password elsewhere (every copy is emptied). As on the Mac
+  (copper-browser/Copper#188).
+
 ## 0.6.3 — 2026-11-17
 
 Agents picture any part of a tab, in HD.

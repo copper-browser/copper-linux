@@ -665,6 +665,8 @@ impl<U: FormsUi> Forms<U> {
             };
             let user = &row.credential.user;
             let mut name_only = false;
+            // Secret redaction: never read back out to an agent (copper_mcp::secrets).
+            copper_mcp::secrets::remember(&tab, &value);
             let filled = if code {
                 call(&page, &copper_pagejs::forms::fill_otp(&value))
                     .await
@@ -757,6 +759,7 @@ impl<U: FormsUi> Forms<U> {
                 shell.toast("Copper couldn't reach the vault");
                 return;
             };
+            super::mcp::remember_secret_values(&tab, &values);
             let filled = call(&page, &copper_pagejs::forms::fill_values(&values)).await;
             drop(values);
             f.lower_now(&tab);
@@ -813,6 +816,7 @@ impl<U: FormsUi> Forms<U> {
             .await
             .flatten();
             let Some(code) = code else { return };
+            copper_mcp::secrets::remember(&tab, &code);
             let filled = call(&page, &copper_pagejs::forms::fill_otp(&code)).await;
             drop(code);
             let Some(f) = weak.upgrade() else { return };

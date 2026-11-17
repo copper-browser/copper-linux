@@ -280,10 +280,13 @@ impl<H: Host> Mcp<H> {
         }
         let refusal = self.state.borrow_mut().drive.refusal(&caller.key);
         if let Some(text) = refusal {
-            self.host.drive(&DriveEvent::CallRefused {
-                who: caller.clone(),
-                tool: name.to_string(),
-            });
+            self.host.drive(
+                &DriveEvent::CallRefused {
+                    who: caller.clone(),
+                    tool: name.to_string(),
+                }
+                .scrubbed(),
+            );
             return (vec![Content::text(text)], true, None);
         }
         let ticket = if name == "jev_run" || name == "jev_step" {
@@ -291,22 +294,31 @@ impl<H: Host> Mcp<H> {
         } else {
             let ticket = self.state.borrow_mut().drive.ticket();
             let (title, detail) = drive::words(name, arguments);
-            self.host.drive(&DriveEvent::CallBegan {
-                ticket,
-                who: caller.clone(),
-                tool: name.to_string(),
-                title,
-                detail,
-                tab: landing.as_ref().map(|t| t.id.clone()),
-                behind: ctx.behind,
-            });
+            self.host.drive(
+                &DriveEvent::CallBegan {
+                    ticket,
+                    who: caller.clone(),
+                    tool: name.to_string(),
+                    title,
+                    detail,
+                    tab: landing.as_ref().map(|t| t.id.clone()),
+                    behind: ctx.behind,
+                }
+                .scrubbed(),
+            );
             Some(ticket)
         };
         let outcome = self.call_tool(name, arguments, &mut ctx).await;
+        // Secret redaction: the last thing before an answer leaves — no secret
+        // Copper filled reads as itself, whatever the page did with it.
         let (content, error) = match outcome {
-            Ok(content) => (content, None),
-            Err(f) => (vec![Content::Text(f.0.clone())], Some(f.0)),
+            Ok(content) => (crate::secrets::outgoing(content), None),
+            Err(f) => {
+                let said = crate::secrets::scrub(&f.0);
+                (vec![Content::Text(said.clone())], Some(said))
+            }
         };
+        ctx.summary = ctx.summary.as_deref().map(crate::secrets::scrub);
         if let Some(ticket) = ticket {
             let tab = self.peek(arguments, &ctx).map(|t| t.id);
             let summary = ctx.summary.clone().filter(|s| !s.trim().is_empty());
@@ -320,13 +332,16 @@ impl<H: Host> Mcp<H> {
             if let Some(summary) = summary {
                 o.result = Some(summary);
             }
-            self.host.drive(&DriveEvent::CallEnded {
-                ticket,
-                who: caller,
-                tool: name.to_string(),
-                outcome: o,
-                tab,
-            });
+            self.host.drive(
+                &DriveEvent::CallEnded {
+                    ticket,
+                    who: caller,
+                    tool: name.to_string(),
+                    outcome: o,
+                    tab,
+                }
+                .scrubbed(),
+            );
         }
         (content, error.is_some(), ctx.summary)
     }

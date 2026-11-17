@@ -550,6 +550,8 @@ impl<H: ChatHost> Inner<H> {
             context.push_str("\nVisible text (first 3000 chars):\n");
             context.extend(slice.chars().take(PAGE_TEXT_LIMIT));
         }
+        // Secret redaction: the page as the pane's model sees it never holds a secret Copper filled.
+        let context = copper_mcp::secrets::scrub(&context);
         format!("<page>\n{context}\n</page>\n\n{text}")
     }
 

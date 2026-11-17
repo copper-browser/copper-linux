@@ -106,13 +106,29 @@ function () {
     if (!text && el.title) text = el.title;
     return text.length > 120 ? text.slice(0, 117) + '…' : text;
   }
+  // Secret redaction: a box whose value is a secret — a password box, one
+  // whose autocomplete promises a password, a one-time code or a card's
+  // number or code, or one Copper filled with a secret (forms/relay.js keeps
+  // those in window.__copperSecretFields). Its value is never read out: it
+  // says SECRET (copper_mcp::secrets::PLACEHOLDER).
+  var SECRET = '\u2022\u2022\u2022\u2022 (secret, hidden)';
+  function secretField(el) {
+    if (!el || el.nodeType !== 1) return false;
+    try {
+      var w = el.ownerDocument && el.ownerDocument.defaultView, kept = w && w.__copperSecretFields;
+      if (kept && typeof kept.has === 'function' && kept.has(el)) return true;
+    } catch (e) {}
+    if (el.tagName === 'INPUT' && (String(el.type).toLowerCase() === 'password' || String(el.getAttribute('type') || '').toLowerCase() === 'password')) return true;
+    return /(^|\s)(current-password|new-password|one-time-code|cc-number|cc-csc)(\s|$)/i.test(el.getAttribute('autocomplete') || '');
+  }
   function attrs(el) {
     var out = [];
     var r = role(el);
     if (el.tagName === 'A' && el.href) out.push('/url: ' + el.getAttribute('href'));
     if (r === 'heading') out.push('[level=' + (el.getAttribute('aria-level') || el.tagName.slice(1)) + ']');
     if (r === 'checkbox' || r === 'radio' || r === 'switch') out.push('[checked=' + (el.checked || el.getAttribute('aria-checked') === 'true') + ']');
-    if ((r === 'textbox' || r === 'searchbox' || r === 'combobox') && el.value) out.push('[value=' + JSON.stringify(String(el.value).slice(0, 80)) + ']');
+    if ((r === 'textbox' || r === 'searchbox' || r === 'combobox') && el.value) out.push('[value=' + JSON.stringify(secretField(el) ? SECRET : String(el.value).slice(0, 80)) + ']');
+    else if (el.value && secretField(el)) out.push('[value=' + JSON.stringify(SECRET) + ']');
     if (el.disabled || el.getAttribute('aria-disabled') === 'true') out.push('[disabled]');
     if (el.getAttribute('aria-expanded')) out.push('[expanded=' + el.getAttribute('aria-expanded') + ']');
     if (el.getAttribute('aria-selected') === 'true') out.push('[selected]');
@@ -146,7 +162,8 @@ function () {
         var a = attrs(el); if (a) line += ' ' + a;
         if (!inter && r === 'text' && !landmark && lines.length && lines[lines.length - 1].endsWith(line.trim())) { /* skip duplicate */ } else { lines.push(line); count++; }
       }
-      var kids = el.shadowRoot ? Array.prototype.slice.call(el.shadowRoot.children) : [];
+      // A box's own inner tree is its value drawn as text; a secret box's is never walked.
+      var kids = el.shadowRoot && !secretField(el) ? Array.prototype.slice.call(el.shadowRoot.children) : [];
       kids = kids.concat(Array.prototype.slice.call(el.children));
       for (var k = 0; k < kids.length; k++) walk(kids[k], emit ? depth + 1 : depth);
     }
@@ -262,6 +279,7 @@ function () {
   function text(spec) {
     var el = spec ? find(spec) : (document.querySelector('main, article, [role=main]') || document.body);
     if (!el) return 'no element for ' + spec;
+    if (secretField(el)) return el.value ? SECRET : '';
     var t = (el.innerText || el.textContent || '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
     return t.length > 60000 ? t.slice(0, 60000) + '\n… (truncated)' : t;
   }

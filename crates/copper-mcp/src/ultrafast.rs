@@ -514,7 +514,8 @@ impl Session {
 
 impl<H: Host> Mcp<H> {
     fn trace(&self, event: DriveEvent) {
-        self.host.drive(&event);
+        // Secret redaction: the timeline never shows a secret Copper filled.
+        self.host.drive(&event.scrubbed());
     }
 
     fn phase(&self, kind: PhaseKind, title: impl Into<String>) -> u64 {
@@ -600,6 +601,10 @@ impl<H: Host> Mcp<H> {
         max_tokens: u32,
         model: Option<&str>,
     ) -> Result<Reply, Failure> {
+        // Secret redaction: what a model is asked about a page (jev_extract,
+        // Jev's typed values) never holds a secret Copper filled.
+        let (system, user) = (crate::secrets::scrub(system), crate::secrets::scrub(user));
+        let (system, user) = (system.as_str(), user.as_str());
         let chosen = intelligence::model(&eff.keys, model);
         if eff.keys.lane == Lane::Claude {
             let started = Instant::now();

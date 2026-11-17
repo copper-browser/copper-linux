@@ -31,6 +31,7 @@ pub fn main() {
         case!(forms_name_first),
         case!(forms_autofill),
         case!(forms_without_passkeys),
+        case!(secrets_structure_and_sign_in),
         case!(curtain_style_and_peek),
         case!(curtain_picker),
         case!(reader_mode),
@@ -930,6 +931,109 @@ async fn forms_without_passkeys(h: &H) -> Res {
         json!("undefined")
     );
     ensure_eq!(h.js("'PublicKeyCredential' in window").await?, json!(true));
+    Ok(())
+}
+
+// ------------------------------------------------------------------ secrets
+
+/// Secret redaction, the page's half (the scrubber is `copper_mcp::secrets`):
+/// after an agent's sign-in on a page that copies the password around, the
+/// structure rules keep every secret box's value out of the snapshot, the
+/// element text and Jev's table; the sign-in refuses a box held by another
+/// account, a password box not shown yet and a page that copies the password
+/// into another box, and leaves nothing behind when it does.
+async fn secrets_structure_and_sign_in(h: &H) -> Res {
+    const SECRET: &str = "Zq7/s3cr3t-ä\"&<x>%+";
+    const PLACEHOLDER: &str = "\u{2022}\u{2022}\u{2022}\u{2022} (secret, hidden)";
+    h.add_user_script(&forms::relay());
+    h.load("secrets.html").await?;
+    ensure_eq!(h.run(&page::console()).await?, "[]");
+    ensure_eq!(
+        h.run(&forms::sign_in("ann@login.test", SECRET)).await?,
+        Some("ok".to_string())
+    );
+    // The page did copy it: the scrubber's job, not the structure's.
+    ensure!(
+        h.js_str("document.getElementById('echo').textContent")
+            .await?
+            .contains(SECRET),
+        "the fixture did not echo"
+    );
+    let snapshot = h.run(&page::snapshot(None, false, 600)).await?;
+    let boxes: Vec<&str> = snapshot
+        .lines()
+        .filter(|l| {
+            l.contains("textbox \"Password\"")
+                || l.contains("textbox \"Code\"")
+                || l.contains("textbox \"Card number\"")
+                || l.contains("textbox \"Security code\"")
+        })
+        .collect();
+    ensure_eq!(boxes.len(), 4);
+    for line in &boxes {
+        ensure!(
+            line.contains(&format!("[value=\"{PLACEHOLDER}\"]")),
+            "no placeholder: {line}"
+        );
+    }
+    for value in ["602214", "4000056655665556", "913"] {
+        ensure!(
+            !snapshot.contains(value),
+            "snapshot shows a secret box's value"
+        );
+    }
+    for line in snapshot.lines().filter(|l| !l.contains("text \"Checking")) {
+        ensure!(
+            !line.contains(SECRET),
+            "snapshot shows the password outside the echo"
+        );
+    }
+    let pw = Locator::Css("#pw".into());
+    ensure_eq!(h.run(&page::text(Some(&pw))).await?, PLACEHOLDER);
+    let otp = Locator::Css("#otp".into());
+    ensure_eq!(h.run(&page::text(Some(&otp))).await?, PLACEHOLDER);
+    let obs = h.run(&jev::observe()).await?.ok_or("no observation")?;
+    let table = jev::table(&obs, 80, jev::Extras::default());
+    for value in [SECRET, "602214", "4000056655665556", "913"] {
+        ensure!(
+            !table.contains(value),
+            "Jev's table shows a secret box's value"
+        );
+    }
+    ensure!(
+        table.contains(PLACEHOLDER),
+        "Jev's table has no placeholder"
+    );
+
+    // Someone else's account in the account box: refused, nothing filled.
+    let other = "Yk2/an0ther-secret";
+    h.js("document.getElementById('pw').value=''; document.getElementById('email').value='someone.else@login.test'; true").await?;
+    ensure_eq!(
+        h.run(&forms::sign_in("ann@login.test", other)).await?,
+        Some("other-account".to_string())
+    );
+    let values = "[...document.querySelectorAll('input')].map(i => i.value).join('|')";
+    ensure!(
+        !h.js_str(values).await?.contains(other),
+        "filled for another account"
+    );
+    // A password box not shown yet (the account step first): refused.
+    h.js("document.getElementById('email').value=''; document.getElementById('pw').style.opacity='0'; true").await?;
+    ensure_eq!(
+        h.run(&forms::sign_in("ann@login.test", other)).await?,
+        Some("hidden-password".to_string())
+    );
+    ensure!(
+        !h.js_str(values).await?.contains(other),
+        "filled a hidden password box"
+    );
+    // A page that copies the password into another box: every copy emptied.
+    h.js("const p = document.getElementById('pw'); p.style.opacity=''; p.addEventListener('input', () => { if (p.value) document.getElementById('email').value = 'saw ' + p.value; }); document.getElementById('email').value=''; true").await?;
+    ensure_eq!(
+        h.run(&forms::sign_in("ann@login.test", other)).await?,
+        Some("echoed".to_string())
+    );
+    ensure!(!h.js_str(values).await?.contains(other), "a copy survived");
     Ok(())
 }
 

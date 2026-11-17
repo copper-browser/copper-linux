@@ -88,6 +88,33 @@ async fn submit<V: PageView>(page: &V) -> bool {
         .unwrap_or(false)
 }
 
+/// Secret redaction: the page's word on an agent's sign-in
+/// (`forms/sign_in.js`) as the agent's error, or `None` when the password
+/// went in. None says the password; each says nothing of it was left.
+pub fn sign_in_refusal(word: &str, account: &str) -> Option<String> {
+    Some(match word {
+        "ok" => return None,
+        "not-password" => "refused: the box the password would go into is not a password box, so nothing was filled. Go to the step of the sign-in that shows the password box, take a fresh browser_snapshot and call again".into(),
+        "hidden-password" => "refused: the page's password box is not shown yet (the sign-in asks for the account first), so nothing was filled. Enter the account and continue to the password step, take a fresh browser_snapshot and call again".into(),
+        "other-account" => format!("refused: the account box on the page holds a different account than {account}, so nothing was filled. Put {account} in the account box (or pass account: for the one on the page) and call again"),
+        "echoed" => "refused: the page copied the password out of its password box, so Copper emptied every copy and the box itself. Take a fresh browser_snapshot, check the account box holds the right account, then call again".into(),
+        _ => "sign-in fields not found on the page".into(),
+    })
+}
+
+/// The kinds of value an agent never reads back: a card's number and code,
+/// a password, a code, a social security number.
+pub const SECRET_KINDS: [&str; 5] = ["password", "otp", "cardNumber", "cardCode", "ssn"];
+
+/// Remember the secret ones of `values` for `tab` before they are filled.
+pub fn remember_secret_values(tab: &TabId, values: &BTreeMap<String, String>) {
+    for (kind, value) in values {
+        if SECRET_KINDS.contains(&kind.as_str()) {
+            copper_mcp::secrets::remember(tab, value);
+        }
+    }
+}
+
 pub async fn sign_in<U: FormsUi>(
     shell: Shell<U::Platform>,
     tab: TabId,
@@ -182,14 +209,21 @@ pub async fn sign_in<U: FormsUi>(
             .await
             .unwrap_or_else(|| Err("the vault did not answer".into()))
             .map_err(|e| locked_hint(&credential, e))?;
-        let filled = call(
+        // Secret redaction: remembered before the fill (an echo the page makes
+        // the moment it lands is scrubbed), and put only into a real, shown
+        // password box beside this account, only while it stays there.
+        copper_mcp::secrets::remember(&tab, &secret);
+        let word = call(
             &page,
-            &copper_pagejs::forms::fill_login(&credential.user, &secret),
+            &copper_pagejs::forms::sign_in(&credential.user, &secret),
         )
-        .await;
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "no-fields".into());
         drop(secret);
-        if filled.ok().flatten() != Some(true) {
-            return Err("sign-in fields not found on the page".into());
+        if let Some(refusal) = sign_in_refusal(&word, &credential.user) {
+            return Err(refusal);
         }
         let submitted = if wants_submit {
             submit(&page).await
@@ -227,6 +261,7 @@ pub async fn sign_in<U: FormsUi>(
         .await
         .unwrap_or_else(|| Err("the vault did not answer".into()))
         .map_err(|e| locked_hint(&credential, e))?;
+    copper_mcp::secrets::remember(&tab, &code);
     let filled = call(&page, &copper_pagejs::forms::fill_otp(&code)).await;
     drop(code);
     if filled.ok().flatten() != Some(true) {
@@ -468,14 +503,13 @@ pub async fn autofill<P: Platform>(
             {
                 return Err("no card fields on the page".into());
             }
-            let filled = call(
-                &page,
-                &copper_pagejs::forms::fill_values(&card_values(&card)),
-            )
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or(0);
+            let values = card_values(&card);
+            remember_secret_values(&tab, &values);
+            let filled = call(&page, &copper_pagejs::forms::fill_values(&values))
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or(0);
             let submitted = if should_submit {
                 submit(&page).await
             } else {
@@ -544,14 +578,13 @@ pub async fn autofill<P: Platform>(
             {
                 return Err("no identity fields on the page".into());
             }
-            let filled = call(
-                &page,
-                &copper_pagejs::forms::fill_values(&identity_values(&who)),
-            )
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or(0);
+            let values = identity_values(&who);
+            remember_secret_values(&tab, &values);
+            let filled = call(&page, &copper_pagejs::forms::fill_values(&values))
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or(0);
             let submitted = if should_submit {
                 submit(&page).await
             } else {
@@ -584,13 +617,19 @@ pub async fn autofill<P: Platform>(
                     "field exists but is not shared with agents — enable it in Settings › Passwords › Agent access".into()
                 });
             };
-            let filled = call(&page, &copper_pagejs::forms::fill_field(&name, &value))
-                .await
-                .ok()
-                .flatten()
-                .unwrap_or(false);
+            // A vault field may be hidden (a PIN, a key) and the vault does not
+            // say here: every one an agent fills is treated as a secret.
+            copper_mcp::secrets::remember(&tab, &value);
+            let filled = call(
+                &page,
+                &copper_pagejs::forms::fill_field_secret(&name, &value),
+            )
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(false);
             if !filled {
-                let focused = call(&page, &copper_pagejs::forms::fill_focused(&value))
+                let focused = call(&page, &copper_pagejs::forms::fill_focused_secret(&value))
                     .await
                     .ok()
                     .flatten()

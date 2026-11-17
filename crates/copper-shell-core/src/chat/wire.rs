@@ -290,6 +290,20 @@ fn cache_refused(data: &[u8]) -> bool {
     text.contains("prompt caching") || text.contains("cache_control") || text.contains("cachepoint")
 }
 
+/// Secret redaction: every turn sent to the pane's model — page context,
+/// Copper's tool answers, other servers' — with no secret Copper filled.
+pub(crate) fn scrubbed(history: &[Message]) -> Vec<Message> {
+    history
+        .iter()
+        .map(
+            |m| match copper_mcp::secrets::scrub_value(&Value::Object(m.clone())) {
+                Value::Object(clean) => clean,
+                _ => m.clone(),
+            },
+        )
+        .collect()
+}
+
 /// One turn: the conversation, the tools, the router's answer.
 pub async fn complete(
     net: &Net,
@@ -298,6 +312,7 @@ pub async fn complete(
     history: &[Message],
     tools: &[Value],
 ) -> Result<Reply, Failure> {
+    let history = &scrubbed(history);
     let url =
         endpoint(&keys.router_url).ok_or_else(|| Failure::Text("Bad router address".into()))?;
     let mut limit = OUTPUT_LIMIT;
@@ -338,7 +353,7 @@ pub async fn complete_claude(
     history: &[Message],
     tools: &[Value],
 ) -> Result<Reply, Failure> {
-    let chat: Vec<Value> = history.iter().cloned().map(Value::Object).collect();
+    let chat: Vec<Value> = scrubbed(history).into_iter().map(Value::Object).collect();
     let payload = account
         .complete(
             model,

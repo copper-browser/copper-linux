@@ -75,6 +75,28 @@ pub(crate) async fn cosmetic<P: Page, T>(page: &P, call: &Call<T>) {
         .await;
 }
 
+/// Mask (or, `on: false`, unmask) what shows `tab`'s secrets as plain text
+/// in its page, for a picture ([`crate::secrets::MASK_SCRIPT`]). Answers how
+/// many things were masked; 0 when the tab holds no secret.
+pub(crate) async fn mask_secrets<P: Page>(page: &P, tab: &TabId, on: bool) -> u64 {
+    let held = crate::secrets::held(tab);
+    if held.is_empty() {
+        return 0;
+    }
+    let function = format!(
+        "() => ({})({{ masking: {on}, secrets: {} }})",
+        crate::secrets::MASK_SCRIPT,
+        serde_json::to_string(&held).unwrap_or_else(|_| "[]".into())
+    );
+    match js_value(page, &pj::evaluate(&function, None)).await {
+        Ok(v) => v
+            .as_u64()
+            .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+            .unwrap_or(0),
+        Err(_) => 0,
+    }
+}
+
 pub(crate) fn arg_str<'a>(args: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
     args.get(key).and_then(Value::as_str)
 }
@@ -596,13 +618,19 @@ impl<H: Host> Mcp<H> {
         let label = target.as_ref().map(Locator::script).unwrap_or_default();
         let plan = screenshot::plan(&ask, &geometry, element, &label).map_err(Failure)?;
         let first = screenshot::fit(plan.rect.width, plan.rect.height, ask.scale);
+        // Secret redaction: a picture can't be scrubbed after it is taken, so
+        // what shows a secret Copper filled is masked for the capture.
+        let masked = mask_secrets(page, id, true).await;
         let captured = page
             .capture(CaptureRequest {
                 area: plan.area(zoom),
                 scale: first.scale / zoom,
             })
-            .await
-            .map_err(Failure)?;
+            .await;
+        if masked > 0 {
+            mask_secrets(page, id, false).await;
+        }
+        let captured = captured.map_err(Failure)?;
         // Picture pixels per CSS pixel the engine painted at.
         let mut painted = captured.scale * zoom;
         if !(painted.is_finite() && painted > 0.0) || captured.bitmap.width == 0 {

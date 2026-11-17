@@ -39,6 +39,9 @@ struct World {
     jev_endpoint: Option<String>,
     /// Where `copper/intelligence` keeps its files, when the test gives one.
     store: Option<copper_core::Store>,
+    /// Secret redaction: a page that copies this secret into everything it
+    /// says (snapshot, text, find, console, evaluate, Jev's read, errors).
+    leak: Option<String>,
 }
 
 #[derive(Clone)]
@@ -108,6 +111,52 @@ fn paint(request: CaptureRequest) -> Capture {
     }
 }
 
+/// What a page that copies `secret` everywhere answers, raw, JSON-escaped and
+/// URL-encoded — before Copper's exit takes it out. `None`: not a read.
+fn leaky_answer(body: &str, script: Option<Script>, secret: &str) -> Option<Result<Value, String>> {
+    let json = serde_json::to_string(secret).unwrap();
+    let url: String = secret
+        .bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || b"-_.!~*'()".contains(&b) {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect();
+    if body.contains("throw") {
+        return Some(Err(format!("JavaScript: Error: wrong password {secret}")));
+    }
+    if body.contains("window.leak") {
+        return Some(Ok(
+            json!({ "password": secret, "url": format!("https://login.test/collect?pw={url}") }),
+        ));
+    }
+    Some(Ok(match script? {
+        Script::Snapshot => json!(format!(
+            "- textbox \"Password\" [ref=e2] [value={json}]\n- text \"Checking {secret}\" [ref=e3]"
+        )),
+        Script::Text => json!(format!("Checking {secret}")),
+        Script::FindText => json!(format!("- text \"Checking {secret}\" [ref=e3]")),
+        Script::Console => json!(
+            json!([
+                { "level": "log", "text": format!("typed password {secret}") },
+                { "level": "log", "text": json!({ "password": secret }).to_string() },
+            ])
+            .to_string()
+        ),
+        Script::JevObserve => json!({
+            "url": format!("https://login.test/?pw={url}"), "title": "Sign in", "w": 1280, "h": 800,
+            "text": format!("Checking {secret}"), "scroll": {"y": 0, "height": 800},
+            "actions": [{"id": "a1", "kind": "fill", "label": format!("Email {secret}"), "node": 1, "value": secret,
+                         "role": "textbox", "rect": {"x": 10, "y": 20, "w": 100, "h": 30}}],
+            "marker": "m1", "page_key": "k", "guards": {"1": "g"}, "omitted_actions": 0,
+        }),
+        _ => return None,
+    }))
+}
+
 impl Page for FakePage {
     fn call_async(
         &self,
@@ -117,7 +166,15 @@ impl Page for FakePage {
         let found = invoked(body);
         let world = self.world.clone();
         let tab = self.tab.clone();
+        let leaky = world
+            .borrow()
+            .leak
+            .clone()
+            .map(|secret| leaky_answer(body, found.as_ref().map(|f| f.0), &secret));
         async move {
+            if let Some(Some(answer)) = leaky {
+                return answer;
+            }
             let Some((script, args)) = found else {
                 return Err("JavaScript: unknown script".to_string());
             };
@@ -1285,6 +1342,60 @@ async fn jev_run_takes_a_strategy_a_model_and_answers_json() {
             let (_, first) = received.recv().unwrap();
             assert_eq!(first["model"], "jev-1.14.0");
             assert_eq!(first["state"]["recent_actions"], json!([]));
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn no_answer_holds_a_secret_copper_filled() {
+    // Secret redaction: browser_sign_in remembered the password for the tab;
+    // the page then copies it everywhere. Every read answer, the errors, and
+    // Jev's table leave Copper with the placeholder instead; closing the tab
+    // forgets it.
+    local()
+        .run_until(async {
+            let r = start(true);
+            let port = r.server.port;
+            let secret = "Zq7/c0ntract-s3cr3t \"&%+";
+            let tab = r.host.active_tab().unwrap();
+            copper_mcp::secrets::remember(&tab, secret);
+            r.host.0.borrow_mut().leak = Some(secret.into());
+            let mut answers = Vec::new();
+            for (name, args) in [
+                ("browser_snapshot", json!({})),
+                ("browser_get_text", json!({})),
+                ("browser_find", json!({"text": "Checking"})),
+                ("browser_console_messages", json!({})),
+                ("browser_evaluate", json!({"function": "() => window.leak"})),
+                (
+                    "browser_evaluate",
+                    json!({"function": "() => { throw new Error(window.leak) }"}),
+                ),
+                ("jev_observe", json!({})),
+            ] {
+                let (text, _) = tool(port, name, args).await;
+                answers.push((name, text));
+            }
+            for (name, text) in &answers {
+                assert!(
+                    !text.contains("c0ntract-s3cr3t"),
+                    "{name} leaked the secret"
+                );
+            }
+            for (name, text) in &answers[..6] {
+                assert!(
+                    text.contains(copper_mcp::secrets::PLACEHOLDER),
+                    "{name}: {text}"
+                );
+            }
+            r.host.0.borrow_mut().leak = None;
+            let (closed, error) = tool(port, "browser_close", json!({})).await;
+            assert!(!error, "{closed}");
+            assert_eq!(
+                copper_mcp::secrets::count(&tab),
+                0,
+                "the secret outlived its tab"
+            );
         })
         .await;
 }

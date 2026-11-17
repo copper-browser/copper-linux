@@ -8,6 +8,18 @@
     const id=cache.ids.get(e); cache.nodes.set(id,e); return id;
   };
   const safe = e => !['password','file','hidden'].includes(e.type);
+  // Secret redaction: a box whose value is a secret (a password box, an
+  // autocomplete that promises a password, a code or a card's number or code,
+  // or one Copper filled with a secret: window.__copperSecretFields) reads as
+  // SECRET, never as itself.
+  const SECRET='\u2022\u2022\u2022\u2022 (secret, hidden)';
+  const secret = e => { try {
+    const kept=e?.ownerDocument?.defaultView?.__copperSecretFields;
+    if (kept && typeof kept.has==='function' && kept.has(e)) return true;
+    if (e?.tagName==='INPUT' && String(e.getAttribute('type')||'').toLowerCase()==='password') return true;
+    return /(^|\s)(current-password|new-password|one-time-code|cc-number|cc-csc)(\s|$)/i.test(e?.getAttribute?.('autocomplete')||'');
+  } catch (_) { return false; } };
+  const valueOf = e => secret(e) && e.value ? SECRET+'#'+String(e.value).length : e.value;
   const visible = e => !e.closest('[aria-hidden="true"],[inert]') &&
     e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true});
   const name = (e,seen=new Set()) => {
@@ -43,12 +55,12 @@
     return null;
   };
   const formState = () => [...document.querySelectorAll('input,textarea,select')].filter(safe)
-    .map(e=>[identity(e),e.value,e.checked,e.selectedIndex,e.disabled,e.readOnly]);
+    .map(e=>[identity(e),valueOf(e),e.checked,e.selectedIndex,e.disabled,e.readOnly]);
   cache.pageKey=()=>JSON.stringify([performance.timeOrigin,location.href,scrollX,scrollY,innerWidth,innerHeight,formState()]);
   cache.guard=e=>{
     if (!e?.isConnected || !visible(e)) return null;
     const scope=e.closest('form,dialog,[role="dialog"],article,li,tr,[role="row"]') || e.parentElement;
-    return JSON.stringify([identity(e),role(e),name(e),e.value??null,e.checked??null,e.selectedIndex??null,
+    return JSON.stringify([identity(e),role(e),name(e),valueOf(e)??null,e.checked??null,e.selectedIndex??null,
       e.readOnly??null,e.matches(':disabled'),e.getAttribute('aria-disabled'),
       e.getAttribute('aria-expanded'),e.getAttribute('aria-checked'),e.getAttribute('aria-selected'),
       e.getAttribute('href'),scope?.innerText?.slice(0,6000)||'']);
@@ -77,7 +89,7 @@
         const editable=!e.readOnly && e.getAttribute('aria-readonly')!=='true' &&
           (['textbox','searchbox','spinbutton'].includes(rname) ||
             (rname==='combobox' && ['INPUT','TEXTAREA'].includes(e.tagName)));
-        const value='value' in e ? String(e.value) :
+        const value='value' in e ? (secret(e) && e.value ? SECRET : String(e.value)) :
           e.isContentEditable || rname==='combobox' ? e.innerText.trim() : '';
         actions.push({...base,kind:editable?'fill':'click',value});
         if (editable) actions.push({...base,kind:'click',value,label:'Open '+base.label});

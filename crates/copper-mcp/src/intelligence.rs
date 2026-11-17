@@ -629,6 +629,17 @@ pub fn parse_answer(body: &[u8], latency_ms: f64) -> Result<Answer, JevFailure> 
 }
 
 /// One System One call with a hard budget.
+/// What Jev is sent about a page. Secret redaction: the page Jev is shown —
+/// its text, its fields' values, the recent actions — never holds a secret
+/// Copper filled ([`crate::secrets`]).
+pub fn jev_body(model: &str, state: &Value, questions: &Value) -> Value {
+    json!({
+        "model": model,
+        "state": crate::secrets::scrub_value(state),
+        "questions": crate::secrets::scrub_value(questions),
+    })
+}
+
 pub async fn jev_ask(
     net: &Net,
     keys: &Keys,
@@ -648,7 +659,7 @@ pub async fn jev_ask(
             detail: keys.jev_endpoint.clone(),
         });
     }
-    let body = json!({ "model": keys.jev_model, "state": state, "questions": questions });
+    let body = jev_body(&keys.jev_model, state, questions);
     let started = Instant::now();
     let (status, data) = net
         .post(

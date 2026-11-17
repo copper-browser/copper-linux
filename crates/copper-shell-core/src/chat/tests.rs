@@ -832,3 +832,33 @@ fn models_and_outside_drivers() {
         assert!(card.get("busy").is_none());
     });
 }
+
+#[test]
+fn the_model_never_sees_a_secret_copper_filled() {
+    // Secret redaction: page context, Copper's tool answers and other servers'
+    // answers go to the pane's model with the secret as the placeholder.
+    let tab = copper_core::TabId(format!("chat-secret-{}", uuid::Uuid::new_v4()));
+    let secret = "Zq7/pane-s3cr3t \"&%+";
+    copper_mcp::secrets::remember(&tab, secret);
+    let encoded: String = secret
+        .bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || b"-_.!~*'()".contains(&b) {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect();
+    let history: Vec<super::history::Message> = vec![
+        serde_json::from_value(json!({"role": "user", "content": format!("<page>\nVisible text: Checking {secret}\n</page>\n\nSign me in")})).unwrap(),
+        serde_json::from_value(json!({"role": "tool", "tool_call_id": "c1", "content": [{"type": "text", "text": format!("console: {} url ?pw={encoded}", serde_json::to_string(secret).unwrap())}]})).unwrap(),
+    ];
+    let sent = serde_json::to_string(&wire::scrubbed(&history)).unwrap();
+    copper_mcp::secrets::forget(&tab);
+    assert!(
+        !sent.contains("pane-s3cr3t"),
+        "the model would see the secret"
+    );
+    assert!(sent.contains(copper_mcp::secrets::PLACEHOLDER));
+}

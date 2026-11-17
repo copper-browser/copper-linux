@@ -194,6 +194,8 @@ scripts! {
     WithoutPasskeys = "forms/without_passkeys.js", UserScript(DocumentStart, AllFrames), Page, None;
     /// Fill the sign-in pair.
     FormsFillLogin = "forms/fill_login.js", Call, Page, None;
+    /// An agent's sign-in (secret redaction): only into a real, shown password box beside its account; 'ok' or why not.
+    FormsSignIn = "forms/sign_in.js", Call, Page, None;
     /// Fill the name alone on a sign-in that asks for it first.
     FormsFillName = "forms/fill_name.js", Call, Page, None;
     /// Submit the sign-in.

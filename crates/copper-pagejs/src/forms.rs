@@ -34,6 +34,18 @@ pub fn fill_login(user: &str, password: &str) -> Call<Option<bool>> {
     )
 }
 
+/// An agent's sign-in: the password only into a real, shown password box,
+/// beside the account it belongs to, and only while it stays there. Answers
+/// `"ok"` or why nothing was left on the page: `"no-fields"`,
+/// `"not-password"`, `"hidden-password"`, `"other-account"`, `"echoed"`.
+/// `None` when the relay is not on the page.
+pub fn sign_in(user: &str, password: &str) -> Call<Option<String>> {
+    Call::new(
+        Script::FormsSignIn,
+        json!({ "user": user, "password": password }),
+    )
+}
+
 /// The name step of a sign-in that asks for the name first: no password box
 /// on the page, so `user` goes into its name box alone. `Some(false)` when
 /// there is a password box (use [`fill_login`]) or no name box.
@@ -57,14 +69,35 @@ pub fn fill_values(values: &BTreeMap<String, String>) -> Call<Option<u32>> {
 }
 
 pub fn fill_focused(value: &str) -> Call<Option<bool>> {
-    Call::new(Script::FormsFillFocused, json!({ "value": value }))
+    Call::new(
+        Script::FormsFillFocused,
+        json!({ "value": value, "secret": false }),
+    )
+}
+
+/// [`fill_focused`] with a secret: the box is marked so agent reads print its
+/// value as the placeholder.
+pub fn fill_focused_secret(value: &str) -> Call<Option<bool>> {
+    Call::new(
+        Script::FormsFillFocused,
+        json!({ "value": value, "secret": true }),
+    )
 }
 
 /// Fill the box whose label matches `label` (custom vault fields).
 pub fn fill_field(label: &str, value: &str) -> Call<Option<bool>> {
     Call::new(
         Script::FormsFillField,
-        json!({ "label": label, "value": value }),
+        json!({ "label": label, "value": value, "secret": false }),
+    )
+}
+
+/// [`fill_field`] with a secret: the box is marked so agent reads print its
+/// value as the placeholder.
+pub fn fill_field_secret(label: &str, value: &str) -> Call<Option<bool>> {
+    Call::new(
+        Script::FormsFillField,
+        json!({ "label": label, "value": value, "secret": true }),
     )
 }
 

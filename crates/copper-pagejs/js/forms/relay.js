@@ -24,6 +24,55 @@ function () {
     return { user: user, pass: pass };
   }
 
+  // Secret redaction: the boxes Copper put a secret into — a password, a
+  // one-time code, a new password, a card's number or code, a hidden vault
+  // field. The agent's page readers (page/helper.js, jev/fast.js) print such
+  // a box's value as a placeholder, never as itself.
+  var secretFields = window.__copperSecretFields || (window.__copperSecretFields = new WeakSet());
+  var secretKinds = { password: 1, otp: 1, cardNumber: 1, cardCode: 1, ssn: 1 };
+  function hide(box) { try { if (box) secretFields.add(box); } catch (e) {} }
+
+  // The same account, however the page wrote it: "Ann@x.com " is ann@x.com,
+  // and a box holding only the name before the @ holds that account too.
+  function sameAccount(held, user) {
+    var a = String(held || '').trim().toLowerCase(), b = String(user || '').trim().toLowerCase();
+    if (!a || !b || a === b) return true;
+    return a.indexOf('@') < 0 && b.split('@')[0] === a;
+  }
+
+  // An agent's sign-in (copper_shell_core::forms::mcp::sign_in). The
+  // password goes only into a real, shown password box, only beside the
+  // account it belongs to, and stays only there. Answers 'ok' or why nothing
+  // was left on the page: 'no-fields', 'not-password', 'hidden-password'
+  // (not shown yet: the sign-in asks for the account first), 'other-account'
+  // (the account box holds someone else), 'echoed' (the page copied it into
+  // another box or turned its box to text: every copy, and the box, emptied).
+  function signIn(user, password) {
+    var both = pair();
+    if (!both) return 'no-fields';
+    var box = both.pass;
+    function isPassword(el) {
+      return !!el && (el.tagName || '').toLowerCase() === 'input' &&
+        String(el.type).toLowerCase() === 'password' &&
+        String(el.getAttribute('type') || '').toLowerCase() === 'password';
+    }
+    if (!isPassword(box)) return 'not-password';
+    if (!visible(box) || (box.closest && box.closest('[aria-hidden="true"],[inert]'))) return 'hidden-password';
+    if (both.user && both.user.value && !sameAccount(both.user.value, user)) return 'other-account';
+    if (both.user && !both.user.value) put(both.user, user);
+    hide(box);
+    put(box, password);
+    var echoed = !isPassword(box);
+    var all = document.querySelectorAll('input, textarea');
+    for (var i = 0; i < all.length; i++) {
+      var el = all[i], type = String(el.type).toLowerCase();
+      if (el === box || type === 'password' || type === 'hidden') continue;
+      if (el.value && password && password.length >= 4 && String(el.value).indexOf(password) >= 0) { put(el, ''); echoed = true; }
+    }
+    if (echoed) { put(box, ''); return 'echoed'; }
+    return 'ok';
+  }
+
   function put(box, value) {
     if (!box) return;
     var tag = (box.tagName || '').toLowerCase();
@@ -501,6 +550,7 @@ function () {
         if (choice == null) continue;
         put(box, choice);
       } else {
+        if (secretKinds[info.kind]) hide(box);
         put(box, wanted);
       }
       filled++;
@@ -508,9 +558,10 @@ function () {
     return filled;
   }
 
-  function fillFocused(value) {
+  function fillFocused(value, secret) {
     var active = document.activeElement;
     if (!active || ['input', 'select', 'textarea'].indexOf((active.tagName || '').toLowerCase()) < 0) return false;
+    if (secret) hide(active);
     put(active, value);
     return true;
   }
@@ -519,7 +570,7 @@ function () {
     return String(value || '').toLowerCase().replace(/[\s\-_:*]/g, '');
   }
 
-  function fillField(label, value) {
+  function fillField(label, value, secret) {
     var wanted = normalised(label);
     if (!wanted) return false;
     var controls = document.querySelectorAll('input, select, textarea');
@@ -534,6 +585,7 @@ function () {
           if (choice == null) continue;
           put(controls[i], choice);
         } else {
+          if (secret || secretKinds[info.kind]) hide(controls[i]);
           put(controls[i], info.kind === 'cardExp' ? expiryValue(value, controls[i]) : value);
         }
         return true;
@@ -571,9 +623,11 @@ function () {
       var both = pair();
       if (!both) return false;
       if (both.user && !both.user.value) put(both.user, user);
+      hide(both.pass);
       put(both.pass, password);
       return true;
     },
+    signIn: signIn,
     // Copper-linux (not on the Mac yet): a sign-in that asks for the name
     // first (Google, Microsoft) has no password box on its first page, so
     // the picked account's name goes in alone — the box the caret is in, or
@@ -634,11 +688,12 @@ function () {
       var split = splitOTPFields();
       if (split) {
         if (String(code).length < split.length) return false;
-        for (var i = 0; i < split.length; i++) put(split[i], String(code).charAt(i));
+        for (var i = 0; i < split.length; i++) { hide(split[i]); put(split[i], String(code).charAt(i)); }
         return true;
       }
       var box = otpField();
       if (!box) return false;
+      hide(box);
       put(box, code);
       return true;
     },

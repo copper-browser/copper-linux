@@ -126,6 +126,85 @@ pub enum DriveEvent {
     },
 }
 
+impl Outcome {
+    /// Secret redaction: the outcome's words with no secret Copper filled.
+    pub fn scrubbed(&self) -> Outcome {
+        use crate::secrets::scrub;
+        Outcome {
+            label: scrub(&self.label),
+            text: self.text.as_deref().map(scrub),
+            candidates: self.candidates.iter().map(|c| scrub(c)).collect(),
+            error: self.error.as_deref().map(scrub),
+            result: self.result.as_deref().map(scrub),
+            ..self.clone()
+        }
+    }
+}
+
+impl DriveEvent {
+    /// Secret redaction: the event with no secret Copper filled in its words
+    /// (the driver pane, a linked app's progress, the activity trail).
+    pub fn scrubbed(&self) -> DriveEvent {
+        use crate::secrets::scrub;
+        match self {
+            DriveEvent::CallBegan {
+                ticket,
+                who,
+                tool,
+                title,
+                detail,
+                tab,
+                behind,
+            } => DriveEvent::CallBegan {
+                ticket: *ticket,
+                who: who.clone(),
+                tool: tool.clone(),
+                title: scrub(title),
+                detail: detail.as_deref().map(scrub),
+                tab: tab.clone(),
+                behind: *behind,
+            },
+            DriveEvent::CallEnded {
+                ticket,
+                who,
+                tool,
+                outcome,
+                tab,
+            } => DriveEvent::CallEnded {
+                ticket: *ticket,
+                who: who.clone(),
+                tool: tool.clone(),
+                outcome: outcome.scrubbed(),
+                tab: tab.clone(),
+            },
+            DriveEvent::RunBegan { who, goal, tab } => DriveEvent::RunBegan {
+                who: who.clone(),
+                goal: scrub(goal),
+                tab: tab.clone(),
+            },
+            DriveEvent::Phase { id, kind, title } => DriveEvent::Phase {
+                id: *id,
+                kind: *kind,
+                title: scrub(title),
+            },
+            DriveEvent::PhaseClosed { id, detail } => DriveEvent::PhaseClosed {
+                id: *id,
+                detail: detail.as_deref().map(scrub),
+            },
+            DriveEvent::Outcome(o) => DriveEvent::Outcome(o.scrubbed()),
+            DriveEvent::Page { url, title } => DriveEvent::Page {
+                url: scrub(url),
+                title: scrub(title),
+            },
+            DriveEvent::RunFinished { status, note } => DriveEvent::RunFinished {
+                status: *status,
+                note: scrub(note),
+            },
+            DriveEvent::CallRefused { .. } | DriveEvent::Cycle => self.clone(),
+        }
+    }
+}
+
 /// The model's state.
 #[derive(Debug, Default)]
 pub struct Drive {

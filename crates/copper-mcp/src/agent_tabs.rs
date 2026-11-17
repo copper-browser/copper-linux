@@ -192,6 +192,8 @@ impl<H: Host> Mcp<H> {
             self.host.release_tab(id);
         }
         self.host.close_tab(id);
+        // Secret redaction: its page is let go, and what Copper filled in it with it.
+        crate::secrets::forget(id);
         if self.host.tab(id).is_some() {
             "Closed — it is a Saved tab, so it stays in Saved, unloaded."
         } else {

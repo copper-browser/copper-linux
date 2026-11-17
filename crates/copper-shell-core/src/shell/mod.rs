@@ -1205,6 +1205,8 @@ impl<P: Platform> Shell<P> {
                 }
                 BrowserEvent::TabClosed(id) => {
                     refresh.tabs = true;
+                    // Secret redaction: what Copper filled in the tab goes with it.
+                    copper_mcp::secrets::forget(id);
                     self.0.recent.borrow_mut().forget(id);
                     self.drop_page(id);
                     self.forget_cover(id);

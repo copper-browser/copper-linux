@@ -33,6 +33,7 @@ pub mod host;
 pub mod input;
 pub mod intelligence;
 pub mod screenshot;
+pub mod secrets;
 pub mod server;
 pub mod shot;
 pub mod tools;
