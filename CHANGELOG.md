@@ -5,6 +5,10 @@ release dates.
 
 ## Unreleased
 
+## 0.7.0 — 2026-11-24
+
+Caught up with the Mac: Tidy, a morning page, pin lights, heavy pages and big pins sleep, a dozen new agent tools, safer agent sign-ins and a faster, surer Jev.
+
 ### Added
 
 - **Tidy files your loose tabs into folders.** With three or more loose tabs
@@ -50,29 +54,6 @@ release dates.
   `copper pins sleep on|off`): a pin over 300 MB you haven't looked at for
   two hours sleeps, and stays asleep after a relaunch until you go to it.
   `copper pins` lists every pin's state. As on the Mac
-- **Tidy files your loose tabs into folders.** With three or more loose tabs
-  in a space, "Tidy" stands on the line above them (also Ctrl+K › Tidy
-  Tabs): one click files them into a few named folders in Saved, reusing a
-  folder the space already has when it fits, and Undo (or Ctrl+Z) on the
-  pill that follows puts every tab back where it was. With a model set up in
-  Settings › Intelligence, the model names the folders from the tabs' titles
-  and sites only, never their pages; without one, or if it takes over 8
-  seconds, tabs are filed by site, two or more to a folder. A tab that fits
-  nowhere stays loose, and private tabs are never filed. As on the Mac
-  (copper-browser/Copper#200).
-- **A morning page, once a day.** Settings › General › Morning page takes an
-  address; the first launch, return to Copper or wake after 3 AM opens it as
-  the active tab (or brings back the tab already showing it), and every other
-  launch that day restores as it always did. Empty, the default, is off. The
-  hour is `daily.hour` in `settings.json` (`"daily.hour": 4`); `daily.shown`
-  keeps it to once a day (copper-shell-core `daily`). Waking is logind's
-  `PrepareForSleep`, so the Flatpak may now talk to `org.freedesktop.login1`
-  on the system bus. As on the Mac (copper-browser/Copper#198).
-- **A light on pins with something new.** A pinned tab whose page title
-  starts with an unread count, like `(1) Paper`, `(3) Inbox` or Gmail's
-  `Inbox (3)`, wears a small copper dot on its square in the column and the
-  tab row until you go to it. A sleeping pin keeps its dot (copper-shell-core
-  `pinlight`). As on the Mac (copper-browser/Copper#199).
 - **Agents read and keep the browser's own state.** `browser_history`
   searches your history on this computer, newest first (for agents you run
   here, not linked apps). `browser_bookmarks` lists your bookmarks with the
@@ -144,6 +125,26 @@ release dates.
   click whose page navigates from a short timer or once a data request
   comes back now answers on the new page (a second at most), not the old
   one. As on the Mac (copper-browser/Copper#181).
+- **Agents answer a page's questions and file choosers, save PDFs, and
+  read its requests, cookies and permissions.** An alert, confirm or prompt
+  on an agent's tab no longer waits unseen or pops up over your window: it
+  is listed under `### Dialogs` in the agent's next answer and
+  `browser_handle_dialog` answers it (or arms the answer before the click);
+  moving on closes it as a closed dialog would. `browser_file_upload`
+  answers the file chooser a click opened, arms the next one, cancels, or
+  drops files on a drop zone (`ref`); paths are checked first.
+  `browser_pdf_save` prints the page to a paged PDF (the downloads folder
+  unless told where). `browser_network_requests` lists what the page
+  fetched since it loaded, with method, status and kind, heard from WebKit,
+  not from the page. `browser_cookies` lists, sets and deletes the tab's
+  site's cookies; HttpOnly values need the site shared with agents in
+  Settings › Passwords › Agent access. `browser_permissions` grants or
+  revokes geolocation, camera and microphone per site, and a granted page
+  gets the position the agent gives. New CLI verbs: `copper hover`,
+  `select`, `scroll`, `wait`, `back`, `forward`, `upload`, `dialog`, `pdf`.
+  (`copper-mcp` `dialogs.rs`, `page_tools.rs`; `PageView`'s agents' page
+  tools; WebKitGTK `agent.rs`; `docs/fixtures/agent-page-tools-e2e.py`.)
+  As on the Mac (copper-browser/Copper#181).
 
 ### Changed
 
@@ -153,19 +154,6 @@ release dates.
   explained once, the canvas tools other than `canvas_create` and
   `canvas_join` listed only once you have a canvas, and `canvas_apply`'s op
   shapes handed over with the first `canvas_read`. As on the Mac
-  (copper-browser/Copper#181).
-- **Tabs and pins always show the site's own icon.** The "Tabs show: Site
-  icons / Letters" choice is gone from Settings › Tabs; a site whose icon
-  hasn't arrived yet shows a plain globe, never a letter, in tabs, pins,
-  Ctrl+K and History. An old `letters` setting is simply not read, and the
-  choice no longer syncs. As on the Mac (copper-browser/Copper#181).
-- **A page that can't load says so plainly.** "Can't connect to <site>",
-  why in one line (no site at that address, the site refused the
-  connection, took too long, the connection isn't secure, no connection),
-  a Try Again button with its key (Ctrl+R) and the engine's own words under
-  Details. As on the Mac (copper-browser/Copper#181).
-- **http pages say "Not secure" under the pointer.** Rest the pointer on
-  the address of a page over plain http and it says so. As on the Mac
   (copper-browser/Copper#181).
 - **Tabs and pins always show the site's own icon.** The "Tabs show: Site
   icons / Letters" choice is gone from Settings › Tabs; a site whose icon
@@ -226,26 +214,6 @@ release dates.
   to an agent as one quoted line, and the text of a snapshot, a page read,
   a find or the console comes back fenced as untrusted page content, with a
   fence the page can't forge. As on the Mac (copper-browser/Copper#181).
-- **Agents answer a page's questions and file choosers, save PDFs, and
-  read its requests, cookies and permissions.** An alert, confirm or prompt
-  on an agent's tab no longer waits unseen or pops up over your window: it
-  is listed under `### Dialogs` in the agent's next answer and
-  `browser_handle_dialog` answers it (or arms the answer before the click);
-  moving on closes it as a closed dialog would. `browser_file_upload`
-  answers the file chooser a click opened, arms the next one, cancels, or
-  drops files on a drop zone (`ref`); paths are checked first.
-  `browser_pdf_save` prints the page to a paged PDF (the downloads folder
-  unless told where). `browser_network_requests` lists what the page
-  fetched since it loaded, with method, status and kind, heard from WebKit,
-  not from the page. `browser_cookies` lists, sets and deletes the tab's
-  site's cookies; HttpOnly values need the site shared with agents in
-  Settings › Passwords › Agent access. `browser_permissions` grants or
-  revokes geolocation, camera and microphone per site, and a granted page
-  gets the position the agent gives. New CLI verbs: `copper hover`,
-  `select`, `scroll`, `wait`, `back`, `forward`, `upload`, `dialog`, `pdf`.
-  (`copper-mcp` `dialogs.rs`, `page_tools.rs`; `PageView`'s agents' page
-  tools; WebKitGTK `agent.rs`; `docs/fixtures/agent-page-tools-e2e.py`.)
-  As on the Mac (copper-browser/Copper#181).
 - **Agents' page tools say what really happened.** `browser_evaluate` takes
   a plain expression as well as a function and awaits a Promise (so does
   `copper eval document.title`), and a page error shows its own message. A
@@ -257,11 +225,6 @@ release dates.
   name the next step. Absurd numbers (`deltaY: 1e100`) are refused, and
   scrolling a row scrolls the list around it (`docs/fixtures/page-tools-e2e.py`).
   As on the Mac (copper-browser/Copper#181).
-- **A page that keeps closing as it loads stops.** The page on screen whose
-  process goes away is loaded again at once; the third time in half a
-  minute Copper stops and says “This page keeps closing as it loads.” with
-  Try Again, instead of reloading for ever. As on the Mac
-  (copper-browser/Copper#127).
 
 ## 0.6.4 — 2026-11-17
 
