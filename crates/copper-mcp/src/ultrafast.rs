@@ -607,9 +607,11 @@ pub struct Session {
     answer: Option<String>,
     snippet: Option<String>,
     answered_marker: Option<String>,
-    /// Offered controls something is drawn over: left out while it stays.
+    /// Offered controls something is drawn over: left out while it stays,
+    /// asked again on every new read (`covered_at`: the read it was asked on).
     covered: BTreeSet<u64>,
     covered_note: Option<Value>,
+    covered_at: Option<String>,
     covered_refusals: usize,
     /// `reach`: the goal's words for the read, the nodes they named so far,
     /// and how many scrolls in a row found no new one.
@@ -674,6 +676,7 @@ impl Session {
             answered_marker: None,
             covered: BTreeSet::new(),
             covered_note: None,
+            covered_at: None,
             covered_refusals: 0,
             relevant_seen: BTreeSet::new(),
             barren_scrolls: 0,
@@ -2025,10 +2028,10 @@ impl<H: Host> Mcp<H> {
 
         let observe_started = Instant::now();
         let reading = self.phase(PhaseKind::Observe, "Reading the page");
-        let (obs, reused) = match &s.observation {
+        let obs = match &s.observation {
             Some(have) if self.fresh(&page, have).await => {
                 self.close_phase(reading, Some("still fresh".into()));
-                (have.clone(), true)
+                have.clone()
             }
             _ => {
                 // The run's first read and the read after a stale decision
@@ -2040,11 +2043,14 @@ impl<H: Host> Mcp<H> {
                 s.observation = Some(obs.clone());
                 self.close_phase(reading, Some(pj::read(&obs)));
                 self.seen(&tab, &obs).await;
-                (obs, false)
+                obs
             }
         };
-        // Controls something was drawn over are asked again with every read.
-        if !reused && s.covered_note.is_some() {
+        // Controls something was drawn over are asked again with every new
+        // read — the one after an action too, which the next decision reuses
+        // (the Mac skips that one, so a panel closed stays "covering" there).
+        if s.covered_note.is_some() && s.covered_at.as_deref() != Some(obs.marker.as_str()) {
+            s.covered_at = Some(obs.marker.clone());
             let nodes: Vec<u64> = obs.actions.iter().filter_map(|a| a.node).collect();
             s.covered = js(&page, &pj::covered(&nodes))
                 .await
@@ -2466,6 +2472,7 @@ impl<H: Host> Mcp<H> {
                 s.covered_refusals += 1;
                 let others = under.len().saturating_sub(1);
                 s.covered = under;
+                s.covered_at = s.observation.as_ref().map(|o| o.marker.clone());
                 s.covered_note = Some(rules::covered_note(&label, &by, others));
                 self.trace(DriveEvent::Outcome(outcome(format!("covered: {label}"))));
                 if s.covered_refusals > 3 {

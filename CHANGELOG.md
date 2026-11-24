@@ -45,8 +45,9 @@ release dates.
   found on the page, and `jev_run json: true` returns that `answer` with the
   page's words around it (`snippet`). A control with something drawn over it
   (arXiv's search panel) is left out and Jev uses what is on top instead of
-  calling the page one that "kept changing". As on the Mac
-  (copper-browser/Copper#182).
+  calling the page one that "kept changing"; once the panel is closed the
+  control is offered again (the Mac keeps it out after a click). As on the
+  Mac (copper-browser/Copper#182).
 - **An agent's click waits for a page that leaves a moment later.** A
   click whose page navigates from a short timer or once a data request
   comes back now answers on the new page (a second at most), not the old
