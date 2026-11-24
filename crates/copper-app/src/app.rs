@@ -22,6 +22,8 @@ use std::time::{Duration, Instant};
 
 thread_local! {
     static SHELL: RefCell<Option<Shell>> = const { RefCell::new(None) };
+    /// The wake signal the morning page listens for ([`morning_page`]).
+    static WAKE: RefCell<Option<gio::SignalSubscription>> = const { RefCell::new(None) };
 }
 
 /// The process exit code a scripted run sets.
@@ -99,6 +101,7 @@ fn activate(app: &adw::Application, opts: Options) {
             control::install(&shell);
             SHELL.with(|s| *s.borrow_mut() = Some(shell.clone()));
             hooks(&shell, &opts);
+            morning_page(&shell);
             shell
         }
     };
@@ -148,6 +151,43 @@ fn join_when_shown(shell: &Shell, link: String) {
                 crate::cloud::open_join(&shell, &link);
             }
         });
+    });
+}
+
+/// The morning page ([`copper_shell_core::daily`]): now (the session is
+/// back, before the command line's addresses, which stay in front), each
+/// time the window comes to the front, and when the computer wakes
+/// (logind's `PrepareForSleep(false)`) with the window in front.
+fn morning_page(shell: &Shell) {
+    use copper_shell_core::daily;
+    type Calendar = crate::platform::Glib;
+    daily::check::<Calendar, _>(shell);
+    let weak = shell.downgrade();
+    shell.window().connect_is_active_notify(move |w| {
+        if w.is_active()
+            && let Some(s) = weak.upgrade()
+        {
+            daily::check::<Calendar, _>(&s);
+        }
+    });
+    let weak = shell.downgrade();
+    gio::bus_get(gio::BusType::System, gio::Cancellable::NONE, move |bus| {
+        let Ok(bus) = bus else { return };
+        let woke = bus.subscribe_to_signal(
+            Some("org.freedesktop.login1"),
+            Some("org.freedesktop.login1.Manager"),
+            Some("PrepareForSleep"),
+            Some("/org/freedesktop/login1"),
+            None,
+            gio::DBusSignalFlags::NONE,
+            move |signal| {
+                let woke = signal.parameters.get::<(bool,)>() == Some((false,));
+                if let Some(s) = weak.upgrade().filter(|s| woke && s.window().is_active()) {
+                    daily::check::<Calendar, _>(&s);
+                }
+            },
+        );
+        WAKE.with(|w| w.replace(Some(woke)));
     });
 }
 

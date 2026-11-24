@@ -126,6 +126,8 @@ navigated}`. When the page ends, the app calls `curtain::page_gone(page_id)`.
 | `updates` | The update check: the feed, its six-hour cadence, what was seen and announced, redirects, and semver order. |
 | `palette` | `complete`: the palette's matching and ranking. |
 | `format` | Times, sizes and speeds in the shell's words (`Calendar` for local dates). |
+| `daily` | The morning page: whether today's is due (`daily.hour`, `daily.shown`) and `check`, which each app calls at launch, when its window comes to the front and on wake. |
+| `pinlight` | Whether a pin's title starts with an unread count (`TabView::lit`): the dot on its square. |
 | `util` | Curated page scripts in engine form, `run` / `fire` for curated calls, and `site_key`. |
 
 ## What stays in copper-app

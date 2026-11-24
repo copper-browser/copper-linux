@@ -58,6 +58,7 @@ pub fn page(shell: &Shell) -> adw::PreferencesPage {
         },
     ));
     here.add(&look);
+    here.add(&morning_page(shell));
     page.add(&here);
     show_default(&default, &make, &tick);
     let weak = shell.downgrade();
@@ -126,6 +127,34 @@ pub fn page(shell: &Shell) -> adw::PreferencesPage {
     });
     page.add(&downloads);
     page
+}
+
+/// Mac `DailyPageLine`: the morning page's address, empty for off
+/// (copper-shell-core `daily`); kept as it is typed.
+fn morning_page(shell: &Shell) -> adw::ActionRow {
+    use copper_shell_core::daily;
+    let row = line(daily::TITLE, daily::DETAIL);
+    let field = gtk::Entry::new();
+    field.set_text(
+        shell
+            .settings()
+            .string(copper_core::settings::keys::DAILY_URL)
+            .unwrap_or_default(),
+    );
+    field.set_placeholder_text(Some(daily::PLACEHOLDER));
+    field.set_width_chars(26);
+    field.set_valign(gtk::Align::Center);
+    field.add_css_class("monospace");
+    field.update_property(&[gtk::accessible::Property::Label("Morning page address")]);
+    let weak = shell.downgrade();
+    field.connect_changed(move |f| {
+        if let Some(s) = weak.upgrade() {
+            let typed = f.text().to_string();
+            s.update_settings(|st| st.set(copper_core::settings::keys::DAILY_URL, typed));
+        }
+    });
+    row.add_suffix(&field);
+    row
 }
 
 /// Downloads go to `dir` from now on (setting `downloads`, every profile).

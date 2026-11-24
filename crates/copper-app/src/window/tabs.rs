@@ -296,6 +296,24 @@ pub fn focusable_button(orientation: gtk::Orientation, spacing: i32) -> gtk::Box
     b
 }
 
+/// A pin's `mark` with the pin light in the square's top-right corner,
+/// `inset` from its edges (Mac `PinLightDot`): the style sheet shows it
+/// while the square is `unread` and not `live`.
+pub fn with_pin_light(mark: &gtk::Box, inset: i32) -> gtk::Overlay {
+    let square = gtk::Overlay::new();
+    square.set_child(Some(mark));
+    square.set_hexpand(true);
+    let dot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    dot.add_css_class("pin-light");
+    dot.set_halign(gtk::Align::End);
+    dot.set_valign(gtk::Align::Start);
+    dot.set_margin_top(inset);
+    dot.set_margin_end(inset);
+    dot.set_can_target(false);
+    square.add_overlay(&dot);
+    square
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
