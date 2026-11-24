@@ -5,6 +5,19 @@ release dates.
 
 ## Unreleased
 
+### Added
+
+- **Tidy files your loose tabs into folders.** With three or more loose tabs
+  in a space, "Tidy" stands on the line above them (also Ctrl+K › Tidy
+  Tabs): one click files them into a few named folders in Saved, reusing a
+  folder the space already has when it fits, and Undo (or Ctrl+Z) on the
+  pill that follows puts every tab back where it was. With a model set up in
+  Settings › Intelligence, the model names the folders from the tabs' titles
+  and sites only, never their pages; without one, or if it takes over 8
+  seconds, tabs are filed by site, two or more to a folder. A tab that fits
+  nowhere stays loose, and private tabs are never filed. As on the Mac
+  (copper-browser/Copper#200).
+
 ## 0.6.4 — 2026-11-17
 
 Agents never see a secret Copper filled.

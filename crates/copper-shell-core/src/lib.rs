@@ -57,6 +57,7 @@ pub mod shield;
 pub mod sidedrop;
 pub mod sleep;
 pub mod spaces;
+pub mod tidy;
 pub mod updates;
 pub mod util;
 pub mod view;
