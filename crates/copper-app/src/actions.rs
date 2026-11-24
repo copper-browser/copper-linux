@@ -195,6 +195,7 @@ pub fn register_lanes(shell: &Shell) {
     crate::canvas::register(shell);
     crate::agents::register(shell);
     crate::addons::register(shell); // Addons: sync, settings, updates, COPPER_SELFTEST=addons
+    crate::tidy::register(shell); // Tidy: the seam's "Tidy", Tidy Tabs, its Undo
 }
 
 fn with_active(s: &Shell, f: impl FnOnce(&Shell, &TabId)) {

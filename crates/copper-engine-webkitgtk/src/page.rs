@@ -480,7 +480,14 @@ impl WebKitPage {
                     == Some(PolicyError::FrameLoadInterruptedByPolicyChange);
             s.emit(PageEvent::Load(LoadState::Failed {
                 url: uri.to_owned(),
-                error: err.message().to_owned(),
+                // Domain and code, as the Mac's Details give them: the
+                // message is translated, they are what the shell reads.
+                error: format!(
+                    "{} ({} {})",
+                    err.message(),
+                    err.domain().as_str(),
+                    err.code()
+                ),
                 cancelled,
             }));
             false

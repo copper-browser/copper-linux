@@ -167,6 +167,9 @@ pub struct TabView<I> {
     pub loading: bool,
     pub audio: bool,
     pub crashed: bool,
+    /// A pin whose title starts with an unread count ([`crate::pinlight`]):
+    /// its square wears the dot while it isn't the live tab.
+    pub lit: bool,
     pub favicon: Option<I>,
     /// The folder it is filed in (`groups.json` id).
     pub group: Option<String>,
@@ -478,6 +481,7 @@ impl<P: Platform> Shell<P> {
             loading: slot.as_ref().is_some_and(|s| s.loading.get()),
             audio: slot.as_ref().is_some_and(|s| s.audio.get()),
             crashed: slot.as_ref().is_some_and(|s| s.crashed.get()),
+            lit: t.is_pinned() && crate::pinlight::lit(&t.title),
             favicon,
             group: t.group.clone(),
         })

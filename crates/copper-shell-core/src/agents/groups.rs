@@ -41,6 +41,23 @@ pub fn all<P: Platform>(shell: &Shell<P>) -> Vec<TabGroup> {
     groups
 }
 
+/// Change `groups.json` in one go (written only when `f` changed it).
+/// False when it could not be written.
+pub fn edit<P: Platform>(shell: &Shell<P>, f: impl FnOnce(&mut GroupsFile)) -> bool {
+    let mut file = load(shell);
+    let before = file.clone();
+    f(&mut file);
+    if file == before {
+        return true;
+    }
+    if let Err(e) = shell.store().save(&file) {
+        tracing::warn!(error = %e, "could not write groups.json");
+        return false;
+    }
+    NAMES.with(|n| n.borrow_mut().take());
+    true
+}
+
 /// Open a folder or shut it (each device's own; never synced).
 pub fn toggle<P: Platform>(shell: &Shell<P>, id: &str) {
     let mut file = load(shell);
