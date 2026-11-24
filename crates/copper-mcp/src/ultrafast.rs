@@ -877,7 +877,7 @@ impl<H: Host> Mcp<H> {
             });
         }
         let net = self.net()?;
-        intelligence::router_ask(
+        intelligence::router_ask_mode(
             &net, &eff.keys, &chosen, system, user, timeout, max_tokens, json,
         )
         .await

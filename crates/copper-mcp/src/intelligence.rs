@@ -744,8 +744,22 @@ fn cache_refused(data: &[u8]) -> bool {
 }
 
 /// The gateway lane (`Router.ask`, `lane == .key`).
-#[allow(clippy::too_many_arguments)]
 pub async fn router_ask(
+    net: &Net,
+    keys: &Keys,
+    model: &str,
+    system: &str,
+    user: &str,
+    timeout: Duration,
+    max_tokens: u32,
+) -> Result<Reply, String> {
+    router_ask_mode(net, keys, model, system, user, timeout, max_tokens, false).await
+}
+
+/// [`router_ask`], `json`: in JSON mode (`response_format`), which small
+/// models answer faster and cleaner with (`Router.ask(json:)`).
+#[allow(clippy::too_many_arguments)]
+pub async fn router_ask_mode(
     net: &Net,
     keys: &Keys,
     model: &str,
