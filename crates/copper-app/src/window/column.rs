@@ -862,7 +862,7 @@ fn pin_square(shell: &Shell, t: &TabView) -> Row {
     mark.set_halign(gtk::Align::Center);
     mark.set_valign(gtk::Align::Center);
     mark.set_hexpand(true);
-    root.append(&mark);
+    root.append(&tabs::with_pin_light(&mark, 5));
     let title = gtk::Label::new(None);
     let badge = gtk::Image::new();
     tabs::wire_activation(shell, root.upcast_ref(), &t.id);
@@ -891,6 +891,7 @@ fn fill(shell: &Shell, row: &Row, t: &TabView) {
     set(t.sleeping, "sleeping");
     set(t.crashed, "crashed");
     set(t.private, "private-tab");
+    set(t.lit, "unread");
     while let Some(c) = row.mark.first_child() {
         row.mark.remove(&c);
     }
@@ -907,9 +908,10 @@ fn fill(shell: &Shell, row: &Row, t: &TabView) {
         // A Calendar pin's card says more than its name would.
         let tip = (!copper_shell_core::calendar::peeks(&t.url)).then_some(t.label.as_str());
         row.root.set_tooltip_text(tip);
+        let new = if t.lit && !t.live { ", new" } else { "" };
         row.root
             .update_property(&[gtk::accessible::Property::Label(&format!(
-                "{}, pinned",
+                "{}, pinned{new}",
                 t.label
             ))]);
         return;

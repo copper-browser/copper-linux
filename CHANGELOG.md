@@ -17,6 +17,19 @@ release dates.
   seconds, tabs are filed by site, two or more to a folder. A tab that fits
   nowhere stays loose, and private tabs are never filed. As on the Mac
   (copper-browser/Copper#200).
+- **A morning page, once a day.** Settings › General › Morning page takes an
+  address; the first launch, return to Copper or wake after 3 AM opens it as
+  the active tab (or brings back the tab already showing it), and every other
+  launch that day restores as it always did. Empty, the default, is off. The
+  hour is `daily.hour` in `settings.json` (`"daily.hour": 4`); `daily.shown`
+  keeps it to once a day (copper-shell-core `daily`). Waking is logind's
+  `PrepareForSleep`, so the Flatpak may now talk to `org.freedesktop.login1`
+  on the system bus. As on the Mac (copper-browser/Copper#198).
+- **A light on pins with something new.** A pinned tab whose page title
+  starts with an unread count, like `(1) Paper`, `(3) Inbox` or Gmail's
+  `Inbox (3)`, wears a small copper dot on its square in the column and the
+  tab row until you go to it. A sleeping pin keeps its dot (copper-shell-core
+  `pinlight`). As on the Mac (copper-browser/Copper#199).
 
 ## 0.6.4 — 2026-11-17
 
