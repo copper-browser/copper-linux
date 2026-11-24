@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::call::Call;
 use crate::script::Script;
@@ -89,6 +89,19 @@ pub struct Observation {
     /// Nodes (on screen or off) whose words the goal names (`reach`).
     #[serde(default)]
     pub relevant: Vec<u64>,
+    /// How the settle before this read went ([`settle_and_read`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settle: Option<SettleReport>,
+}
+
+/// The settle after an action (`cache.settle`): how long it took, whether
+/// the 400 ms cap ended it, and what was still moving then.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SettleReport {
+    pub ms: f64,
+    pub capped: bool,
+    #[serde(default)]
+    pub why: String,
 }
 
 impl Observation {
@@ -117,7 +130,11 @@ pub struct NetEntry {
     /// When it was asked.
     pub at: f64,
     /// When its answer began (a status) or it ended.
-    #[serde(default, rename = "answeredAt", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "answeredAt",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub answered_at: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<u16>,
@@ -128,6 +145,18 @@ pub struct NetEntry {
     pub error: Option<String>,
 }
 
+/// `window.__jevFast.net(after)`: the page's data calls after `seq` `after`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct NetSnapshot {
+    /// The document's `performance.timeOrigin`: another value is another page.
+    pub doc: f64,
+    /// The last call's `seq`: the mark for the next action.
+    pub seq: u64,
+    /// The page's `performance.now()`, to age `at` / `answeredAt` with.
+    pub now: f64,
+    pub entries: Vec<NetEntry>,
+}
+
 /// A point to put input, viewport CSS pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Point {
@@ -135,9 +164,53 @@ pub struct Point {
     pub y: f64,
 }
 
+/// Where [`resolve`] put the input, or what is drawn over the target there
+/// (`div#ov`): the same click would only be refused again.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Resolved {
+    At(Point),
+    Covered { covered: String },
+}
+
+/// Put the helpers in (a document's first read, before [`settle_and_read`]).
+pub fn install() -> Call<bool> {
+    Call::new(Script::JevFast, json!({}))
+}
+
 /// The page as Jev sees it (`None` before there is a body).
 pub fn observe() -> Call<Option<Observation>> {
     Call::new(Script::JevObserve, json!({}))
+}
+
+/// The read for a run: `goal` (`{words, phrases}`) adds the links it names
+/// above or below the viewport and `relevant`; `deep` reads open shadow
+/// roots and same-origin frames too.
+pub fn observe_for(goal: Option<&Value>, deep: bool) -> Call<Option<Observation>> {
+    Call::new(Script::JevObserveFor, json!({ "goal": goal, "deep": deep }))
+}
+
+/// Settle after `action` (`near`, `calm`, `deep`: the strategy's), then
+/// [`observe_for`], with [`Observation::settle`] set. `None` without the
+/// helpers (a new document) or a body. Cap it at 1 s: a navigation can leave
+/// it unanswered.
+pub fn settle_and_read(
+    action: &JevAction,
+    near: bool,
+    calm: bool,
+    deep: bool,
+    goal: Option<&Value>,
+) -> Call<Option<Observation>> {
+    let mut plain = action.clone();
+    plain.rect = None;
+    let mut action = json!(plain);
+    action["near"] = near.into();
+    action["calm"] = calm.into();
+    action["deep"] = deep.into();
+    Call::new(
+        Script::JevSettleRead,
+        json!({ "action": action, "goal": goal }),
+    )
 }
 
 /// Whole-page freshness marker.
@@ -150,10 +223,71 @@ pub fn check(node: u64) -> Call<(String, Option<String>)> {
     Call::new(Script::JevCheck, json!({ "node": node }))
 }
 
-/// Where to put the input for `action` now, or `None` when the target moved,
-/// hid or got covered. A `select` is performed here in full.
-pub fn resolve(action: &JevAction) -> Call<Option<Point>> {
+/// Where to put the input for `action` now, what covers it, or `None` when
+/// the target moved or hid. A `select` is performed here in full.
+pub fn resolve(action: &JevAction) -> Call<Option<Resolved>> {
     Call::new(Script::JevResolve, json!({ "action": action }))
+}
+
+/// Which of `nodes` (top document, on screen) something is drawn over.
+pub fn covered(nodes: &[u64]) -> Call<Vec<u64>> {
+    Call::new(Script::JevCovered, json!({ "nodes": nodes }))
+}
+
+/// Scroll an offered offscreen link to the middle, before its click.
+pub fn reveal(node: u64) -> Call<bool> {
+    Call::new(Script::JevReveal, json!({ "node": node }))
+}
+
+/// Type `text` as one trusted edit (into the focused field, else `node`);
+/// what the field holds now, or `None` with no field to type in.
+pub fn insert(node: u64, text: &str) -> Call<Option<String>> {
+    Call::new(Script::JevInsert, json!({ "node": node, "text": text }))
+}
+
+/// A search box that is its form's only field, holding text, with no
+/// suggestions showing: press Return next.
+pub fn lone_search(node: u64) -> Call<bool> {
+    Call::new(Script::JevLoneSearch, json!({ "node": node }))
+}
+
+/// `requestSubmit` on the node's form (no window for a real Return).
+pub fn submit(node: u64) -> Call<bool> {
+    Call::new(Script::JevSubmit, json!({ "node": node }))
+}
+
+/// Before a click or a Return on `node`: listen for whether it leaves the
+/// document ([`leaving`]) and whether a form goes in ([`fired`]).
+pub fn arm(node: u64) -> Call<bool> {
+    Call::new(Script::JevArm, json!({ "node": node }))
+}
+
+/// `"armed"` until the input is seen and decided, then `"true"` (a
+/// navigation is coming) or `"false"` (also without the helpers).
+pub fn leaving() -> Call<String> {
+    Call::new(Script::JevLeaving, json!({}))
+}
+
+/// Whether a form went in since [`arm`]; cleared as it is read.
+pub fn fired() -> Call<bool> {
+    Call::new(Script::JevFired, json!({}))
+}
+
+/// Address, scroll and field values (`cache.pageKey`): compare with
+/// [`Observation::page_key`].
+pub fn page_key() -> Call<String> {
+    Call::new(Script::JevPageKey, json!({}))
+}
+
+/// The page's data calls (fetch, xhr) with `seq` above `after`.
+pub fn net(after: u64) -> Call<NetSnapshot> {
+    Call::new(Script::JevNet, json!({ "after": after }))
+}
+
+/// During a navigation: `""` while the old document (with the helpers) is
+/// still there, then the new one's `document.readyState`. Installs nothing.
+pub fn ready_state() -> Call<String> {
+    Call::new(Script::JevReadyState, json!({}))
 }
 
 pub fn dom_click(node: u64) -> Call<bool> {
@@ -168,9 +302,9 @@ pub fn set_value(node: u64, text: &str) -> Call<bool> {
     Call::new(Script::JevSetValue, json!({ "node": node, "text": text }))
 }
 
-/// Wait for the page to settle after `action` (the Mac drops `rect` first and
-/// caps the wait at 1 s).
-pub fn settle(action: &JevAction) -> Call<bool> {
+/// Wait for the whole page to settle after `action` (the Mac drops `rect`
+/// first and caps the wait at 1 s); `None` without the helpers.
+pub fn settle(action: &JevAction) -> Call<Option<SettleReport>> {
     let mut plain = action.clone();
     plain.rect = None;
     Call::new(Script::JevSettle, json!({ "action": plain }))
@@ -410,7 +544,87 @@ mod tests {
             guards: BTreeMap::new(),
             omitted_actions: 0,
             relevant: Vec::new(),
+            settle: None,
         }
+    }
+
+    #[test]
+    fn resolve_answers_a_point_or_what_covers_it() {
+        let call = resolve(&JevAction::default());
+        assert_eq!(
+            call.decode(Some(r#"{"x":175,"y":235}"#)).unwrap(),
+            Some(Resolved::At(Point { x: 175.0, y: 235.0 }))
+        );
+        assert_eq!(
+            call.decode(Some(r#"{"covered":"div#ov"}"#)).unwrap(),
+            Some(Resolved::Covered {
+                covered: "div#ov".into()
+            })
+        );
+        assert_eq!(call.decode(None).unwrap(), None);
+        assert!(call.decode(Some(r#"{"y":1}"#)).is_err());
+    }
+
+    #[test]
+    fn net_snapshot_decodes() {
+        let snap = net(1)
+            .decode(Some(
+                r#"{"doc":1700000000000.5,"seq":3,"now":812.25,"entries":[
+                {"seq":2,"method":"GET","url":"http://a.test/x","kind":"fetch","at":10,"answeredAt":20.5,"status":200,"done":true},
+                {"seq":3,"method":"POST","url":"http://a.test/y","kind":"xhr","at":30,"done":false}]}"#,
+            ))
+            .unwrap();
+        assert_eq!((snap.doc, snap.seq, snap.now), (1700000000000.5, 3, 812.25));
+        assert_eq!(snap.entries[0].answered_at, Some(20.5));
+        assert_eq!(snap.entries[0].status, Some(200));
+        assert_eq!(
+            snap.entries[1],
+            NetEntry {
+                seq: 3,
+                method: "POST".into(),
+                url: "http://a.test/y".into(),
+                kind: "xhr".into(),
+                at: 30.0,
+                ..Default::default()
+            }
+        );
+        assert_eq!(net(7).args(), &json!({ "after": 7 }));
+    }
+
+    #[test]
+    fn settle_and_read_sends_the_strategy_and_reads_the_report() {
+        let mut click = action("e1", 4, "click", "button", "Go");
+        click.rect = Some(JevRect {
+            x: 1.0,
+            y: 2.0,
+            w: 3.0,
+            h: 4.0,
+        });
+        let goal = json!({ "words": ["vienna"], "phrases": [] });
+        let call = settle_and_read(&click, true, false, true, Some(&goal));
+        let sent = &call.args()["action"];
+        assert!(sent.get("rect").is_none(), "{sent}");
+        assert_eq!(
+            (&sent["node"], &sent["near"], &sent["calm"], &sent["deep"]),
+            (&json!(4), &json!(true), &json!(false), &json!(true))
+        );
+        assert_eq!(call.args()["goal"], goal);
+        assert_eq!(
+            observe_for(None, false).args(),
+            &json!({ "goal": null, "deep": false })
+        );
+        let mut page = serde_json::to_value(obs(vec![])).unwrap();
+        page["settle"] = json!({ "ms": 33, "capped": false, "why": "" });
+        let read = call.decode(Some(&page.to_string())).unwrap().unwrap();
+        assert_eq!(
+            read.settle,
+            Some(SettleReport {
+                ms: 33.0,
+                capped: false,
+                why: String::new()
+            })
+        );
+        assert_eq!(settle(&click).decode(None).unwrap(), None);
     }
 
     #[test]

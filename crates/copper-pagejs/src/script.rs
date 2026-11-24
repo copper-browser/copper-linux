@@ -150,10 +150,14 @@ scripts! {
     ConsoleEarly = "page/console_early.js", UserScript(DocumentStart, MainFrame), Page, None;
 
     // ---- Jev (Fork/MCP/Ultrafast.swift) ----
-    /// `window.__jevFast`: observe, marker, check, resolve, selectAll, domClick, setValue, settle.
+    /// `window.__jevFast`: observe, marker, check, resolve, covered, reveal, insert, arm, settle, … and the page's own net log.
     JevFast = "jev/fast.js", Installer, Page, None;
     /// The page as Jev sees it (`jev_observe`).
     JevObserve = "jev/observe.js", Call, Page, JEV;
+    /// The same read for a goal (offscreen links it names) and `deep` (shadow roots, frames).
+    JevObserveFor = "jev/observe_for.js", Call, Page, JEV;
+    /// Settle after an action, then read: one round trip; null without the helpers.
+    JevSettleRead = "jev/settle_read.js", AsyncCall, Page, None;
     /// Whole-page freshness marker.
     JevMarker = "jev/marker.js", Call, Page, JEV;
     /// `[page_key, guard]` for one node.
@@ -166,8 +170,30 @@ scripts! {
     JevSelectAll = "jev/select_all.js", Call, Page, JEV;
     /// Native-setter value on a node.
     JevSetValue = "jev/set_value.js", Call, Page, JEV;
-    /// Wait for the page to settle after an action (two frames / 50–200 ms).
+    /// Wait for the page to settle after an action (≤ 400 ms): `{ms, capped, why}`.
     JevSettle = "jev/settle.js", AsyncCall, Page, None;
+    /// Scroll an offscreen link into view before its click.
+    JevReveal = "jev/reveal.js", Call, Page, JEV;
+    /// The offered nodes something else is drawn over.
+    JevCovered = "jev/covered.js", Call, Page, JEV;
+    /// Type as one trusted edit; what the field holds now.
+    JevInsert = "jev/insert.js", Call, Page, JEV;
+    /// A search box that is its form's only field: Return is next.
+    JevLoneSearch = "jev/lone_search.js", Call, Page, JEV;
+    /// Submit a node's form.
+    JevSubmit = "jev/submit.js", Call, Page, JEV;
+    /// Before a click or a Return: listen for whether it leaves the document.
+    JevArm = "jev/arm.js", Call, Page, JEV;
+    /// What `arm` heard: "armed", "true" or "false".
+    JevLeaving = "jev/leaving.js", Call, Page, None;
+    /// Whether a form went in since `arm` (cleared as read).
+    JevFired = "jev/fired.js", Call, Page, None;
+    /// Address, scroll and field values.
+    JevPageKey = "jev/page_key.js", Call, Page, JEV;
+    /// The page's data calls after a `seq`.
+    JevNet = "jev/net.js", Call, Page, JEV;
+    /// `''` while the helpers' document is still there, else `document.readyState`.
+    JevReadyState = "jev/ready_state.js", Call, Page, None;
     /// Scroll by a delta, instantly.
     JevScrollBy = "jev/scroll_by.js", Call, Page, None;
     /// `watch`: resolves on the page's first change (outside the trail), or at `ms`.
