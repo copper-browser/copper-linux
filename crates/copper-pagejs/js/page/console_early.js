@@ -16,4 +16,17 @@ function () {
     };
   });
   window.addEventListener('error', function (e) { logs.push({ level: 'error', text: String(e.message) }); });
+  // Short timers, so a click's settle can wait for the navigation one of
+  // them sets off (Tools.settle → late; Page.swift's consoleShim).
+  var timers = [], start = window.setTimeout;
+  window.setTimeout = function (f, d) {
+    try { d = Number(d) || 0; if (d <= 1000) { timers.push([performance.now(), d]); if (timers.length > 50) timers.shift(); } } catch (e) {}
+    return start.apply(window, arguments);
+  };
+  // How long until the last of the short timers started in the last `ms` fires.
+  window.__copperDue = function (ms) {
+    var now = performance.now(), due = 0;
+    timers.forEach(function (t) { if (now - t[0] <= ms) due = Math.max(due, t[0] + t[1] - now); });
+    return due;
+  };
 }

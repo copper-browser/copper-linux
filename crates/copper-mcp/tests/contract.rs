@@ -35,9 +35,21 @@ struct World {
     inputs: Vec<(String, InputEvent)>,
     announced: Vec<String>,
     opened_foreground: Vec<bool>,
+    /// Tabs opened private (`jev_run` `private`).
+    opened_private: Vec<TabId>,
     released: Vec<TabId>,
     /// The fake page's state for Jev: clicked once → marker m2.
     clicked: bool,
+    /// Jev's fake page: the button's name (else "Search"), and whether
+    /// something is drawn over it.
+    button: Option<String>,
+    covered: bool,
+    /// A click posts with fetch (no form), as a Pay button may: the
+    /// engine's request log has it.
+    posts: bool,
+    net: copper_engine::NetLog,
+    /// What `page/due.js` answers: a short timer the page started, ms.
+    due: f64,
     jev_endpoint: Option<String>,
     /// Where `copper/intelligence` keeps its files, when the test gives one.
     store: Option<copper_core::Store>,
@@ -154,7 +166,7 @@ fn leaky_answer(body: &str, script: Option<Script>, secret: &str) -> Option<Resu
             ])
             .to_string()
         ),
-        Script::JevObserve => json!({
+        Script::JevObserve | Script::JevObserveFor | Script::JevSettleRead => json!({
             "url": format!("https://login.test/?pw={url}"), "title": "Sign in", "w": 1280, "h": 800,
             "text": format!("Checking {secret}"), "scroll": {"y": 0, "height": 800},
             "actions": [{"id": "a1", "kind": "fill", "label": format!("Email {secret}"), "node": 1, "value": secret,
@@ -243,7 +255,7 @@ impl Page for FakePage {
                 Script::Element => json!("Example Domain"),
                 Script::HasText => json!(args["text"] != "never-there"),
                 Script::Text => json!("Example Domain"),
-                Script::JevObserve => {
+                Script::JevObserve | Script::JevObserveFor | Script::JevSettleRead => {
                     let w = world.borrow();
                     let url = w
                         .tabs
@@ -254,7 +266,7 @@ impl Page for FakePage {
                     json!({
                         "url": url, "title": "Example Domain", "w": 1280, "h": 800,
                         "text": "Example Domain Search", "scroll": {"y": 0, "height": 800},
-                        "actions": [{"id": "a1", "kind": "click", "label": "Search", "node": 1,
+                        "actions": [{"id": "a1", "kind": "click", "label": w.button.as_deref().unwrap_or("Search"), "node": 1,
                                      "role": "button", "rect": {"x": 10, "y": 20, "w": 100, "h": 30}}],
                         "marker": if w.clicked { "m2" } else { "m1" },
                         "page_key": "k", "guards": {"1": "g"}, "omitted_actions": 0,
@@ -262,7 +274,11 @@ impl Page for FakePage {
                 }
                 Script::JevMarker => json!(if world.borrow().clicked { "m2" } else { "m1" }),
                 Script::JevCheck => json!(["k", "g"]),
+                Script::JevResolve if world.borrow().covered => json!({"covered": "div#ov"}),
                 Script::JevResolve => json!({"x": 60, "y": 35}),
+                Script::JevCovered if world.borrow().covered => json!([1]),
+                Script::JevCovered => json!([]),
+                Script::Due => json!(world.borrow().due),
                 Script::JevSettle => json!(true),
                 _ => Value::Null,
             })
@@ -277,9 +293,20 @@ impl Page for FakePage {
         let mut w = self.world.borrow_mut();
         if matches!(event, InputEvent::Click { .. }) {
             w.clicked = true;
+            if w.posts {
+                let id = w.inputs.len() as u64 + 1;
+                w.net
+                    .sent(id, "POST", "https://pay.test/api/pay", "fetch", false);
+                w.net.answered(id, 200);
+                w.net.finished(id, None);
+            }
         }
         w.inputs.push((self.tab.short(), event));
         async { Ok(()) }
+    }
+
+    fn network(&self) -> Option<copper_engine::NetLog> {
+        Some(self.world.borrow().net.clone())
     }
 
     fn zoom(&self) -> f64 {
@@ -358,6 +385,12 @@ impl Host for FakeHost {
         if foreground {
             w.active = Some(id.clone());
         }
+        id
+    }
+
+    fn open_private_tab(&self, url: &str) -> TabId {
+        let id = self.open_tab(url, false);
+        self.0.borrow_mut().opened_private.push(id.clone());
         id
     }
 
@@ -694,12 +727,13 @@ async fn tools_list_is_the_mac_catalogue_minus_voice() {
             // padding and scale, 2026-11-17; 24828 with the Mac's one-line
             // catalogue and the browser-state tools, then 28197 with the page
             // tools browser_handle_dialog, _file_upload, _pdf_save,
-            // _network_requests, _cookies and _permissions, 2026-11-24).
+            // _network_requests, _cookies and _permissions, then 28293 with
+            // jev_run's private and the verify and submit strategies, 2026-11-24).
             let all: Vec<Value> = mac.values().cloned().collect();
             let wire = copper_pagejs::render::compact_json(
                 &json!({"jsonrpc": "2.0", "id": 2, "result": {"tools": all}}),
             );
-            assert_eq!(wire.len(), 28197);
+            assert_eq!(wire.len(), 28293);
         })
         .await;
 }
@@ -974,9 +1008,15 @@ async fn scripted_session_tabs_navigate_snapshot_click_type() {
                 assert_eq!(args, &json!({"selector": "", "interactive": true, "limit": 600}));
             }
 
+            // A short timer the click started (a navigation a moment later) is
+            // waited for: 400 ms here, past the settle's own beat (Tools.late).
+            r.host.0.borrow_mut().due = 400.0;
+            let started = std::time::Instant::now();
             let (clicked, error) = tool(port, "browser_click", json!({"ref": "e1", "element": "Search", "reason": "search"})).await;
             assert!(!error, "{clicked}");
             assert!(clicked.starts_with("Clicked Search. ### Page\n- URL: https://example.org/a"), "{clicked}");
+            assert!(started.elapsed() >= Duration::from_millis(700), "{:?}", started.elapsed());
+            r.host.0.borrow_mut().due = 0.0;
 
             let (typed, error) = tool(port, "browser_type", json!({"ref": "e2", "text": "copper", "submit": true})).await;
             assert!(!error, "{typed}");
@@ -1734,7 +1774,7 @@ async fn jev_run_observes_asks_typesafe_and_acts() {
             assert_eq!(result["isError"], false, "{report}");
             assert!(report.starts_with("### Jev run — done in "), "{report}");
             assert!(report.contains("(1 action, 2 decisions)\nJev said DONE, 95% sure\nGoal: press search\n\n1. CLICK Search (80%, "), "{report}");
-            assert!(report.contains(" ms) → page changed\n\n### Page\n- URL: https://home.test/"), "{report}");
+            assert!(report.contains(" ms, 100 tok) → page changed\n\n### Page\n- URL: https://home.test/"), "{report}");
             assert!(report.ends_with("DONE is Jev's claim — check the page (browser_snapshot / jev_observe) before telling the user it worked."));
             let summary = result["_meta"]["summary"].as_str().unwrap();
             assert!(summary.starts_with("done · 1 action · ") && summary.ends_with(" · home.test"), "{summary}");
@@ -1779,7 +1819,7 @@ async fn jev_run_takes_a_strategy_a_model_and_answers_json() {
             assert!(error);
             assert_eq!(
                 refused,
-                "strategy: classic, fast, literal, burst, lean, paste, watch, turbo, llm, llm=<model>"
+                "strategy: classic, fast, literal, burst, lean, paste, watch, near, reach, calm, deep, turbo, verify, submit, llm, llm=<model>"
             );
 
             let (text, error) = tool(
@@ -1802,6 +1842,156 @@ async fn jev_run_takes_a_strategy_a_model_and_answers_json() {
             let (_, first) = received.recv().unwrap();
             assert_eq!(first["model"], "jev-1.14.0");
             assert_eq!(first["state"]["recent_actions"], json!([]));
+        })
+        .await;
+}
+
+/// One TypeSafe answer that chooses `op` (and, for CLICK, element 1).
+fn chose(op: &str, p: f64) -> Value {
+    let mut answers = json!({
+        "operation": {"choice": op, "confidence": p, "probabilities": {op: p}},
+    });
+    if op == "CLICK" {
+        answers["click_target"] =
+            json!({"choice": "1", "confidence": 0.9, "probabilities": {"1": 0.9}});
+    }
+    json!({ "answers": answers })
+}
+
+#[tokio::test]
+async fn jev_run_doubts_a_low_done_then_ends_unsure_in_a_private_tab() {
+    // A DONE under 80% gets a second look, asked with "is anything left
+    // undone?"; still under it, the run ends unsure (Ultrafast.swift's claim).
+    local()
+        .run_until(async {
+            let (url, received) = fake_jev(vec![chose("DONE", 0.6), chose("DONE", 0.65)]);
+            let r = start(true);
+            r.host.0.borrow_mut().jev_endpoint = Some(url);
+            let (text, error) = tool(
+                r.server.port,
+                "jev_run",
+                json!({"goal": "press search", "url": "https://shop.test/", "newTab": true, "private": true, "json": true}),
+            )
+            .await;
+            assert!(!error, "{text}");
+            let run: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(run["status"], "unsure", "{run}");
+            assert_eq!(run["decisions"], 2);
+            assert_eq!(run["actions"], 0);
+            assert_eq!(run["totals"]["doubts"], 1);
+            assert!(run["note"].as_str().unwrap().starts_with("Jev said DONE, 65% sure — unsure: "), "{run}");
+            let (_, first) = received.recv().unwrap();
+            assert!(first["questions"].get("unmet").is_none());
+            let (_, second) = received.recv().unwrap();
+            assert_eq!(second["questions"]["unmet"]["type"], "noul");
+            let w = r.host.0.borrow();
+            assert_eq!(w.opened_private.len(), 1, "newTab + private opens a private tab");
+            assert_eq!(w.opened_foreground.last(), Some(&false));
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn jev_run_never_sends_a_payment_twice() {
+    // "Pay now" posted and the page showed nothing new: Jev choosing it
+    // again is not clicked; it is asked DONE or BLOCKED instead.
+    local()
+        .run_until(async {
+            let (url, received) = fake_jev(vec![
+                chose("CLICK", 0.9),
+                chose("CLICK", 0.9),
+                chose("DONE", 0.9),
+            ]);
+            let r = start(true);
+            {
+                let mut w = r.host.0.borrow_mut();
+                w.jev_endpoint = Some(url);
+                w.button = Some("Pay now".into());
+                w.posts = true;
+            }
+            let (text, error) = tool(
+                r.server.port,
+                "jev_run",
+                json!({"goal": "pay the bill", "json": true}),
+            )
+            .await;
+            assert!(!error, "{text}");
+            let run: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(run["status"], "done", "{run}");
+            assert!(
+                run["note"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with(" — submitted, no confirmation shown"),
+                "{run}"
+            );
+            assert_eq!(run["actions"], 1);
+            // Sent with fetch, no form: the engine's log has the POST.
+            assert_eq!(run["steps"][0]["sent"], true);
+            assert!(run["steps"][0].get("form_sent").is_none());
+            assert_eq!(run["steps"][0]["net"], json!(["200 pay"]));
+            assert_eq!(run["totals"]["resends_stopped"], 1);
+            let clicks = r
+                .host
+                .0
+                .borrow()
+                .inputs
+                .iter()
+                .filter(|(_, e)| matches!(e, InputEvent::Click { .. }))
+                .count();
+            assert_eq!(clicks, 1, "the payment went once");
+            let (_, _) = received.recv().unwrap();
+            let (_, second) = received.recv().unwrap();
+            assert_eq!(
+                second["state"]["recent_actions"][0]["action"],
+                "Pay now (sent; the page shows no confirmation)"
+            );
+            let (_, third) = received.recv().unwrap();
+            let offered: Vec<&String> = third["questions"]["operation"]["criteria"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .collect();
+            assert_eq!(offered, ["BLOCKED", "DONE"]);
+            assert!(
+                third["state"]["recent_actions"][1]["action"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("That was sent once already")
+            );
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn jev_run_leaves_out_a_covered_target() {
+    // Something drawn over the button is not a page that keeps changing: the
+    // button is left out and Jev is told why.
+    local()
+        .run_until(async {
+            let (url, received) = fake_jev(vec![chose("CLICK", 0.9), chose("BLOCKED", 0.9)]);
+            let r = start(true);
+            {
+                let mut w = r.host.0.borrow_mut();
+                w.jev_endpoint = Some(url);
+                w.covered = true;
+            }
+            let (text, error) =
+                tool(r.server.port, "jev_run", json!({"goal": "press search", "json": true})).await;
+            assert!(!error, "{text}");
+            let run: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(run["status"], "blocked", "{run}");
+            assert_eq!(run["totals"]["covered"], 1);
+            assert_eq!(run["totals"]["stale"], 0);
+            assert!(r.host.0.borrow().inputs.is_empty(), "nothing clicked");
+            let (_, _) = received.recv().unwrap();
+            let (_, second) = received.recv().unwrap();
+            assert_eq!(second["state"]["elements"], json!([]));
+            assert!(second["questions"].get("click_target").is_none());
+            assert_eq!(
+                second["state"]["recent_actions"][0]["action"],
+                "Not clicked: something (div#ov) is drawn over Search, so they are left out while it stays. Use what is on top."
+            );
         })
         .await;
 }

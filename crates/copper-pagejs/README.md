@@ -143,18 +143,31 @@ Two deliberate Linux changes to the helper, both marked `// Linux:` in
 | `page/console.js` | `Console` | `Fork/MCP/Tools.swift:447` `Tools.dispatch` | call | page | `page/helper.js` |
 | `page/find_text.js` | `FindText` | `Fork/MCP/Tools.swift:451` `Tools.dispatch` | call | page | `page/helper.js` |
 | `page/element.js` | `Element` | `Fork/MCP/Tools.swift:613` `Tools.dispatch` (`browser_evaluate`'s wrapper) | call | page | `page/helper.js` |
-| `page/console_early.js` | `ConsoleEarly` | `Fork/MCP/Page.swift:138` `Page.helper` (its console capture) | user script: start, main frame | page |  |
-| `jev/fast.js` | `JevFast` | `Fork/MCP/Ultrafast.swift:132` `Ultrafast.script` | installer | page |  |
+| `page/console_early.js` | `ConsoleEarly` | `Fork/MCP/Page.swift:138` `Page.helper` (its console capture) + `Page.consoleShim`'s short timers | user script: start, main frame | page |  |
+| `page/due.js` | `Due` | `Fork/MCP/Tools.swift:1036` `Tools.late` | call | page |  |
+| `jev/fast.js` | `JevFast` | `Fork/MCP/Ultrafast.swift:634` `Ultrafast.script` | installer | page |  |
 | `jev/observe.js` | `JevObserve` | `Fork/MCP/Ultrafast.swift:365` `Ultrafast.observe` | call | page | `jev/fast.js` |
-| `jev/marker.js` | `JevMarker` | `Fork/MCP/Ultrafast.swift:377` `Ultrafast.fresh` | call | page | `jev/fast.js` |
-| `jev/check.js` | `JevCheck` | `Fork/MCP/Ultrafast.swift:385` `Ultrafast.fresh` | call | page | `jev/fast.js` |
-| `jev/resolve.js` | `JevResolve` | `Fork/MCP/Ultrafast.swift:691` `Ultrafast.act` | call | page | `jev/fast.js` |
-| `jev/dom_click.js` | `JevDomClick` | `Fork/MCP/Ultrafast.swift:721` `Ultrafast.act` | call | page | `jev/fast.js` |
-| `jev/select_all.js` | `JevSelectAll` | `Fork/MCP/Ultrafast.swift:725` `Ultrafast.act` | call | page | `jev/fast.js` |
+| `jev/observe_for.js` | `JevObserveFor` | `Fork/MCP/Ultrafast.swift:1218` `Ultrafast.observe` | call | page | `jev/fast.js` |
+| `jev/settle_read.js` | `JevSettleRead` | `Fork/MCP/Ultrafast.swift:1246` `Ultrafast.observe` | async call | page |  |
+| `jev/marker.js` | `JevMarker` | `Fork/MCP/Ultrafast.swift:1308` `Ultrafast.fresh` | call | page | `jev/fast.js` |
+| `jev/check.js` | `JevCheck` | `Fork/MCP/Ultrafast.swift:1326` `Ultrafast.fresh` | call | page | `jev/fast.js` |
+| `jev/resolve.js` | `JevResolve` | `Fork/MCP/Ultrafast.swift:1878` `Ultrafast.act` | call | page | `jev/fast.js` |
+| `jev/dom_click.js` | `JevDomClick` | `Fork/MCP/Ultrafast.swift:1915` `Ultrafast.act` | call | page | `jev/fast.js` |
+| `jev/select_all.js` | `JevSelectAll` | `Fork/MCP/Ultrafast.swift:1927` `Ultrafast.act` | call | page | `jev/fast.js` |
 | `jev/set_value.js` | `JevSetValue` | `Fork/MCP/Ultrafast.swift:731` `Ultrafast.act` | call | page | `jev/fast.js` |
-| `jev/settle.js` | `JevSettle` | `Fork/MCP/Ultrafast.swift:354` `Ultrafast.observe` | async call | page |  |
-| `jev/scroll_by.js` | `JevScrollBy` | `Fork/MCP/Ultrafast.swift:688` `Ultrafast.act` | call | page |  |
+| `jev/settle.js` | `JevSettle` | `Fork/MCP/Ultrafast.swift:1246` `Ultrafast.observe` | async call | page |  |
+| `jev/scroll_by.js` | `JevScrollBy` | `Fork/MCP/Ultrafast.swift:1872` `Ultrafast.act` | call | page |  |
 | `jev/wait_change.js` | `JevWaitChange` | `Fork/MCP/UltrafastStrategies.swift:348` `Ultrafast.waitForChange` | async call | page |  |
+| `jev/reveal.js` | `JevReveal` | `Fork/MCP/Ultrafast.swift:1877` `Ultrafast.act` | call | page | `jev/fast.js` |
+| `jev/covered.js` | `JevCovered` | `Fork/MCP/Ultrafast.swift:2164` `Session.tick` | call | page | `jev/fast.js` |
+| `jev/insert.js` | `JevInsert` | `Fork/MCP/Ultrafast.swift:1923` `Ultrafast.act` | call | page | `jev/fast.js` |
+| `jev/lone_search.js` | `JevLoneSearch` | `Fork/MCP/Ultrafast.swift:1932` `Ultrafast.act` | call | page | `jev/fast.js` |
+| `jev/submit.js` | `JevSubmit` | `Fork/MCP/Ultrafast.swift:1934` `Ultrafast.act` | call | page | `jev/fast.js` |
+| `jev/arm.js` | `JevArm` | `Fork/MCP/Ultrafast.swift:1913` `Ultrafast.act` | call | page | `jev/fast.js` |
+| `jev/leaving.js` | `JevLeaving` | `Fork/MCP/Ultrafast.swift:1951` `Ultrafast.awaitLeaving` | call | page |  |
+| `jev/fired.js` | `JevFired` | `Fork/MCP/Ultrafast.swift:2660` `Session.tick` | call | page |  |
+| `jev/page_key.js` | `JevPageKey` | `Fork/MCP/Ultrafast.swift:1858` `Ultrafast.act` | call | page | `jev/fast.js` |
+| `jev/ready_state.js` | `JevReadyState` | `Fork/MCP/Ultrafast.swift:1276` `Ultrafast.observe` | call | page |  |
 | `trail/layer.js` | `TrailLayer` | `Fork/MCP/Trail.swift:146` `Trail.script` | installer | page |  |
 | `trail/glide.js` | `TrailGlide` | `Fork/MCP/Trail.swift:55` `Trail.glide` | async call | page | `trail/layer.js` |
 | `trail/fire.js` | `TrailFire` | `Fork/MCP/Trail.swift:140` `Trail.fire` | call | page | `trail/layer.js` |

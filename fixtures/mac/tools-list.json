@@ -1695,8 +1695,12 @@
               "description": "url in a background tab of yours",
               "type": "boolean"
             },
+            "private": {
+              "description": "With newTab: private, nothing kept",
+              "type": "boolean"
+            },
             "strategy": {
-              "description": "Comma-separated: classic, fast, literal, burst, lean, paste, watch, turbo, llm[=model]; default this computer's Fast mode",
+              "description": "Comma-separated: classic, fast, literal, burst, lean, paste, watch, turbo, verify, submit, llm[=model]; default this computer's Fast mode",
               "type": "string"
             },
             "tab": {

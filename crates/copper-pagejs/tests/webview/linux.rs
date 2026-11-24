@@ -28,6 +28,13 @@ pub fn main() {
         case!(mcp_scroll_a_row_scrolls_its_list),
         case!(jev_observe_matches_mac),
         case!(jev_actions),
+        case!(jev_deep_reads_shadow_roots_and_frames_and_acts_there),
+        case!(jev_calm_counts_only_real_changes),
+        case!(jev_query_forms_are_marked),
+        case!(jev_sponsored_links_are_left_out),
+        case!(jev_covered_targets_are_named),
+        case!(jev_query_text_boxes_are_lone_searches),
+        case!(jev_reach_arm_and_settle),
         case!(trail_layer),
         case!(perf_probe_text),
         case!(perf_probe_json),
@@ -412,10 +419,18 @@ async fn mcp_console_from_document_start(h: &H) -> Res {
         .await?,
         json!(true)
     );
+    // Short timers are counted (Tools.late): one of 600 ms started now is due
+    // in about that long; one of 5 s, or one started before the window, is not.
+    h.js("setTimeout(() => {}, 5000); true").await?;
+    ensure_eq!(h.run(&page::due(50.0)).await?, 0.0);
+    h.js("setTimeout(() => {}, 600); true").await?;
+    let due = h.run(&page::due(50.0)).await?;
+    ensure!(due > 450.0 && due <= 600.0, "due {due}");
     // Without the user script: the Mac's lazy capture, unchanged.
     h.clear_user_scripts();
     h.load("console.html").await?;
     ensure_eq!(h.run(&page::console()).await?, "[]");
+    ensure_eq!(h.run(&page::due(1000.0)).await?, 0.0);
     Ok(())
 }
 
@@ -661,10 +676,9 @@ async fn jev_actions(h: &H) -> Res {
     let (key, guard) = h.run(&jev::check(node)).await?;
     ensure_eq!(key, obs.page_key);
     ensure_eq!(guard.as_deref(), obs.guard_value(node));
-    let point = h
-        .run(&jev::resolve(&search))
-        .await?
-        .ok_or("search not resolvable")?;
+    let Some(jev::Resolved::At(point)) = h.run(&jev::resolve(&search)).await? else {
+        return Err("search not resolvable".into());
+    };
     let hit = h
         .js(&format!(
             "document.elementFromPoint({}, {}).id",
@@ -683,7 +697,8 @@ async fn jev_actions(h: &H) -> Res {
     ensure_eq!(h.run(&jev::dom_click(field)).await?, true);
     ensure_eq!(h.run(&jev::select_all(field)).await?, true);
     ensure_eq!(h.run(&jev::set_value(field, "Paris")).await?, true);
-    ensure_eq!(h.run(&jev::settle(&fill)).await?, true);
+    let settled = h.run(&jev::settle(&fill)).await?.ok_or("no settle")?;
+    ensure!(settled.ms < 1000.0, "{settled:?}");
     ensure_eq!(h.run(&jev::dom_click(node)).await?, true);
     ensure_eq!(
         h.js("document.getElementById('status').textContent")
@@ -734,6 +749,288 @@ async fn jev_actions(h: &H) -> Res {
         again.get("rect").is_some() && again.get("node").is_some(),
         "{again}"
     );
+    Ok(())
+}
+
+// The Mac's JevPageTests.swift, case by case: same pages, same numbers.
+
+fn labels(obs: &jev::Observation) -> Vec<&str> {
+    obs.actions.iter().map(|a| a.label.as_str()).collect()
+}
+
+/// The first action with `label` (and `kind`, when given).
+fn action_of(
+    obs: &jev::Observation,
+    label: &str,
+    kind: Option<&str>,
+) -> Result<jev::JevAction, String> {
+    obs.actions
+        .iter()
+        .find(|a| a.label == label && kind.is_none_or(|k| a.kind == k))
+        .cloned()
+        .ok_or_else(|| format!("no {label:?} in {:?}", labels(obs)))
+}
+
+async fn read(h: &H, deep: bool) -> Result<jev::Observation, String> {
+    h.run(&jev::observe_for(None, deep))
+        .await?
+        .ok_or_else(|| "no observation".into())
+}
+
+async fn jev_deep_reads_shadow_roots_and_frames_and_acts_there(h: &H) -> Res {
+    h.load("jev-deep.html").await?;
+    let flat = read(h, false).await?;
+    let shown = labels(&flat);
+    ensure!(shown.contains(&"Top button"), "{shown:?}");
+    ensure!(
+        !shown.contains(&"Shadow button") && !shown.contains(&"Frame field"),
+        "{shown:?}"
+    );
+    let deep = read(h, true).await?;
+    let shown = labels(&deep);
+    ensure!(
+        shown.contains(&"Top button") && shown.contains(&"Shadow button"),
+        "{shown:?}"
+    );
+    // The frame's field, at its place on the top page: frame 100+5 border, field 10 → x 115…235.
+    let field = action_of(&deep, "Frame field", Some("fill"))?;
+    let rect = field.rect.ok_or("no rect")?;
+    ensure_eq!((rect.x, rect.y), (115.0, 225.0));
+    // act's point: the field's centre on the top page, hit-tested in its own frame.
+    ensure_eq!(
+        h.run(&jev::resolve(&field)).await?,
+        Some(jev::Resolved::At(jev::Point { x: 175.0, y: 235.0 }))
+    );
+    // typing goes into the frame's field
+    let node = field.node.ok_or("no node")?;
+    ensure_eq!(
+        h.run(&jev::insert(node, "hello")).await?,
+        Some("hello".to_string())
+    );
+    ensure_eq!(
+        h.js("document.getElementById('f').contentDocument.getElementById('q').value")
+            .await?,
+        json!("hello")
+    );
+    // a shadow root's button resolves (hit-tested in its own tree) and takes a click
+    let button = action_of(&deep, "Shadow button", None)?;
+    ensure!(
+        matches!(
+            h.run(&jev::resolve(&button)).await?,
+            Some(jev::Resolved::At(_))
+        ),
+        "the shadow button does not resolve"
+    );
+    ensure_eq!(
+        h.run(&jev::dom_click(button.node.ok_or("no node")?))
+            .await?,
+        true
+    );
+    ensure_eq!(h.js("window.shadowClicked === true").await?, json!(true));
+    // a frame covered on the top page is no place to click
+    h.js("(() => { const c=document.createElement('div'); c.style.cssText='position:fixed;inset:0;background:white'; document.body.append(c); return true; })()")
+        .await?;
+    ensure_eq!(h.run(&jev::resolve(&field)).await?, None);
+    Ok(())
+}
+
+/// `calm`'s filter on real mutation records: a class written with the value it
+/// had is no change, a second style write within 200 ms is not one either, a
+/// real class change and the first style write are; without calm all count.
+async fn jev_calm_counts_only_real_changes(h: &H) -> Res {
+    h.load("jev-calm.html").await?;
+    ensure_eq!(h.run(&jev::install()).await?, true);
+    let counted = h
+        .js("(() => { const a = document.getElementById('a'), b = document.getElementById('b');
+          const o = new MutationObserver(() => {}); o.observe(document.body, {subtree: true, attributes: true, attributeOldValue: true});
+          a.setAttribute('class', 'x'); b.style.width = '10px'; b.style.width = '11px';
+          const records = o.takeRecords(); a.setAttribute('class', 'y'); records.push(...o.takeRecords()); o.disconnect();
+          const calm = window.__jevFast.change(true), plain = window.__jevFast.change(false);
+          return [records.filter(calm).length, records.filter(plain).length]; })()")
+        .await?;
+    ensure_eq!(counted, json!([2, 4]));
+    Ok(())
+}
+
+/// A search form's controls are marked `query`; a review form's are not.
+async fn jev_query_forms_are_marked(h: &H) -> Res {
+    h.load("jev-query.html").await?;
+    let obs = read(h, false).await?;
+    let first = |label: &str| obs.actions.iter().find(|a| a.label == label);
+    let marked = |label: &str| first(label).is_some_and(|a| a.query == Some(true));
+    let in_form = |label: &str| first(label).is_some_and(|a| a.in_form == Some(true));
+    ensure!(
+        marked("Go") && marked("Search the shop") && marked("Find") && marked("Find docs"),
+        "{:?}",
+        obs.actions
+    );
+    ensure!(
+        !marked("Post review") && !marked("Your review"),
+        "{:?}",
+        obs.actions
+    );
+    ensure!(
+        in_form("Post review") && !in_form("Go") && !in_form("Find"),
+        "{:?}",
+        obs.actions
+    );
+    Ok(())
+}
+
+/// Ads are not offered: a sponsored brand-store banner is not the product.
+async fn jev_sponsored_links_are_left_out(h: &H) -> Res {
+    h.load("jev-sponsored.html").await?;
+    let obs = read(h, false).await?;
+    let shown = labels(&obs);
+    ensure!(shown.contains(&"The product"), "{shown:?}");
+    ensure!(
+        !shown.contains(&"Brand store banner")
+            && !shown.contains(&"Sponsored pick")
+            && !shown.contains(&"Boxed ad"),
+        "{shown:?}"
+    );
+    Ok(())
+}
+
+/// Something drawn over the target: resolve says what, and `covered` names
+/// every offered control under it.
+async fn jev_covered_targets_are_named(h: &H) -> Res {
+    h.load("jev-covered.html").await?;
+    let obs = read(h, false).await?;
+    let under = action_of(&obs, "Under", None)?;
+    let clear = action_of(&obs, "Clear", None)?;
+    ensure_eq!(
+        h.run(&jev::resolve(&under)).await?,
+        Some(jev::Resolved::Covered {
+            covered: "div#ov".into()
+        })
+    );
+    ensure!(
+        matches!(
+            h.run(&jev::resolve(&clear)).await?,
+            Some(jev::Resolved::At(_))
+        ),
+        "Clear does not resolve"
+    );
+    let nodes = [under.node.ok_or("no node")?, clear.node.ok_or("no node")?];
+    ensure_eq!(h.run(&jev::covered(&nodes)).await?, vec![nodes[0]]);
+    Ok(())
+}
+
+/// A plain text field that is its form's query box goes in with Return; a
+/// text field in another kind of form does not.
+async fn jev_query_text_boxes_are_lone_searches(h: &H) -> Res {
+    h.load("jev-lone.html").await?;
+    let obs = read(h, false).await?;
+    let fills: Vec<u64> = obs
+        .actions
+        .iter()
+        .filter(|a| a.kind == "fill")
+        .filter_map(|a| a.node)
+        .collect();
+    ensure_eq!(fills.len(), 2);
+    let mut lone = Vec::new();
+    for node in fills {
+        h.run(&jev::insert(node, "1706.03762")).await?;
+        lone.push(h.run(&jev::lone_search(node)).await?);
+    }
+    ensure_eq!(lone, vec![true, false]);
+    Ok(())
+}
+
+/// The rest of the new calls: a goal's offscreen link (`reach`), reveal,
+/// page_key, arm / leaving / fired around a submit the page keeps, submit,
+/// and the settle with its read; without the helpers, nothing is armed.
+async fn jev_reach_arm_and_settle(h: &H) -> Res {
+    h.load("jev-calls.html").await?;
+    // No helpers yet (a new document): nothing to settle, nothing armed.
+    let save_any = jev::JevAction {
+        kind: "click".into(),
+        ..Default::default()
+    };
+    ensure_eq!(
+        h.run(&jev::settle_and_read(&save_any, true, true, false, None))
+            .await?,
+        None
+    );
+    ensure_eq!(h.run(&jev::leaving()).await?, "false");
+    ensure_eq!(h.run(&jev::fired()).await?, false);
+    // A new document's state, until the helpers go in (the read in a navigation).
+    ensure_eq!(h.run(&jev::ready_state()).await?, "complete");
+    ensure_eq!(h.run(&jev::install()).await?, true);
+    ensure_eq!(h.run(&jev::ready_state()).await?, "");
+    // A document's first read (the Mac's `kind: read`): the whole page settles, then is read.
+    let first = jev::JevAction {
+        kind: "read".into(),
+        ..Default::default()
+    };
+    let read_first = h
+        .run(&jev::settle_and_read(&first, true, true, false, None))
+        .await?
+        .ok_or("no first read")?;
+    ensure!(
+        read_first.settle.as_ref().is_some_and(|s| !s.capped),
+        "{:?}",
+        read_first.settle
+    );
+    let goal = json!({ "words": ["vienna"], "phrases": [] });
+    let obs = h
+        .run(&jev::observe_for(Some(&goal), false))
+        .await?
+        .ok_or("no observation")?;
+    let vienna = action_of(&obs, "Vienna", None)?;
+    let node = vienna.node.ok_or("no node")?;
+    ensure_eq!(vienna.offscreen.as_deref(), Some("below"));
+    ensure_eq!(vienna.href, Some(h.url("wiki/Vienna")));
+    ensure!(obs.relevant.contains(&node), "relevant {:?}", obs.relevant);
+    let plain = h.run(&jev::observe()).await?.ok_or("no observation")?;
+    ensure!(
+        action_of(&plain, "Vienna", None).is_err(),
+        "an offscreen link without a goal"
+    );
+    // Brought in before its click: the page moved, its key with it.
+    ensure_eq!(h.run(&jev::page_key()).await?, obs.page_key);
+    ensure_eq!(h.run(&jev::reveal(node)).await?, true);
+    ensure!(
+        h.js("window.scrollY").await?.as_f64().unwrap_or(0.0) > 0.0,
+        "not scrolled"
+    );
+    ensure!(
+        h.run(&jev::page_key()).await? != obs.page_key,
+        "page key did not move"
+    );
+    h.js("(scrollTo(0, 0), true)").await?;
+    // A submit the page keeps: armed, then not leaving, and a form went in (read once).
+    let save = action_of(&obs, "Save", None)?;
+    ensure_eq!(save.submits, Some(true));
+    let save_node = save.node.ok_or("no node")?;
+    ensure_eq!(h.run(&jev::arm(save_node)).await?, true);
+    ensure_eq!(h.run(&jev::leaving()).await?, "armed");
+    ensure_eq!(h.run(&jev::dom_click(save_node)).await?, true);
+    sleep(50).await;
+    ensure_eq!(h.run(&jev::leaving()).await?, "false");
+    ensure_eq!(h.run(&jev::fired()).await?, true);
+    ensure_eq!(h.run(&jev::fired()).await?, false);
+    ensure_eq!(h.js("window.sent").await?, json!(1));
+    // A plain button is not leaving, at once.
+    let plain_node = action_of(&obs, "Plain", None)?.node.ok_or("no node")?;
+    ensure_eq!(h.run(&jev::arm(plain_node)).await?, true);
+    ensure_eq!(h.run(&jev::leaving()).await?, "false");
+    // A field's form, sent without a window; not a search box.
+    let note = action_of(&obs, "Note", Some("fill"))?;
+    let note_node = note.node.ok_or("no node")?;
+    ensure_eq!(h.run(&jev::lone_search(note_node)).await?, false);
+    ensure_eq!(h.run(&jev::submit(note_node)).await?, true);
+    ensure_eq!(h.js("window.sent").await?, json!(2));
+    ensure_eq!(h.run(&jev::submit(plain_node)).await?, false);
+    // The settle after a click, and the read with it.
+    let after = h
+        .run(&jev::settle_and_read(&save, true, true, false, Some(&goal)))
+        .await?
+        .ok_or("no read after the settle")?;
+    let report = after.settle.clone().ok_or("no settle report")?;
+    ensure!(report.ms < 400.0 && !report.capped, "{report:?}");
+    ensure!(after.action("e1").is_some(), "{:?}", labels(&after));
     Ok(())
 }
 

@@ -280,6 +280,13 @@ pub fn console_early() -> UserScript {
     UserScript::new(Script::ConsoleEarly, json!({}))
 }
 
+/// After an input: how long (ms) until the last short timer the page started
+/// in the last `ms` fires — a navigation it sets off is worth waiting for.
+/// 0 on a page without [`console_early`].
+pub fn due(ms: f64) -> Call<f64> {
+    Call::new(Script::Due, json!({ "ms": ms }))
+}
+
 /// `browser_find`.
 pub fn find_text(needle: &str) -> Call<String> {
     Call::new(Script::FindText, json!({ "needle": needle }))
