@@ -15,7 +15,10 @@ use std::time::Duration;
 
 use copper_core::cloud::CloudProvided;
 use copper_core::intelligence::IntelligenceKeys;
-use copper_engine::{Capture, CaptureRequest, InputEvent};
+use copper_engine::{
+    Capture, CaptureRequest, ChosenFiles, Cookie, DialogHandler, DialogId, FileChooserHandler,
+    GeoPosition, InputEvent, NetLog,
+};
 use copper_pagejs::jev::Extras;
 use serde_json::{Map, Value};
 
@@ -132,6 +135,45 @@ pub trait Page: Clone + 'static {
     fn can_post_input(&self) -> bool {
         true
     }
+
+    // -- page tools (tools-page) ----------------------------------------------
+    // `copper_engine::PageView`'s "agents' page tools" methods; the defaults
+    // are a page that has none of them.
+
+    /// Who takes the page's questions first (`PageView::set_dialog_handler`).
+    fn set_dialog_handler(&self, handler: Option<DialogHandler>) {
+        let _ = handler;
+    }
+    /// Answer a held question (`PageView::answer_dialog`).
+    fn answer_dialog(&self, id: DialogId, accept: bool, text: Option<&str>) -> bool {
+        let _ = (id, accept, text);
+        false
+    }
+    /// Who takes the page's file choosers first.
+    fn set_file_chooser_handler(&self, handler: Option<FileChooserHandler>) {
+        let _ = handler;
+    }
+    /// Answer the held file chooser (`None`: cancel).
+    fn answer_file_chooser(&self, files: ChosenFiles) -> bool {
+        let _ = files;
+        false
+    }
+    /// Keep the page's requests from now on.
+    fn watch_network(&self) {}
+    /// The page's requests, once watched.
+    fn network(&self) -> Option<NetLog> {
+        None
+    }
+    /// Print the page to a paged PDF at `path`.
+    fn print_pdf(&self, path: &std::path::Path) -> impl Future<Output = Result<(), String>> {
+        let _ = path;
+        std::future::ready(Err("this build can't print pages".to_string()))
+    }
+    /// Whether one of Copper's own scripts is waiting on this page right
+    /// now (`Tools.Page.waiting`): a question held then would hold it too.
+    fn waiting(&self) -> bool {
+        false
+    }
 }
 
 /// The browser, as the agent tools drive it. See the module docs for
@@ -182,8 +224,10 @@ pub trait Host: 'static {
 
     /// Navigate the tab (`Tab.go(to:)`): `url` is already a full address.
     fn navigate(&self, id: &TabId, url: &str);
-    fn go_back(&self, id: &TabId);
-    fn go_forward(&self, id: &TabId);
+    /// Go back (forward) in the tab's history; false when there is no page
+    /// to go to, and nothing happened.
+    fn go_back(&self, id: &TabId) -> bool;
+    fn go_forward(&self, id: &TabId) -> bool;
 
     /// A load is in flight in the tab.
     fn is_loading(&self, id: &TabId) -> bool {
@@ -328,6 +372,66 @@ pub trait Host: 'static {
     fn claude_ready(&self) -> bool {
         false
     }
+
+    // -- page tools (tools-page) ----------------------------------------------
+
+    /// Run `task` on the host's loop, on its own (a held question's or file
+    /// chooser's time limit). The default drops it: no time limit.
+    fn spawn(&self, task: std::pin::Pin<Box<dyn Future<Output = ()>>>) {
+        drop(task);
+    }
+
+    /// Where `browser_pdf_save` puts a PDF it is not told a place for.
+    fn downloads_folder(&self) -> std::path::PathBuf {
+        copper_core::platform::home_dir()
+            .unwrap_or_default()
+            .join("Downloads")
+    }
+
+    /// Every cookie in the tab's cookie jar (its profile's).
+    fn cookie_jar(&self, id: &TabId) -> impl Future<Output = Result<Vec<Cookie>, String>> {
+        let _ = id;
+        std::future::ready(Err("cookies are not available in this build".to_string()))
+    }
+    /// Set a cookie in the tab's jar.
+    fn set_cookie(&self, id: &TabId, cookie: Cookie) -> impl Future<Output = Result<(), String>> {
+        let _ = (id, cookie);
+        std::future::ready(Err("cookies are not available in this build".to_string()))
+    }
+    /// Delete a cookie from the tab's jar.
+    fn delete_cookie(
+        &self,
+        id: &TabId,
+        cookie: Cookie,
+    ) -> impl Future<Output = Result<(), String>> {
+        let _ = (id, cookie);
+        std::future::ready(Err("cookies are not available in this build".to_string()))
+    }
+    /// Whether the user shared `url`'s site with agents (Settings ›
+    /// Passwords › Agent access: every account, or one for the site) — the
+    /// gate on HttpOnly cookies, as on `browser_sign_in`.
+    fn site_shared_with_agents(&self, url: &str) -> impl Future<Output = bool> {
+        let _ = url;
+        std::future::ready(false)
+    }
+
+    /// Whether `site` (`host` or `host:port`) is allowed `kind`
+    /// (`geolocation`, `camera`, `microphone`).
+    fn site_permission(&self, site: &str, kind: &str) -> bool {
+        let _ = (site, kind);
+        false
+    }
+    /// Allow `kind` for `site`, or (`false`) forget it so the site is asked.
+    fn set_site_permission(&self, site: &str, kind: &str, allowed: bool) {
+        let _ = (site, kind, allowed);
+    }
+    /// The position pages granted geolocation are told.
+    fn geolocation(&self) -> Option<GeoPosition> {
+        None
+    }
+    fn set_geolocation(&self, position: Option<GeoPosition>) {
+        let _ = position;
+    }
 }
 
 /// [`Page`] for any `copper_engine::PageView`, plus the two things the
@@ -368,7 +472,11 @@ impl<P: copper_engine::PageView + 'static> Page for EnginePage<P> {
             None => copper_engine::World::Page,
         };
         let future = self.page.call_async(body, &Map::new(), &world);
-        async move { future.await.map_err(engine_error) }
+        let page = self.page.page_id();
+        async move {
+            let _waiting = Waiting::enter(page);
+            future.await.map_err(engine_error)
+        }
     }
 
     fn capture(&self, request: CaptureRequest) -> impl Future<Output = Result<Capture, String>> {
@@ -391,5 +499,68 @@ impl<P: copper_engine::PageView + 'static> Page for EnginePage<P> {
 
     fn can_post_input(&self) -> bool {
         (self.mapped)()
+    }
+
+    fn set_dialog_handler(&self, handler: Option<DialogHandler>) {
+        self.page.set_dialog_handler(handler);
+    }
+
+    fn answer_dialog(&self, id: DialogId, accept: bool, text: Option<&str>) -> bool {
+        self.page.answer_dialog(id, accept, text)
+    }
+
+    fn set_file_chooser_handler(&self, handler: Option<FileChooserHandler>) {
+        self.page.set_file_chooser_handler(handler);
+    }
+
+    fn answer_file_chooser(&self, files: ChosenFiles) -> bool {
+        self.page.answer_file_chooser(files)
+    }
+
+    fn watch_network(&self) {
+        self.page.watch_network();
+    }
+
+    fn network(&self) -> Option<NetLog> {
+        self.page.network()
+    }
+
+    fn print_pdf(&self, path: &std::path::Path) -> impl Future<Output = Result<(), String>> {
+        let future = self.page.print_pdf(path);
+        async move { future.await.map_err(engine_error) }
+    }
+
+    fn waiting(&self) -> bool {
+        WAITING.with(|w| w.borrow().get(&self.page.page_id()).is_some_and(|n| *n > 0))
+    }
+}
+
+thread_local! {
+    /// Pages with a script of Copper's in flight, and how many.
+    static WAITING: std::cell::RefCell<std::collections::HashMap<copper_engine::PageId, u32>> =
+        std::cell::RefCell::default();
+}
+
+/// Counts one script in flight on a page while it lives.
+struct Waiting(copper_engine::PageId);
+
+impl Waiting {
+    fn enter(page: copper_engine::PageId) -> Waiting {
+        WAITING.with(|w| *w.borrow_mut().entry(page).or_default() += 1);
+        Waiting(page)
+    }
+}
+
+impl Drop for Waiting {
+    fn drop(&mut self) {
+        WAITING.with(|w| {
+            let mut w = w.borrow_mut();
+            if let Some(n) = w.get_mut(&self.0) {
+                *n = n.saturating_sub(1);
+                if *n == 0 {
+                    w.remove(&self.0);
+                }
+            }
+        });
     }
 }

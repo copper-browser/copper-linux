@@ -64,18 +64,43 @@ impl Rect {
 #[serde(untagged)]
 pub enum Located {
     Found(Rect),
-    Missing { error: String },
+    Missing {
+        error: String,
+        /// There, but hidden, off the page or covered (asked with `hit`).
+        #[serde(default)]
+        blocked: bool,
+        /// What covers it, when something does.
+        #[serde(default)]
+        cover: Option<String>,
+    },
 }
 
 impl Located {
-    /// The Mac's error text when there is no box (`Page.prepare`).
+    /// Hidden, off the page or covered: worth another look a beat later
+    /// (a fading toast, a closing sheet).
+    pub fn blocked(&self) -> bool {
+        matches!(self, Located::Missing { blocked: true, .. })
+    }
+
+    /// The Mac's error text when there is no box (`Page.prepare`): what is
+    /// wrong, then what to do about it.
     pub fn into_result(self, target: &Locator) -> Result<Rect, String> {
         match self {
             Located::Found(rect) => Ok(rect),
-            Located::Missing { error } => Err(format!(
-                "{}: {error}. Take a fresh browser_snapshot — refs change when the page does.",
-                target.script()
-            )),
+            Located::Missing {
+                error,
+                blocked,
+                cover,
+            } => {
+                let next = if cover.is_some() {
+                    "Close or dismiss what covers it first (find its button with browser_snapshot), then try again."
+                } else if blocked {
+                    "Open or scroll to whatever reveals it first, or pick another ref from a fresh browser_snapshot."
+                } else {
+                    "Take a fresh browser_snapshot — refs change when the page does."
+                };
+                Err(format!("{}: {error}. {next}", target.script()))
+            }
         }
     }
 }
@@ -100,9 +125,14 @@ pub fn snapshot(selector: Option<&str>, interactive: bool, limit: u32) -> Call<S
     )
 }
 
-/// Scroll into view and measure (`Page.prepare`).
-pub fn rect(target: &Locator) -> Call<Located> {
-    Call::new(Script::Rect, json!({ "target": target.script() }))
+/// Scroll into view and measure (`Page.prepare`). With `hit` (anything
+/// about to be clicked or typed into), the point at its middle must be the
+/// element's own, or it is [`Located::Missing`] saying what is in the way.
+pub fn rect(target: &Locator, hit: bool) -> Call<Located> {
+    Call::new(
+        Script::Rect,
+        json!({ "target": target.script(), "hit": hit }),
+    )
 }
 
 /// Document height for a full-page screenshot (≤ 20000).
@@ -184,6 +214,24 @@ pub fn drag(start_ref: &str, end_ref: &str) -> Call<String> {
     )
 }
 
+/// One file for [`drop`]: its name, MIME type and bytes (base64).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct DropFile {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub mime: String,
+    pub data: String,
+}
+
+/// `browser_file_upload` with `ref`: `files` dropped on the element, as a
+/// file manager drops them. Answers `{accepted}` or `{error}`.
+pub fn drop(reference: &str, files: &[DropFile]) -> Call<Value> {
+    Call::new(
+        Script::Drop,
+        json!({ "target": Locator::Ref(reference.into()).script(), "files": files }),
+    )
+}
+
 /// `browser_wait_for`'s poll: whether the body's text includes `text`
 /// (`None` before there is a body).
 pub fn has_text(text: &str) -> Call<Option<bool>> {
@@ -227,17 +275,16 @@ pub fn find_text(needle: &str) -> Call<String> {
     Call::new(Script::FindText, json!({ "needle": needle }))
 }
 
-/// `browser_evaluate`: the agent's function, called with the element behind
-/// `reference` (or with nothing). The function text is the agent's own code
-/// and is necessarily spliced in, as on the Mac. Render the result with
-/// [`crate::render::render`].
+/// `browser_evaluate`: the agent's function — called with the element behind
+/// `reference`, or with nothing — or a plain expression. A Promise is
+/// awaited; the answer is a string as it is, anything else as JSON text. The
+/// function text is the agent's own code and is necessarily spliced in, as
+/// on the Mac.
 pub fn evaluate(function: &str, reference: Option<&str>) -> Call<Value> {
-    match reference {
-        Some(r) => Call::custom(
-            Script::Element,
-            json!({ "target": Locator::Ref(r.into()).script() }),
-            function.to_string(),
-        ),
-        None => Call::custom(Script::Element, Value::Null, function.to_string()),
-    }
+    let target = reference.map(|r| Locator::Ref(r.into()).script());
+    Call::custom(
+        Script::Element,
+        json!({ "target": target.unwrap_or_default() }),
+        function.to_string(),
+    )
 }

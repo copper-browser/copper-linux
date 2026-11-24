@@ -28,10 +28,12 @@ pub mod cli;
 pub mod client;
 pub mod cloud_cli;
 pub mod config;
+pub mod dialogs;
 pub mod drive;
 pub mod host;
 pub mod input;
 pub mod intelligence;
+pub mod page_tools;
 pub mod screenshot;
 pub mod secrets;
 pub mod server;
@@ -155,6 +157,8 @@ pub(crate) struct State {
     pub calls: u64,
     pub last_tool: String,
     pub jev_note: String,
+    /// Questions and file choosers on agents' tabs (`dialogs`).
+    pub dialogs: dialogs::Book,
 }
 
 /// The MCP server and its tools, bound to one [`Host`]. Lives on the host's
@@ -165,16 +169,19 @@ pub struct Mcp<H: Host> {
     pub(crate) state: RefCell<State>,
     pub(crate) net: RefCell<Option<intelligence::Net>>,
     pub(crate) running: Cell<bool>,
+    /// Itself, for page hooks that outlive a call (`dialogs`).
+    pub(crate) me: std::rc::Weak<Self>,
 }
 
 impl<H: Host> Mcp<H> {
     pub fn new(host: H, settings: Settings) -> Rc<Self> {
-        Rc::new(Mcp {
+        Rc::new_cyclic(|me| Mcp {
             host,
             settings: RefCell::new(settings),
             state: RefCell::new(State::default()),
             net: RefCell::new(None),
             running: Cell::new(false),
+            me: me.clone(),
         })
     }
 

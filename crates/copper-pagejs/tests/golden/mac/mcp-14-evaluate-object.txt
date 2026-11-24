@@ -1,13 +1,1 @@
-{
-  "a" : null,
-  "b" : [
-    1,
-    2.5,
-    "x\/y"
-  ],
-  "c" : {
-
-  },
-  "callbacks" : 2,
-  "callSites" : 1
-}
+{"b":[1,2.5,"x/y"],"a":null,"c":{},"callSites":1,"callbacks":2}
