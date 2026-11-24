@@ -29,7 +29,9 @@ use std::collections::HashMap;
 use std::fmt;
 
 mod clear;
+mod tidy;
 pub use clear::Cleared;
+pub use tidy::restored;
 
 /// How many closed tabs ⌘⇧T remembers.
 pub const CLOSED_CAP: usize = 12;

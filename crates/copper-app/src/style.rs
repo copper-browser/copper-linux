@@ -88,6 +88,11 @@ button.clear-seam {
   min-width: 12px; min-height: 12px; padding: 0; border-radius: 99px;
   box-shadow: none; transition: opacity 120ms ease-out;
 }
+button.tidy-seam {
+  min-height: 18px; padding: 0 6px; border-radius: 99px; background: transparent;
+  box-shadow: none; font-size: 11px; font-weight: 500;
+  transition: background-color 120ms ease-out, color 120ms ease-out;
+}
 
 .space-chip {
   min-width: 26px; min-height: 26px; padding: 0; border-radius: 7px;
@@ -305,6 +310,8 @@ fn surface(scope: &str, t: &Tint) -> String {
 {scope} .pin:hover {{ background-color: {hover2}; }}
 {scope} .pin.live {{ background-color: {pill}; box-shadow: inset 0 0 0 1px {rim}, 0 1px 2px {lift}; }}
 {scope} button.clear-seam {{ background-color: {hover}; color: {muted}; }}
+{scope} button.tidy-seam {{ color: {muted}; }}
+{scope} button.tidy-seam:hover, {scope} button.tidy-seam:disabled {{ background-color: {hover}; color: {ink}; }}
 {scope} .new-tab-row {{ color: {faint}; }}
 {scope} .new-tab-row:hover {{ color: {muted}; background-color: {hover}; }}
 {scope} .drop-before {{ box-shadow: inset 0 2px {dot}; }}
