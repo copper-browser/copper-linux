@@ -5,6 +5,7 @@
 //!   crashes, vault / canvas / cloud through the other lanes' contracts.
 //! * [`groups`], [`crashes`], [`heat`] — what `browser_groups`,
 //!   `copper_crashes` and the perf probe read.
+//! * [`handoff`] — `browser_handoff`'s asks, and the bar the app draws.
 //! * [`cli`] — `copper --mcp-stdio` and `copper <verb>` (before any window).
 //!
 //! The app supplies the rest through [`AgentsApp`]: the backstage (a tab an
@@ -20,6 +21,7 @@
 pub mod cli;
 pub mod crashes;
 pub mod groups;
+pub mod handoff;
 pub mod heat;
 pub mod host;
 
@@ -105,6 +107,12 @@ pub trait AgentsApp<P: Platform>: 'static {
     fn drive(&self, event: &DriveEvent);
     /// Forget every mark (the server stopped).
     fn clear_marks(&self);
+
+    // -- handoff (tools-state) ---------------------------------------------------
+    /// An agent handed the person a step ([`handoff`]): when Copper is in the
+    /// background, ask for their attention once, without taking focus (Mac:
+    /// one Dock bounce). Never called headless.
+    fn attention(&self) {}
 
     // -- passwords ---------------------------------------------------------------
     /// `browser_sign_in` on `tab` (the app's credential stores).
@@ -250,6 +258,11 @@ impl<P: Platform> Agents<P> {
 
     pub fn mcp(&self) -> &Rc<Mcp<host::AppHost<P>>> {
         &self.mcp
+    }
+
+    /// What agents have handed to the person (`browser_handoff`).
+    pub fn handoff(&self) -> Rc<handoff::Handoff> {
+        self.mcp.host.handoff.clone()
     }
 
     /// Settings › Agents › Let agents drive this window.
@@ -496,7 +509,7 @@ fn mcp_settings(file: &AgentFile) -> copper_mcp::Settings {
 
 /// `SEARCH_HEADLESS=1` (the Mac's switch) or `COPPER_HEADLESS=1`: reported
 /// by `/health`.
-fn headless() -> bool {
+pub(crate) fn headless() -> bool {
     ["SEARCH_HEADLESS", "COPPER_HEADLESS"].iter().any(|k| {
         std::env::var(k)
             .map(|v| {

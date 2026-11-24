@@ -127,6 +127,8 @@ Two deliberate Linux changes to the helper, both marked `// Linux:` in
 | `page/metrics.js` | `Metrics` | `Fork/MCP/Page.swift:223` `Page.screenshot` | call | page |  |
 | `page/click.js` | `Click` | `Fork/MCP/Tools.swift:310` `Tools.dispatch` | call | page | `page/helper.js` |
 | `page/hover.js` | `Hover` | `Fork/MCP/Tools.swift:320` `Tools.dispatch` | call | page | `page/helper.js` |
+| `page/element_at.js` | `ElementAt` | `Fork/MCP/Tools.swift:962` `Tools.elementAt` | call | page |  |
+| `page/click_at.js` | `ClickAt` | `Fork/MCP/Tools.swift:977` `Tools.clickAt` | call | page |  |
 | `page/focus.js` | `Focus` | `Fork/MCP/Tools.swift:334` `Tools.dispatch` | call | page | `page/helper.js` |
 | `page/set_value.js` | `SetValue` | `Fork/MCP/Tools.swift:341` `Tools.dispatch` | call | page | `page/helper.js` |
 | `page/submit.js` | `Submit` | `Fork/MCP/Tools.swift:349` `Tools.dispatch` | call | page | `page/helper.js` |

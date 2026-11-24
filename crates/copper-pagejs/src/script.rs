@@ -119,6 +119,10 @@ scripts! {
     Click = "page/click.js", Call, Page, HELPER;
     /// DOM hover.
     Hover = "page/hover.js", Call, Page, HELPER;
+    /// `browser_mouse_click_xy`: what is at a viewport point, `tag#id "label"` (`''` off the viewport).
+    ElementAt = "page/element_at.js", Call, Page, None;
+    /// `browser_mouse_click_xy` without real input: DOM pointer and mouse events at the point.
+    ClickAt = "page/click_at.js", Call, Page, None;
     /// Focus a target.
     Focus = "page/focus.js", Call, Page, HELPER;
     /// Native-setter typing + input/change events.

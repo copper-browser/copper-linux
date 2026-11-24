@@ -751,6 +751,35 @@ pub async fn autofill<P: Platform>(
     }
 }
 
+/// `browser_vault_save` / `browser_vault_note` and `copper bitwarden
+/// save -|note -` (`BitwardenSave.swift`): `op` save | note. Agent access
+/// is Settings' (share all, the per-item list, the Agents folder). The
+/// answer never holds a value it was given.
+pub async fn vault_write<P: Platform>(
+    shell: Shell<P>,
+    op: String,
+    args: Map<String, Value>,
+) -> Value {
+    let Some(vault) = super::vault() else {
+        return json!({ "ok": false, "error": "passwords are not available in this build" });
+    };
+    let share_all = shell.settings().bool_or(super::keys::SHARE_ALL, false);
+    let allowed = super::string_list(&shell, super::keys::ALLOWED);
+    drop(shell);
+    rt::run(async move {
+        let answer = vault
+            .bw
+            .lock()
+            .await
+            .vault_write(&op, &args, share_all, &allowed)
+            .await;
+        vault.refresh().await;
+        answer
+    })
+    .await
+    .unwrap_or_else(|| json!({ "ok": false, "error": "Bitwarden did not save" }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

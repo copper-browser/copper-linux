@@ -29,28 +29,7 @@ pub trait Calendar {
     fn month_name(month: u32) -> String;
 }
 
-/// Bytes like macOS's file-style `ByteCountFormatter`: decimal units,
-/// whole KB, one decimal for MB, two for GB.
-pub fn bytes(n: u64) -> String {
-    let n = n as f64;
-    if n < 1000.0 {
-        return if n as u64 == 1 {
-            "1 byte".into()
-        } else {
-            format!("{} bytes", n as u64)
-        };
-    }
-    if n < 1e6 {
-        return format!("{} KB", (n / 1e3).round() as u64);
-    }
-    if n < 1e9 {
-        return format!("{:.1} MB", n / 1e6);
-    }
-    if n < 1e12 {
-        return format!("{:.2} GB", n / 1e9);
-    }
-    format!("{:.2} TB", n / 1e12)
-}
+pub use copper_core::downloads::bytes;
 
 /// `4.2 of 18.6 MB`: the unit once, when both figures share it.
 pub fn part_of(done: u64, total: u64) -> String {

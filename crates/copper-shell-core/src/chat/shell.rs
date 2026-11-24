@@ -96,7 +96,7 @@ impl<P: Platform> ChatHost for ShellChat<P> {
     }
 
     fn catalogue(&self, jev: bool) -> Vec<Value> {
-        copper_mcp::catalogue::catalogue(jev, true)
+        copper_mcp::catalogue::catalogue(jev, true, true)
     }
 
     fn page(&self) -> LocalFuture<Option<PageInFront>> {

@@ -18,6 +18,7 @@ use crate::shell::host_of;
 use crate::shell::pages::profile_key;
 use crate::view::ShellView;
 use crate::{Platform, ProfileOf};
+use copper_core::TabId;
 use copper_core::downloads::{
     DownloadId as RowId, DownloadState as RowState, Downloads as Model, Keep,
 };
@@ -52,6 +53,9 @@ pub struct Downloads<P: Platform> {
     entries: RefCell<Vec<Entry<P>>>,
     /// The folder chosen this session (Settings › General), if changed.
     dir: RefCell<Option<PathBuf>>,
+    /// Tabs a page named for a download whose row is not there yet (the
+    /// page's and the profile's streams race).
+    pending: RefCell<HashMap<DownloadId, Vec<TabId>>>,
 }
 
 impl<P: Platform> Default for Downloads<P> {
@@ -64,6 +68,7 @@ impl<P: Platform> Default for Downloads<P> {
             loaded: Cell::default(),
             entries: RefCell::default(),
             dir: RefCell::default(),
+            pending: RefCell::default(),
         }
     }
 }
@@ -101,6 +106,7 @@ impl<P: Platform> Downloads<P> {
                     if let Some(p) = &d.path {
                         model.set_destination(id, p, None);
                     }
+                    model.set_tabs(id, d.tabs.clone());
                 }
                 *self.model.borrow_mut() = model;
             }
@@ -184,6 +190,9 @@ impl<P: Platform> Downloads<P> {
                     .model
                     .borrow_mut()
                     .start(&name_from_url(&url), &url, None);
+                if let Some(tabs) = self.pending.borrow_mut().remove(&ev.id) {
+                    self.model.borrow_mut().set_tabs(row, tabs);
+                }
                 self.entries.borrow_mut().push(Entry {
                     row,
                     engine: ev.id,
@@ -273,6 +282,20 @@ impl<P: Platform> Downloads<P> {
                         ));
                     }
                 }
+            }
+        }
+    }
+
+    /// The page in `tabs[0]` started engine download `engine` (`tabs[1]`:
+    /// the tab that opened that one), for browser_downloads.
+    pub fn attribute(&self, engine: DownloadId, tabs: Vec<TabId>) {
+        match self.row_of(engine) {
+            Some(row) => {
+                self.model.borrow_mut().set_tabs(row, tabs);
+                self.changed();
+            }
+            None => {
+                self.pending.borrow_mut().insert(engine, tabs);
             }
         }
     }

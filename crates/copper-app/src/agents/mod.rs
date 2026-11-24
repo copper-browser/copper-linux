@@ -9,9 +9,12 @@
 //!   the agent's last call.
 //! * [`mark`] — who is driving which tab: a small dot on the tab row, a
 //!   capsule over the page with Stop.
+//! * [`handoff`] — the bar at the bottom of the window when an agent hands
+//!   the person a step (`browser_handoff`).
 //! * [`settings`] — Settings › Agents.
 
 pub mod backstage;
+pub mod handoff;
 pub mod mark;
 pub mod qa;
 pub mod settings;
@@ -52,6 +55,7 @@ pub fn register(shell: &Shell) {
         stage: stage.clone(),
     });
     let server = copper_shell_core::agents::start(shell, hands);
+    handoff::install(shell, &server);
     AGENTS.with(|a| {
         *a.borrow_mut() = Some(Rc::new(Agents {
             server,

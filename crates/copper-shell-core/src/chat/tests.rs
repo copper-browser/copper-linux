@@ -166,7 +166,7 @@ impl ChatHost for Mock {
         true
     }
     fn catalogue(&self, jev: bool) -> Vec<Value> {
-        copper_mcp::catalogue::catalogue(jev, true)
+        copper_mcp::catalogue::catalogue(jev, true, true)
     }
     fn page(&self) -> copper_engine::LocalFuture<Option<PageInFront>> {
         let page = self.page.clone();

@@ -24,6 +24,17 @@ pub fn error_line(id: &Value, text: &str) -> String {
     )
 }
 
+/// Seconds to wait for one message's answer: 120, or longer for a
+/// `browser_handoff` that waits on the person (up to 600 s).
+fn wait(message: Option<&Value>) -> u64 {
+    match message {
+        Some(m) if m["params"]["name"] == "browser_handoff" => {
+            crate::cli::handoff_wait(&m["params"]["arguments"]).max(120)
+        }
+        _ => 120,
+    }
+}
+
 /// Every message that comes in gets the same refusal (requests with an id).
 fn answer_all(input: &mut dyn BufRead, out: &mut dyn Write, text: &str) -> io::Result<()> {
     for line in input.lines() {
@@ -146,7 +157,7 @@ pub fn run_with(
             PATH,
             &headers,
             trimmed.as_bytes(),
-            Duration::from_secs(120),
+            Duration::from_secs(wait(parsed.as_ref())),
         );
         let (status, data) = match sent {
             Ok(r) => (r.status, r.body),

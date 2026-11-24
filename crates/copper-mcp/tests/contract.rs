@@ -13,7 +13,9 @@ use copper_core::intelligence::IntelligenceKeys;
 use copper_engine::{Bitmap, Capture, CaptureArea, CaptureRequest, InputEvent};
 use copper_mcp::client;
 use copper_mcp::config::Endpoint;
-use copper_mcp::host::{GroupInfo, Host, IntelligenceSource, Page, TabId, TabInfo};
+use copper_mcp::host::{
+    Content, GroupInfo, HandoffAnswer, Host, IntelligenceSource, Page, TabId, TabInfo,
+};
 use copper_mcp::server::{self, Body, RequestCtx};
 use copper_mcp::transport::{self, TransportConfig};
 use copper_mcp::{Mcp, Settings, Who};
@@ -42,6 +44,12 @@ struct World {
     /// Secret redaction: a page that copies this secret into everything it
     /// says (snapshot, text, find, console, evaluate, Jev's read, errors).
     leak: Option<String>,
+    /// Canvases answer (each tool says "<name> ran"); else the default refusal.
+    canvases: bool,
+    /// browser_handoff: what each call asked (tab, agent, message, seconds)
+    /// and the answers the person gives, in turn (`None`: no answer in time).
+    handoffs: Vec<(TabId, String, String, f64)>,
+    answers: Vec<Option<HandoffAnswer>>,
 }
 
 #[derive(Clone)]
@@ -397,6 +405,19 @@ impl Host for FakeHost {
         Ok(())
     }
 
+    fn canvas(
+        &self,
+        tool: &str,
+        _args: &Map<String, Value>,
+    ) -> impl Future<Output = Result<Vec<Content>, String>> {
+        let said = if self.0.borrow().canvases {
+            Ok(vec![Content::text(format!("{tool} ran"))])
+        } else {
+            Err("Canvases are not available in this build yet".to_string())
+        };
+        async move { said }
+    }
+
     fn groups(&self) -> Vec<GroupInfo> {
         vec![GroupInfo {
             name: "Work".into(),
@@ -420,6 +441,43 @@ impl Host for FakeHost {
             _ => json!({ "error": format!("{method} is not available in this build yet") }),
         };
         async move { answer }
+    }
+
+    fn vault_write(&self, op: &str, args: &Map<String, Value>) -> impl Future<Output = Value> {
+        self.0.borrow_mut().calls.push((
+            String::new(),
+            format!("vault:{op}"),
+            Value::Object(args.clone()),
+        ));
+        let answer = if op == "note" {
+            json!({"ok": false, "error": "Bitwarden is locked"})
+        } else {
+            json!({"ok": true, "id": "i-1", "created": true, "updated": false,
+                   "name": args["url"], "folder": "Agents"})
+        };
+        async move { answer }
+    }
+
+    fn handoff(
+        &self,
+        tab: &TabId,
+        agent: &str,
+        message: &str,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<Option<HandoffAnswer>, String>> {
+        let mut w = self.0.borrow_mut();
+        w.handoffs.push((
+            tab.clone(),
+            agent.into(),
+            message.into(),
+            timeout.as_secs_f64(),
+        ));
+        let answer = if w.answers.is_empty() {
+            None
+        } else {
+            w.answers.remove(0)
+        };
+        async move { Ok(answer) }
     }
 
     fn intelligence(&self) -> IntelligenceSource {
@@ -633,14 +691,45 @@ async fn tools_list_is_the_mac_catalogue_minus_voice() {
             // kept at the options Linux implements; 37493 with their model,
             // strategy and json, 2026-10-30 — vision is still left out;
             // 38065 with browser_take_screenshot's selector, frame, region,
-            // padding and scale, 2026-11-17; 41434 with the page tools
-            // browser_handle_dialog, _file_upload, _pdf_save,
+            // padding and scale, 2026-11-17; 24828 with the Mac's one-line
+            // catalogue and the browser-state tools, then 28197 with the page
+            // tools browser_handle_dialog, _file_upload, _pdf_save,
             // _network_requests, _cookies and _permissions, 2026-11-24).
             let all: Vec<Value> = mac.values().cloned().collect();
             let wire = copper_pagejs::render::compact_json(
                 &json!({"jsonrpc": "2.0", "id": 2, "result": {"tools": all}}),
             );
-            assert_eq!(wire.len(), 41434);
+            assert_eq!(wire.len(), 28197);
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn vault_saves_need_no_tab() {
+    // BitwardenSave.swift: no tab, no page staged; the answer's keys sorted,
+    // {ok:false} an error with its words.
+    local()
+        .run_until(async {
+            let r = start(false);
+            let port = r.server.port;
+            r.host.0.borrow_mut().active = None;
+            let (text, error) = tool(
+                port,
+                "browser_vault_save",
+                json!({"url": "x.com", "username": "u", "password": "pw-1"}),
+            )
+            .await;
+            assert!(!error, "{text}");
+            assert_eq!(
+                text,
+                r#"{"created":true,"folder":"Agents","id":"i-1","name":"x.com","ok":true,"updated":false}"#
+            );
+            let (text, error) =
+                tool(port, "browser_vault_note", json!({"name": "n", "text": "t"})).await;
+            assert!(error);
+            assert_eq!(text, "Bitwarden is locked");
+            let ran: Vec<String> = r.host.0.borrow().calls.iter().map(|c| c.1.clone()).collect();
+            assert_eq!(ran, ["vault:save", "vault:note"]);
         })
         .await;
 }
@@ -662,6 +751,43 @@ async fn jev_tools_only_in_jev_mode() {
             let (text, error) = tool(r.server.port, "jev_observe", json!({})).await;
             assert!(error);
             assert_eq!(text, "Jev mode is off — Settings › Agents › Jev mode");
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn canvas_op_shapes_come_with_the_first_read() {
+    local()
+        .run_until(async {
+            let r = start(true);
+            r.host.0.borrow_mut().canvases = true;
+            let port = r.server.port;
+            let (first, error) = tool(port, "canvas_read", json!({})).await;
+            assert!(!error);
+            assert_eq!(
+                first,
+                format!("canvas_read ran\n{}", copper_mcp::catalogue::OPS_GUIDE)
+            );
+            let (again, _) = tool(port, "canvas_read", json!({})).await;
+            assert_eq!(again, "canvas_read ran");
+            for ops in [json!({}), json!({"ops": []})] {
+                let (text, error) = tool(port, "canvas_apply", ops).await;
+                assert!(error);
+                assert_eq!(
+                    text,
+                    format!(
+                        "ops (a non-empty array) required. {}",
+                        copper_mcp::catalogue::OPS_GUIDE
+                    )
+                );
+            }
+            let (applied, error) = tool(
+                port,
+                "canvas_apply",
+                json!({"ops": [{"op": "delete", "id": "a"}]}),
+            )
+            .await;
+            assert_eq!((applied.as_str(), error), ("canvas_apply ran", false));
         })
         .await;
 }
@@ -785,9 +911,11 @@ async fn initialize_session_and_notifications() {
             assert_eq!(result["serverInfo"], json!({"name": "copper", "version": "1.0.test"}));
             assert_eq!(result["capabilities"], json!({"tools": {"listChanged": false}, "resources": {}, "prompts": {}}));
             let mac: Value = serde_json::from_str(include_str!("../../../fixtures/mac/mcp-initialize.json")).unwrap();
+            // Linux has no new-password autofill, so not that clause.
             assert!(mac["result"]["instructions"]
                 .as_str()
                 .unwrap()
+                .replacen("; for a new or changed password call it with kind new-password", "", 1)
                 .starts_with(result["instructions"].as_str().unwrap()));
 
             let mut with_session = authed();
@@ -1022,6 +1150,76 @@ async fn named_tabs_errors_and_groups() {
             )
             .await;
             assert_eq!(text, "Window is 1024×700");
+
+            let (text, error) = tool(port, "browser_downloads", json!({"wait": 5})).await;
+            assert!(!error);
+            assert_eq!(
+                text,
+                "No downloads from this tab. A click that downloads lands the file in ~/Downloads."
+            );
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn handoff_waits_on_the_person_and_never_touches_the_tab() {
+    local()
+        .run_until(async {
+            let r = start(false);
+            let port = r.server.port;
+            let page = "### Page\n- URL: https://mail.test/\n- Title (the page's own words): \"Mail\"\n- Tab: 00000001 (background — not on the user's screen)";
+            let (text, error) = tool(
+                port,
+                "browser_handoff",
+                json!({"tab": "00000001", "message": "  Solve the check ", "timeout": 3}),
+            )
+            .await;
+            assert!(!error);
+            assert_eq!(
+                text,
+                format!("No answer yet after 3 s; the bar is still up for the user. Call browser_handoff again to keep waiting (timeout up to 600), or go on without this step. {page}")
+            );
+            r.host.0.borrow_mut().answers = vec![Some(HandoffAnswer::Done), Some(HandoffAnswer::NotNow)];
+            let (text, error) = tool(
+                port,
+                "browser_handoff",
+                json!({"tab": "00000001", "reason": "Pay", "timeout": 9000}),
+            )
+            .await;
+            assert!(!error);
+            assert_eq!(
+                text,
+                format!("The user says it is done. Take a fresh browser_snapshot before going on. {page}")
+            );
+            let (text, error) = tool(port, "browser_handoff", json!({"tab": "00000001"})).await;
+            assert!(error);
+            assert_eq!(
+                text,
+                format!("The user said not now. Leave this step undone and tell them in your reply. {page}")
+            );
+            for bad in [json!(0), json!(-2)] {
+                let (text, error) = tool(port, "browser_handoff", json!({"timeout": bad})).await;
+                assert!(error);
+                assert_eq!(text, "timeout must be a number of seconds, more than 0 (at most 600)");
+            }
+            let w = r.host.0.borrow();
+            let asked: Vec<(&str, &str, f64)> = w
+                .handoffs
+                .iter()
+                .map(|(t, _, m, s)| (&t.0[..8], m.as_str(), *s))
+                .collect();
+            assert_eq!(
+                asked,
+                [
+                    ("00000001", "Solve the check", 3.0),
+                    ("00000001", "Pay", 600.0),
+                    ("00000001", "Finish this step yourself", 15.0),
+                ]
+            );
+            assert!(w.handoffs.iter().all(|h| !h.1.is_empty()));
+            // Not staged, not shown: the user's tab stays where it was.
+            assert!(r.mcp.held().is_empty());
+            assert_eq!(w.active.as_ref(), Some(&w.tabs[0].id));
         })
         .await;
 }
