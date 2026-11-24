@@ -51,6 +51,18 @@
   </requires>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.7.0" date="2026-11-24">
+      <description>
+        <p>Caught up with the Mac.</p>
+        <ul>
+          <li>Tidy files a space's loose tabs into named folders, with Undo.</li>
+          <li>A morning page opens once a day; pins with something unread wear a copper dot.</li>
+          <li>Heavy pages you have left and big pins you haven't looked at sleep; pins never unload otherwise.</li>
+          <li>Agents get history, bookmarks, spaces, downloads, dialogs, uploads, PDFs, cookies, permissions, a hand-off bar and Bitwarden saves.</li>
+          <li>Agents fill a login only on the exact address it was saved for, and Jev is faster and surer.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.6.3" date="2026-11-17">
       <description>
         <p>Agents picture any part of a tab, in HD.</p>
