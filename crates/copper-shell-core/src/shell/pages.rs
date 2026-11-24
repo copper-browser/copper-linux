@@ -79,6 +79,22 @@ impl<P: Platform> PageSlot<P> {
         self.frame.show_status(&crash_status(reason));
     }
 
+    /// The page kept taking its process down as it loaded, so it is not
+    /// loaded again ([`crate::crash`]): it says so, and Try Again loads
+    /// `url` afresh ([`Shell::reload`] goes to a failed address).
+    pub fn show_loop(&self, url: &str) {
+        self.crashed.set(true);
+        self.loading.set(false);
+        self.failed_url.replace(Some(url.to_string()));
+        self.frame.show_status(&PageStatus {
+            title: crate::crash::LOOP.into(),
+            description: "Copper stopped loading it again.".into(),
+            button: "Try Again".into(),
+            detail: None,
+            offline: false,
+        });
+    }
+
     /// A load failed: the reason and Retry, in the page (`online`: whether
     /// the network is reachable, [`ShellView::is_online`]).
     pub fn show_failure(&self, url: &str, error: &str, online: bool) {
@@ -229,6 +245,7 @@ impl<P: Platform> Shell<P> {
         }
         // Woken: its last picture stands in until the page has drawn.
         self.wake_cover(id);
+        self.pin_woke(id);
         let profile = self.profile_for_tab(id, private, profile.as_deref())?;
         self.0.downloads.attach(self, &profile);
         let page = self.engine().new_page(&profile, page_options());
@@ -474,9 +491,11 @@ impl<P: Platform> Shell<P> {
                     .tab(id)
                     .map(|t| t.url.clone())
                     .unwrap_or_default();
-                slot.show_crash(reason);
                 if reason != CrashReason::TerminatedByApi || !slot.private {
                     crate::crash::record(self, id, &url, reason);
+                }
+                if !self.recover(id, slot, reason, active) {
+                    slot.show_crash(reason);
                 }
                 if active {
                     self.view().set_progress(false, 0.0);

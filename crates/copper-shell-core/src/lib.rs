@@ -51,6 +51,7 @@ pub mod options;
 pub mod palette;
 pub mod permit;
 pub mod pinlight;
+pub mod pins;
 pub mod private;
 pub mod recent;
 pub mod session;

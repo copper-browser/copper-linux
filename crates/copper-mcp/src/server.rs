@@ -60,12 +60,14 @@ pub fn channel() -> (JobSender, JobReceiver) {
 }
 
 /// The loopback-only control methods (the CLI's `link`, `intelligence`,
-/// `claude`, `bitwarden` verbs). Never reachable through an agent link.
-pub const CONTROLS: [&str; 4] = [
+/// `claude`, `bitwarden`, `pins` verbs). Never reachable through an agent
+/// link.
+pub const CONTROLS: [&str; 5] = [
     "copper/link",
     "copper/intelligence",
     "copper/claude",
     "copper/bitwarden",
+    "copper/pins",
 ];
 
 fn error(id: &Value, code: i64, message: &str) -> Value {

@@ -10,7 +10,7 @@ use copper_engine::{
     JsonValue, LinkHover, LoadState, LocalFuture, NewWindowHandler, NewWindowRequest, PageEvent,
     PageId, PageOptions, PageView, PermissionId, PermissionKind, Profile, Result, ScriptId,
     Snapshot, SnapshotRegion, StyleLevel, StyleSheetId, Trust, TrustedInput, UserScript,
-    UserStyleSheet, WeakPage, WebsiteDataKinds, WindowDisposition, World,
+    UserStyleSheet, WeakPage, WebsiteDataKinds, Weight, WindowDisposition, World,
 };
 use glib::prelude::*;
 use webkit6::prelude::*;
@@ -161,6 +161,12 @@ pub(crate) struct Shared {
     menu: RefCell<Option<Rc<OpenMenu>>>,
     /// The file chooser this page has open, if any.
     chooser: RefCell<Option<Chooser>>,
+    /// The web process the page runs in, as Copper started it, when known
+    /// (`process`).
+    process: Cell<Option<u32>>,
+    /// The host of the last document it committed: a load elsewhere may
+    /// move it to a new process.
+    host: RefCell<Option<String>>,
     /// What agents' page tools take and read (dialogs, choosers, requests).
     pub(crate) agent: crate::agent::AgentHooks,
 }
@@ -331,6 +337,8 @@ impl WebKitPage {
             held: Cell::new(false),
             menu: RefCell::default(),
             chooser: RefCell::default(),
+            process: Cell::new(None),
+            host: RefCell::default(),
             agent: Default::default(),
         });
         profile.register_page(&view, Rc::downgrade(&shared.sink));
@@ -437,6 +445,18 @@ impl WebKitPage {
         view.connect_load_changed(move |v, ev| {
             let sh = &sh2;
             let url = v.uri().map(String::from);
+            // Another host may mean another process, started just before.
+            if matches!(ev, LoadEvent::Started | LoadEvent::Committed) {
+                let host = url.as_deref().and_then(convert::url_host);
+                if *sh.host.borrow() != host
+                    && let Some(p) = crate::process::appeared()
+                {
+                    sh.process.set(Some(p));
+                }
+                if ev == LoadEvent::Committed {
+                    *sh.host.borrow_mut() = host;
+                }
+            }
             let state = match ev {
                 LoadEvent::Started => LoadState::Started { url },
                 LoadEvent::Redirected => LoadState::Redirected { url },
@@ -484,6 +504,7 @@ impl WebKitPage {
         let sh2 = sh.clone();
         view.connect_web_process_terminated(move |_, reason| {
             sh2.cancel_file_chooser();
+            sh2.process.set(None);
             sh2.agent.close_all();
             let s = &sh2.sink;
             let reason = match reason {
@@ -822,19 +843,19 @@ impl PageView for WebKitPage {
     }
 
     fn load(&self, url: &str) {
-        self.inner.view.load_uri(url);
+        self.track(|| self.inner.view.load_uri(url));
     }
 
     fn load_html(&self, html: &str, base_url: Option<&str>) {
-        self.inner.view.load_html(html, base_url);
+        self.track(|| self.inner.view.load_html(html, base_url));
     }
 
     fn back(&self) {
-        self.inner.view.go_back();
+        self.track(|| self.inner.view.go_back());
     }
 
     fn forward(&self) {
-        self.inner.view.go_forward();
+        self.track(|| self.inner.view.go_forward());
     }
 
     fn can_go_back(&self) -> bool {
@@ -846,11 +867,13 @@ impl PageView for WebKitPage {
     }
 
     fn reload(&self, bypass_cache: bool) {
-        if bypass_cache {
-            self.inner.view.reload_bypass_cache();
-        } else {
-            self.inner.view.reload();
-        }
+        self.track(|| {
+            if bypass_cache {
+                self.inner.view.reload_bypass_cache();
+            } else {
+                self.inner.view.reload();
+            }
+        });
     }
 
     fn hard_reload(&self) -> LocalFuture<Result<Vec<String>>> {
@@ -1153,12 +1176,18 @@ impl PageView for WebKitPage {
     }
 
     fn new_related(&self, opts: PageOptions) -> WebKitPage {
-        WebKitPage::create(
+        let page = WebKitPage::create(
             &self.inner.profile,
             &opts,
             Some(&self.inner.view),
             &self.inner.page_scripts,
-        )
+        );
+        // It shares this page's process.
+        page.inner
+            .shared
+            .process
+            .set(self.inner.shared.process.get());
+        page
     }
 
     fn set_new_window_handler(&self, handler: Option<NewWindowHandler<WebKitPage>>) {
@@ -1247,6 +1276,32 @@ impl PageView for WebKitPage {
 
     fn terminate_web_process(&self) {
         self.inner.view.terminate_web_process();
+    }
+
+    fn weight(&self) -> LocalFuture<Option<Weight>> {
+        let started = self.inner.shared.process.get();
+        Box::pin(async move {
+            let started = started?;
+            // /proc is read off this thread: a big process takes a moment.
+            let (process, bytes) = gio::spawn_blocking(move || crate::process::weigh(started))
+                .await
+                .ok()
+                .flatten()?;
+            Some(Weight { process, bytes })
+        })
+    }
+}
+
+impl WebKitPage {
+    /// Run a load; a page with no process yet gets one inside it, and that
+    /// is the page's (`process`).
+    fn track(&self, load: impl FnOnce()) {
+        let sh = &self.inner.shared;
+        if sh.process.get().is_some() {
+            load();
+        } else if let Some(p) = crate::process::spawned_by(load) {
+            sh.process.set(Some(p));
+        }
     }
 }
 

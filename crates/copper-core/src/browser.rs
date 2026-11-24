@@ -204,7 +204,8 @@ pub struct OpenOptions {
 /// What closing a kept tab does (Arc: closing a kept tab never loses it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Closing {
-    /// A pin is put down (asleep) rather than closed.
+    /// A pin is stepped away from (its page stays loaded) rather than
+    /// closed.
     pub keep_pins: bool,
     /// A Saved row is unloaded (asleep, still saved, in its place) rather
     /// than closed.
@@ -212,8 +213,8 @@ pub struct Closing {
 }
 
 impl Closing {
-    /// ⌘W, middle-click, an agent's close, Close Other Tabs: a pin is put
-    /// down, a Saved row unloaded, a Today row closed.
+    /// ⌘W, middle-click, an agent's close, Close Other Tabs: a pin is
+    /// stepped away from, a Saved row unloaded, a Today row closed.
     pub const CLOSE: Closing = Closing {
         keep_pins: true,
         keep_saved: true,
@@ -239,8 +240,9 @@ pub enum CloseOutcome {
     Closed {
         selected: Option<TabId>,
     },
-    /// A pin is put down (asleep), not closed.
-    PutDown {
+    /// A pin is never closed this way: the tab on screen moves off it and
+    /// its page stays loaded (Mac `PinsAwake`, Copper#134).
+    SteppedAway {
         selected: Option<TabId>,
     },
     /// A Saved row is unloaded (asleep), still saved, in its place.
@@ -849,8 +851,8 @@ impl Browser {
         }
     }
 
-    /// Close a tab (`Browser.close`). Unless `force`, a pin is put down
-    /// (asleep) and a Saved row unloaded instead ([`Closing::CLOSE`]); with
+    /// Close a tab (`Browser.close`). Unless `force`, a pin is stepped away
+    /// from and a Saved row unloaded instead ([`Closing::CLOSE`]); with
     /// it, anything closes for good ([`Closing::REMOVE`]).
     pub fn close_tab(&mut self, id: &TabId, force: bool) -> CloseOutcome {
         self.close_with(
@@ -873,24 +875,17 @@ impl Browser {
         if !tab.is_pinned() && tab.saved && !tab.private && how.keep_saved {
             return self.unload(id, was_active);
         }
+        // A pin keeps its page until it is unpinned (Mac `PinsAwake`): ⌘W on
+        // the one on screen lands on the loose tab you used last, awake ones
+        // first, never another pin (⌘W would bounce between two); on one
+        // not on screen it does nothing.
         if tab.is_pinned() && how.keep_pins {
-            if let Some(t) = self.tabs.get_mut(id) {
-                t.sleeping = true;
-            }
-            self.changed(BrowserEvent::TabChanged(id.clone()));
             let mut selected = self.active_id();
             if was_active {
                 let current = self.current.clone();
-                let loose: Vec<&Tab> = self
-                    .row(&current)
-                    .into_iter()
-                    .filter(|t| !t.sleeping)
-                    .collect();
-                let pool: Vec<&Tab> = if loose.is_empty() {
-                    self.visible().into_iter().filter(|t| t.id != *id).collect()
-                } else {
-                    loose
-                };
+                let loose = self.row(&current);
+                let awake: Vec<&Tab> = loose.iter().copied().filter(|t| !t.sleeping).collect();
+                let pool = if awake.is_empty() { loose } else { awake };
                 selected = pool
                     .iter()
                     .max_by(|a, b| a.seen.0.total_cmp(&b.seen.0))
@@ -903,7 +898,7 @@ impl Browser {
                     None => self.set_active(None),
                 }
             }
-            return CloseOutcome::PutDown { selected };
+            return CloseOutcome::SteppedAway { selected };
         }
         let visible_before = self.visible_ids(&self.current);
         let visible_index = visible_before.iter().position(|t| t == id);
@@ -1491,7 +1486,7 @@ mod tests {
     }
 
     #[test]
-    fn pins_are_global_and_put_down() {
+    fn pins_are_global_and_stepped_away_from() {
         let mut b = Browser::new();
         let a = b.open_tab("https://a.test/", opts(true));
         let x = b.open_tab("https://x.test/", opts(false));
@@ -1501,17 +1496,38 @@ mod tests {
         b.switch_space(&s2);
         assert_eq!(b.visible().len(), 1, "the pin shows in every space");
         b.select(&a);
-        assert!(matches!(
+        // Ctrl+W on a pin: you step away and its page stays (Copper#134).
+        assert_eq!(
             b.close_tab(&a, false),
-            CloseOutcome::PutDown { .. }
-        ));
-        assert!(b.tab(&a).unwrap().sleeping);
+            CloseOutcome::SteppedAway { selected: None }
+        );
+        assert!(!b.tab(&a).unwrap().sleeping);
+        assert!(b.pins().iter().any(|t| t.id == a));
         b.select(&x);
         assert_ne!(
             b.current_space_id(),
             s2,
             "selecting a tab of another space switches to it"
         );
+        // A loose tab to land on: the one used last, awake ones first; a
+        // pin not on screen is left alone.
+        let y = b.open_tab("https://y.test/", opts(false));
+        b.set_sleeping(&y, true);
+        b.select(&a);
+        assert_eq!(
+            b.close_tab(&a, false),
+            CloseOutcome::SteppedAway {
+                selected: Some(x.clone())
+            }
+        );
+        assert_eq!(b.active_id(), Some(x.clone()));
+        assert_eq!(
+            b.close_tab(&a, false),
+            CloseOutcome::SteppedAway {
+                selected: Some(x.clone())
+            }
+        );
+        assert!(!b.tab(&a).unwrap().sleeping);
     }
 
     /// Pins, then the current row as the column draws it: Saved, then Today.

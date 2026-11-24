@@ -7,6 +7,13 @@
 //! (read off the picture's right and bottom edges) — until the page has
 //! something better to show. Then it fades, over [`FADE`].
 //!
+//! The picture is kept on disk too ([`CoverStore`], Mac `Fork/Covers.swift`):
+//! a tab waking with no picture in memory — every tab after a launch, a big
+//! pin left asleep at quit ([`crate::pins`]) — takes the one on disk.
+//! Pictures are filed by the page's address and its profile (a profile
+//! signed in as someone else never opens on your inbox's picture), never
+//! for a private tab; past 100 MB the ones used longest ago go.
+//!
 //! The picture comes off a beat after the new document commits
 //! ([`AFTER_COMMIT`], the fallback for "first paint", which no engine here
 //! reports), at once when the load finishes or fails, and never stays more
@@ -19,6 +26,7 @@ use copper_core::TabId;
 use copper_engine::{Bitmap, PageView};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -183,6 +191,133 @@ pub async fn take<P: Platform>(page: &PageOf<P>) -> Option<Cover> {
     rx.await.ok().flatten()
 }
 
+/// Pictures kept on disk, one per page and profile (Mac `CoverStore`).
+pub struct CoverStore {
+    pub folder: PathBuf,
+    /// What every picture together may take.
+    pub cap: u64,
+}
+
+/// Where a JPEG says what it is: a comment segment right after its start.
+const NOTE: &str = "copper-cover";
+
+impl CoverStore {
+    pub fn new(folder: PathBuf) -> Self {
+        CoverStore {
+            folder,
+            cap: 100 << 20,
+        }
+    }
+
+    /// `<jar>-<page>.jpg`: hashes of the profile and of the address.
+    pub fn file(&self, url: &str, jar: &str) -> PathBuf {
+        use sha2::{Digest, Sha256};
+        let hex = |text: &str, n: usize| -> String {
+            Sha256::digest(text.as_bytes())[..n]
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect()
+        };
+        self.folder
+            .join(format!("{}-{}.jpg", hex(jar, 6), hex(url, 16)))
+    }
+
+    /// Keep `cover` for `url` in `jar`, then let the oldest go past the cap.
+    pub fn write(&self, cover: &Cover, url: &str, jar: &str) -> bool {
+        let Some(rest) = cover.jpeg.strip_prefix(&[0xFF, 0xD8][..]) else {
+            return false;
+        };
+        let ground = cover.ground.map_or("-".to_string(), |[r, g, b]| {
+            format!("#{r:02x}{g:02x}{b:02x}")
+        });
+        let note = format!(
+            "{NOTE} {}x{} {}x{} {ground}",
+            cover.size.0, cover.size.1, cover.pixels.0, cover.pixels.1
+        );
+        let mut data = vec![0xFF, 0xD8, 0xFF, 0xFE];
+        data.extend_from_slice(&(note.len() as u16 + 2).to_be_bytes());
+        data.extend_from_slice(note.as_bytes());
+        data.extend_from_slice(rest);
+        let path = self.file(url, jar);
+        let tmp = path.with_extension("tmp");
+        let wrote = std::fs::create_dir_all(&self.folder).is_ok()
+            && std::fs::write(&tmp, &data).is_ok()
+            && std::fs::rename(&tmp, &path).is_ok();
+        if wrote {
+            self.evict();
+        }
+        wrote
+    }
+
+    /// The picture kept for `url` in `jar`, marked as just used.
+    pub fn read(&self, url: &str, jar: &str) -> Option<Cover> {
+        let path = self.file(url, jar);
+        let data = std::fs::read(&path).ok()?;
+        let len = u16::from_be_bytes([*data.get(4)?, *data.get(5)?]) as usize;
+        if data.get(..4)? != [0xFF, 0xD8, 0xFF, 0xFE] || len < 2 {
+            return None;
+        }
+        let note = std::str::from_utf8(data.get(6..4 + len)?).ok()?;
+        let mut words = note.strip_prefix(NOTE)?.split_whitespace();
+        let pair = |w: Option<&str>| -> Option<(u32, u32)> {
+            let (a, b) = w?.split_once('x')?;
+            Some((a.parse().ok()?, b.parse().ok()?))
+        };
+        let (size, pixels) = (pair(words.next())?, pair(words.next())?);
+        let ground = words.next().and_then(|g| {
+            let hex = g.strip_prefix('#')?;
+            let n = u32::from_str_radix(hex, 16).ok()?;
+            Some([(n >> 16) as u8, (n >> 8) as u8, n as u8])
+        });
+        let mut jpeg = vec![0xFF, 0xD8];
+        jpeg.extend_from_slice(&data[4 + len..]);
+        if let Ok(f) = std::fs::File::options().append(true).open(&path) {
+            let _ = f.set_modified(std::time::SystemTime::now());
+        }
+        Some(Cover {
+            jpeg,
+            pixels,
+            size,
+            ground,
+        })
+    }
+
+    /// Everything (Clear browsing data).
+    pub fn remove_all(&self) {
+        let _ = std::fs::remove_dir_all(&self.folder);
+    }
+
+    /// Past the cap, the pictures used longest ago go until the rest fit.
+    pub fn evict(&self) {
+        let Ok(dir) = std::fs::read_dir(&self.folder) else {
+            return;
+        };
+        let mut rows: Vec<(std::time::SystemTime, u64, PathBuf)> = dir
+            .flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "jpg"))
+            .filter_map(|e| {
+                let m = e.metadata().ok()?;
+                Some((m.modified().ok()?, m.len(), e.path()))
+            })
+            .collect();
+        let mut total: u64 = rows.iter().map(|r| r.1).sum();
+        rows.sort();
+        for (_, bytes, path) in rows {
+            if total <= self.cap {
+                break;
+            }
+            if std::fs::remove_file(&path).is_ok() {
+                total -= bytes;
+            }
+        }
+    }
+}
+
+/// The profile a kept picture is filed under.
+fn jar(profile: Option<&str>) -> &str {
+    profile.unwrap_or("default")
+}
+
 type CoverHook<P> = Rc<dyn Fn(&Shell<P>, &TabId, Option<&Rc<Cover>>)>;
 
 /// The pictures of sleeping tabs and the covers up now.
@@ -234,17 +369,51 @@ impl<P: Platform> Shell<P> {
         self.covers().pictures.borrow().contains_key(id)
     }
 
-    /// Keep `cover` for when tab `id` wakes.
+    /// The pictures kept on disk.
+    pub fn cover_store(&self) -> CoverStore {
+        CoverStore::new(self.cache_dir().join("covers"))
+    }
+
+    /// Whether a picture of `url` is kept on disk for `profile`.
+    pub(crate) fn cover_kept(&self, url: &str, profile: Option<&str>) -> bool {
+        self.cover_store().file(url, jar(profile)).exists()
+    }
+
+    /// The address and profile tab `id`'s picture is filed under; `None`
+    /// for a private tab, which keeps none.
+    fn filed(&self, id: &TabId) -> Option<(String, String)> {
+        let b = self.browser();
+        let t = b.tab(id).filter(|t| !t.private)?;
+        Some((t.url.clone(), jar(b.profile_of(id).as_deref()).to_string()))
+    }
+
+    /// Keep `cover` for when tab `id` wakes: in memory, and on disk (off
+    /// this thread) for after a launch.
     pub(crate) fn keep_picture(&self, id: &TabId, cover: Cover) {
+        if let Some((url, jar)) = self.filed(id) {
+            let (store, kept) = (self.cover_store(), cover.clone());
+            let _ = std::thread::Builder::new()
+                .name("copper-cover-keep".into())
+                .spawn(move || store.write(&kept, &url, &jar));
+        }
         self.covers()
             .pictures
             .borrow_mut()
             .insert(id.clone(), Rc::new(cover));
     }
 
-    /// Tab `id` is waking: put its picture up, if it has one.
+    /// Tab `id` is waking: put its picture up, if it has one — the one on
+    /// disk when none is in memory (a launch since it slept).
     pub(crate) fn wake_cover(&self, id: &TabId) {
-        let Some(cover) = self.covers().pictures.borrow_mut().remove(id) else {
+        let kept = self.covers().pictures.borrow_mut().remove(id);
+        let kept = kept.or_else(|| {
+            if !self.draws_covers() {
+                return None;
+            }
+            let (url, jar) = self.filed(id)?;
+            self.cover_store().read(&url, &jar).map(Rc::new)
+        });
+        let Some(cover) = kept else {
             return;
         };
         let turn = self.covers().turn.get() + 1;
@@ -329,6 +498,81 @@ mod tests {
         let dark = bitmap(64, 64, |_, _| [18, 18, 20, 255]);
         assert_eq!(ground_of(&dark), Some([18, 18, 20]));
         assert_eq!(ground_of(&bitmap(2, 2, |_, _| [0, 0, 0, 255])), None);
+    }
+
+    fn folder() -> PathBuf {
+        std::env::temp_dir().join(format!("covers-test-{}", uuid::Uuid::new_v4()))
+    }
+
+    // Mac `CoverStoreTests`.
+    #[test]
+    fn a_kept_picture_comes_back_at_its_size_with_its_ground() {
+        let store = CoverStore::new(folder());
+        let cover = make(&bitmap(40, 30, |_, _| [250, 250, 250, 255]), (20, 15)).unwrap();
+        assert!(store.write(&cover, "https://example.com/inbox", "default"));
+        assert_eq!(
+            store.read("https://example.com/inbox", "default"),
+            Some(cover.clone())
+        );
+        // Another address has no picture.
+        assert_eq!(store.read("https://example.com/other", "default"), None);
+        // Not a picture: nothing is written.
+        let bad = Cover {
+            jpeg: b"not a jpeg".to_vec(),
+            ..cover
+        };
+        assert!(!store.write(&bad, "https://example.com/x", "default"));
+        store.remove_all();
+    }
+
+    #[test]
+    fn two_profiles_on_one_address_each_see_only_their_own() {
+        let store = CoverStore::new(folder());
+        let url = "https://mail.example.com/inbox";
+        let cover = make(&bitmap(30, 20, |_, _| [9, 9, 9, 255]), (30, 20)).unwrap();
+        assert!(store.write(&cover, url, "default"));
+        assert_ne!(store.file(url, "default"), store.file(url, "Work"));
+        assert_eq!(store.read(url, "Work"), None);
+        // A new store on the same folder (a relaunch) finds it.
+        assert!(
+            CoverStore::new(store.folder.clone())
+                .read(url, "default")
+                .is_some()
+        );
+        store.remove_all();
+    }
+
+    #[test]
+    fn past_the_cap_the_pictures_used_longest_ago_go_first() {
+        let mut store = CoverStore::new(folder());
+        let cover = make(
+            &bitmap(64, 64, |x, y| [x as u8 * 4, y as u8 * 4, 7, 255]),
+            (64, 64),
+        )
+        .unwrap();
+        let urls: Vec<String> = (0..3).map(|i| format!("https://example.com/{i}")).collect();
+        let now = std::time::SystemTime::now();
+        for (i, url) in urls.iter().enumerate() {
+            assert!(store.write(&cover, url, "default"));
+            // Oldest first: 0 an hour ago, 1 half an hour ago, 2 now.
+            let at = now - Duration::from_secs((2 - i as u64) * 1800);
+            let f = std::fs::File::options()
+                .append(true)
+                .open(store.file(url, "default"))
+                .unwrap();
+            f.set_modified(at).unwrap();
+        }
+        // Reading 0 makes it the newest.
+        assert!(store.read(&urls[0], "default").is_some());
+        let each = std::fs::metadata(store.file(&urls[1], "default"))
+            .unwrap()
+            .len();
+        store.cap = each * 2 + each / 2;
+        store.evict();
+        assert!(store.file(&urls[0], "default").exists());
+        assert!(!store.file(&urls[1], "default").exists());
+        assert!(store.file(&urls[2], "default").exists());
+        store.remove_all();
     }
 
     #[test]

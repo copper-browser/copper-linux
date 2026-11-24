@@ -30,6 +30,27 @@ release dates.
   `Inbox (3)`, wears a small copper dot on its square in the column and the
   tab row until you go to it. A sleeping pin keeps its dot (copper-shell-core
   `pinlight`). As on the Mac (copper-browser/Copper#199).
+- **Heavy pages you've left give their memory back.** A page holding more
+  than a thirty-second of this computer's memory (at least 500 MB: X,
+  Gmail, YouTube) sleeps once you've left it half an hour, however few tabs
+  are open, a space's own tab included; a tab an agent opened for itself
+  sleeps the same way once the agent is done with it. The pages that may
+  sleep keep at most a sixteenth of memory between them; past it the ones
+  left longest go first. Pins, sound, calls, downloads, anything typed and
+  a page an agent is using stay awake. Copper weighs each page by its web
+  process (its proportional set size, so a process two tabs share is
+  counted once), and `browser_perf_probe` lists what each page held at the
+  last sweep. As on the Mac (copper-browser/Copper#131, #181).
+- **Pinned tabs never unload.** Every pin has its page from launch, loaded
+  in the background after the window is up, until you unpin it. Ctrl+W on a
+  pin steps away to the tab you used last and leaves the pin loaded; a
+  pin's page that closes out of sight is loaded again on its own (three
+  times in ten minutes at most). As on the Mac (copper-browser/Copper#134).
+- **Let big pins sleep** (Settings › Tabs, on unless you turn it off;
+  `copper pins sleep on|off`): a pin over 300 MB you haven't looked at for
+  two hours sleeps, and stays asleep after a relaunch until you go to it.
+  `copper pins` lists every pin's state. As on the Mac
+  (copper-browser/Copper#181).
 - **Jev finishes what it starts, faster.** A field's text goes in as one
   real edit, so a site's suggestions open; places, names, airport codes and
   dates the goal says outright (*from Zurich to London on January 20, 2027*,
@@ -159,6 +180,11 @@ release dates.
   name the next step. Absurd numbers (`deltaY: 1e100`) are refused, and
   scrolling a row scrolls the list around it (`docs/fixtures/page-tools-e2e.py`).
   As on the Mac (copper-browser/Copper#181).
+- **A page that keeps closing as it loads stops.** The page on screen whose
+  process goes away is loaded again at once; the third time in half a
+  minute Copper stops and says “This page keeps closing as it loads.” with
+  Try Again, instead of reloading for ever. As on the Mac
+  (copper-browser/Copper#127).
 
 ## 0.6.4 — 2026-11-17
 

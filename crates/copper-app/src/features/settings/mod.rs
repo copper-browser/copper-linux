@@ -261,9 +261,17 @@ fn tabs(shell: &Shell) -> adw::PreferencesPage {
     leave.add(&switch(
         shell,
         "Sleep tabs you aren’t using",
-        "After half an hour away they come back where you left them. Pinned tabs, sound, calls and anything typed stay awake.",
+        "When many pages are open, a page is heavy or memory runs short, the tabs you left longest sleep and come back where you were. Sound, calls and anything typed stay awake; pins follow the setting below.",
         shell.settings().sleeps_tabs(),
         |s, on| s.update_settings(|st| st.set(keys::TABS_SLEEP, on)),
+    ));
+    // Mac `BigPinsLine` (Fork/PinsAwake.swift); the rule is shell-core's `pins`.
+    leave.add(&switch(
+        shell,
+        "Let big pins sleep",
+        "A pinned page over 300 MB that you haven’t looked at for two hours sleeps, and loads again when you go back to it. Turn it off and pins never sleep.",
+        shell.settings().big_pins_sleep(),
+        |s, on| s.update_settings(|st| st.set(keys::PINS_SLEEP, on)),
     ));
     // Mac `ArchiveLine` (Fork/Sections.swift); the sweep is shell-core's.
     let archive = line(

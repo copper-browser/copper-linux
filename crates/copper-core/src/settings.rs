@@ -41,6 +41,18 @@ pub mod keys {
     /// How many pages stay loaded however long they are left (0/absent:
     /// from the computer's memory). For measurements, as on the Mac.
     pub const SLEEP_KEEP: &str = "sleep.keep";
+    /// Megabytes over which a page left half an hour sleeps whatever the
+    /// budget says (0/absent: a thirty-second of memory, at least 500).
+    pub const SLEEP_HEAVY: &str = "sleep.heavy";
+    /// Megabytes the pages that may sleep keep between them (0/absent: a
+    /// sixteenth of memory, at least 1024).
+    pub const SLEEP_BUDGET: &str = "sleep.budget";
+    /// Let big pins sleep. Default true (Mac `PinsAwake.bigPinsSleep`).
+    pub const PINS_SLEEP: &str = "pins.sleep";
+    /// Seconds a big pin is left before it may sleep (0/absent = 7200).
+    pub const PINS_SLEEP_AFTER: &str = "pins.sleep.after";
+    /// Megabytes over which a pin is big (0/absent = 300).
+    pub const PINS_SLEEP_MB: &str = "pins.sleep.mb";
     /// Ad blocker on. Default true.
     pub const SHIELD: &str = "shield";
     /// Hosts the ad blocker is off for, sorted.
@@ -301,6 +313,39 @@ impl Settings {
         self.number(keys::SLEEP_KEEP)
             .filter(|n| *n >= 1.0)
             .map(|n| n as usize)
+    }
+
+    /// `sleep.heavy`, when set: megabytes that make a page heavy.
+    pub fn sleep_heavy_mb(&self) -> Option<u64> {
+        self.number(keys::SLEEP_HEAVY)
+            .filter(|n| *n >= 1.0)
+            .map(|n| n as u64)
+    }
+
+    /// `sleep.budget`, when set: megabytes the pages that may sleep keep.
+    pub fn sleep_budget_mb(&self) -> Option<u64> {
+        self.number(keys::SLEEP_BUDGET)
+            .filter(|n| *n >= 1.0)
+            .map(|n| n as u64)
+    }
+
+    /// Big pins may sleep (default true; off, pins never sleep).
+    pub fn big_pins_sleep(&self) -> bool {
+        self.bool_or(keys::PINS_SLEEP, true)
+    }
+
+    /// Seconds a big pin is left before it may sleep (default two hours).
+    pub fn pins_sleep_after_secs(&self) -> f64 {
+        self.number(keys::PINS_SLEEP_AFTER)
+            .filter(|s| *s > 0.0)
+            .unwrap_or(7200.0)
+    }
+
+    /// Megabytes over which a pin is big (default 300).
+    pub fn pins_sleep_mb(&self) -> u64 {
+        self.number(keys::PINS_SLEEP_MB)
+            .filter(|n| *n >= 1.0)
+            .map_or(300, |n| n as u64)
     }
 
     /// The ad blocker (default on).
