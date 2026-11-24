@@ -4,22 +4,13 @@
 use crate::shell::GtkShell;
 use crate::shell::{Shell, TabView};
 use copper_core::TabId;
-use copper_core::settings::Glyph;
-use copper_core::settings::keys;
 use gtk4 as gtk;
 use gtk4::prelude::*;
 
-/// Site icons beside titles (Linux default) or letters (Settings › Tabs).
-pub fn shows_icons(shell: &Shell) -> bool {
-    let s = shell.settings();
-    s.get(keys::GLYPH).is_none() || s.glyph() == Glyph::Icons
-}
-
-/// A tab's mark: its icon, or its letter on a chip.
-pub fn mark(shell: &Shell, t: &TabView, size: i32) -> gtk::Widget {
-    if shows_icons(shell)
-        && let Some(tex) = &t.favicon
-    {
+/// A tab's mark: the site's own icon, or a globe until it lands (never a
+/// letter; Mac `Mark`, copper-browser/Copper#181).
+pub fn mark(t: &TabView, size: i32) -> gtk::Widget {
+    if let Some(tex) = &t.favicon {
         let p = icon_image(tex, size);
         if t.sleeping {
             p.set_opacity(0.7);
@@ -31,17 +22,7 @@ pub fn mark(shell: &Shell, t: &TabView, size: i32) -> gtk::Widget {
         i.set_pixel_size(size.min(16));
         return i.upcast();
     }
-    let letter = if t.pin.is_some() {
-        t.letter.clone()
-    } else {
-        t.host.clone()
-    };
-    let source = if letter.is_empty() {
-        t.label.clone()
-    } else {
-        letter
-    };
-    super::letter_chip(&source, size).upcast()
+    super::globe(size).upcast()
 }
 
 /// A site icon at exactly `size` pixels.

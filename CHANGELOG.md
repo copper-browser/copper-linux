@@ -31,6 +31,22 @@ release dates.
   tab row until you go to it. A sleeping pin keeps its dot (copper-shell-core
   `pinlight`). As on the Mac (copper-browser/Copper#199).
 
+### Changed
+
+- **Tabs and pins always show the site's own icon.** The "Tabs show: Site
+  icons / Letters" choice is gone from Settings › Tabs; a site whose icon
+  hasn't arrived yet shows a plain globe, never a letter, in tabs, pins,
+  Ctrl+K and History. An old `letters` setting is simply not read, and the
+  choice no longer syncs. As on the Mac (copper-browser/Copper#181).
+- **A page that can't load says so plainly.** "Can't connect to <site>",
+  why in one line (no site at that address, the site refused the
+  connection, took too long, the connection isn't secure, no connection),
+  a Try Again button with its key (Ctrl+R) and the engine's own words under
+  Details. As on the Mac (copper-browser/Copper#181).
+- **http pages say "Not secure" under the pointer.** Rest the pointer on
+  the address of a page over plain http and it says so. As on the Mac
+  (copper-browser/Copper#181).
+
 ## 0.6.4 — 2026-11-17
 
 Agents never see a secret Copper filled.
