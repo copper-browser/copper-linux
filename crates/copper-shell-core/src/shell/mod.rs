@@ -128,6 +128,13 @@ struct Inner<P: Platform> {
     covers: crate::cover::Covers<P>,
     /// ⌃Tab's most-recent order ([`Shell::switch_tab`]).
     recent: RefCell<crate::recent::Recent>,
+    /// Pins kept loaded, and big ones left asleep ([`crate::pins`]).
+    pins: crate::pins::Pins,
+    /// Reloads after a crash in front of you ([`crate::crash`]).
+    deaths: RefCell<crate::crash::Limit<TabId>>,
+    /// What each tab's page weighed at the last sweep (kept while it
+    /// sleeps, for the session's pins).
+    weights: RefCell<HashMap<TabId, copper_engine::Weight>>,
 }
 
 /// How to open a tab.
@@ -160,9 +167,6 @@ pub struct TabView<I> {
     pub loading: bool,
     pub audio: bool,
     pub crashed: bool,
-    /// A pin whose title starts with an unread count ([`crate::pinlight`]):
-    /// its square wears the dot while it isn't the live tab.
-    pub lit: bool,
     pub favicon: Option<I>,
     /// The folder it is filed in (`groups.json` id).
     pub group: Option<String>,
@@ -249,6 +253,9 @@ impl<P: Platform> Shell<P> {
             shut: Cell::new(false),
             covers: Default::default(),
             recent: RefCell::default(),
+            pins: Default::default(),
+            deaths: RefCell::new(crate::crash::Limit::recoveries()),
+            weights: RefCell::default(),
         }));
         CURRENT.with(|c| *c.borrow_mut() = Some(Box::new(shell.downgrade())));
         shell
@@ -270,6 +277,14 @@ impl<P: Platform> Shell<P> {
             self.toast(&note);
         }
         self.view().present(self);
+        // Once the launch has settled, the pins load in the background.
+        let weak = self.downgrade();
+        P::Loop::spawn_local(async move {
+            P::Loop::sleep(Duration::from_secs(2)).await;
+            if let Some(s) = weak.upgrade() {
+                s.start_pins();
+            }
+        });
     }
 
     pub fn downgrade(&self) -> WeakShell<P> {
@@ -316,6 +331,20 @@ impl<P: Platform> Shell<P> {
 
     pub(crate) fn covers(&self) -> &crate::cover::Covers<P> {
         &self.0.covers
+    }
+
+    pub(crate) fn pins_state(&self) -> &crate::pins::Pins {
+        &self.0.pins
+    }
+
+    pub(crate) fn deaths(&self) -> &RefCell<crate::crash::Limit<TabId>> {
+        &self.0.deaths
+    }
+
+    /// What tab `id`'s page weighed at the last sweep (the last known, for
+    /// a tab asleep since).
+    pub fn weight_of(&self, id: &TabId) -> Option<copper_engine::Weight> {
+        self.0.weights.borrow().get(id).copied()
     }
 
     /// Run `hook` whenever the window goes light or dark
@@ -449,7 +478,6 @@ impl<P: Platform> Shell<P> {
             loading: slot.as_ref().is_some_and(|s| s.loading.get()),
             audio: slot.as_ref().is_some_and(|s| s.audio.get()),
             crashed: slot.as_ref().is_some_and(|s| s.crashed.get()),
-            lit: t.is_pinned() && crate::pinlight::lit(&t.title),
             favicon,
             group: t.group.clone(),
         })
@@ -664,8 +692,9 @@ impl<P: Platform> Shell<P> {
     }
 
     /// Close a tab the everyday way (⌘W, middle-click, an agent): a pin is
-    /// put down and a Saved row unloaded — it stays saved, in its place,
-    /// dimmed — instead (Arc; Mac `docs/sections.md`).
+    /// stepped away from, its page loaded (Mac `PinsAwake`), and a Saved row
+    /// unloaded — it stays saved, in its place, dimmed — instead (Arc; Mac
+    /// `docs/sections.md`).
     pub fn close(&self, id: &TabId) -> CloseOutcome {
         self.close_with(id, Closing::CLOSE)
     }
@@ -699,7 +728,7 @@ impl<P: Platform> Shell<P> {
 
     fn close_with(&self, id: &TabId, how: Closing) -> CloseOutcome {
         let out = self.close_tab(id, how);
-        if let CloseOutcome::PutDown { .. } | CloseOutcome::Unloaded { .. } = out {
+        if let CloseOutcome::Unloaded { .. } = out {
             self.drop_page(id);
         }
         out
@@ -1184,6 +1213,7 @@ impl<P: Platform> Shell<P> {
             let events = self.0.browser.borrow_mut().take_events();
             if !events.is_empty() {
                 self.apply_events(&events);
+                self.pins_changed();
             }
             if !self.0.again.get() {
                 break;
@@ -1297,7 +1327,8 @@ impl<P: Platform> Shell<P> {
         let generation = self.browser().generation();
         if generation != self.0.saved_generation.get() {
             self.0.saved_generation.set(generation);
-            let shape = self.browser().to_session();
+            let mut shape = self.browser().to_session();
+            self.write_pins(&mut shape);
             self.0.saver.schedule_session(shape, true);
         }
         if self.0.settings_dirty.replace(false) {
@@ -1368,8 +1399,7 @@ impl<P: Platform> Shell<P> {
                     crate::sleep::every(s.settings().sleep_after_secs())
                 };
                 P::Loop::sleep(every).await;
-                let Some(s) = weak.upgrade() else { break };
-                s.sleep_idle_tabs();
+                sweep(&weak, None).await;
             }
         });
         self.0.timers.borrow_mut().push(t);
@@ -1404,7 +1434,8 @@ impl<P: Platform> Shell<P> {
         let slot = self.slot(id);
         let facts = crate::sleep::Facts {
             on_screen,
-            pinned: t.is_pinned(),
+            // Unless it is big and left long enough (Let big pins sleep).
+            pinned: t.is_pinned() && !self.pin_may_doze(id, UnixTime::now().0 - t.seen.0),
             agent: agents.as_ref().is_some_and(|a| a.works_on(id)),
             blank: crate::clear::is_blank(&t.url),
             private: t.private,
@@ -1423,51 +1454,67 @@ impl<P: Platform> Shell<P> {
         crate::sleep::keep(&crate::sleep::Facts { opener, ..facts })
     }
 
-    /// Put the tabs the policy picks to sleep ([`crate::sleep::choose`]).
+    /// Weigh the pages and put the tabs the policy picks to sleep, now
+    /// ([`sweep`]).
     pub fn sleep_idle_tabs(&self) {
+        let weak = self.downgrade();
+        P::Loop::spawn_local(async move {
+            sweep(&weak, None).await;
+        });
+    }
+
+    /// The tabs the policy picks now ([`crate::sleep::choose`]), from the
+    /// last weights; `after` stands in for `sleep.after`.
+    fn sleepers(&self, after: Option<f64>) -> Vec<TabId> {
         let rules = {
             let s = self.settings();
-            if !s.sleeps_tabs() {
-                return;
-            }
             let memory = P::memory();
+            let total = memory.map(|(total, _)| total);
             crate::sleep::Rules {
-                after: s.sleep_after_secs(),
+                after: after.unwrap_or_else(|| s.sleep_after_secs()),
                 after_set: s.sleep_after_set(),
-                budget: crate::sleep::budget(memory.map(|(total, _)| total), s.sleep_keep()),
+                budget: crate::sleep::budget(total, s.sleep_keep()),
+                heavy: crate::sleep::heavy(total, s.sleep_heavy_mb()),
+                footprint: crate::sleep::footprint(total, s.sleep_budget_mb()),
                 pressure: memory
                     .map(|(total, free)| crate::sleep::Pressure::of(total, free))
                     .unwrap_or_default(),
             }
         };
         let now = UnixTime::now();
-        let ids: Vec<(TabId, f64, bool)> = {
+        let ids: Vec<(TabId, f64, bool, bool)> = {
             let b = self.browser();
             b.all_tabs()
-                .map(|t| (t.id.clone(), now.0 - t.seen.0, b.is_remembered(&t.id)))
+                .map(|t| {
+                    let id = t.id.clone();
+                    (
+                        id.clone(),
+                        now.0 - t.seen.0,
+                        b.is_remembered(&id),
+                        t.is_pinned(),
+                    )
+                })
                 .collect()
         };
         let candidates: Vec<crate::sleep::Candidate<TabId>> = ids
             .into_iter()
-            .map(|(id, idle, remembered)| crate::sleep::Candidate {
-                loaded: self.slot(&id).is_some(),
-                keep: self.keeps_awake(&id),
-                remembered,
-                idle,
-                id,
+            .map(|(id, idle, remembered, pinned)| {
+                let loaded = self.slot(&id).is_some();
+                crate::sleep::Candidate {
+                    loaded,
+                    keep: self.keeps_awake(&id),
+                    remembered,
+                    pinned,
+                    weight: self.weight_of(&id).filter(|_| loaded),
+                    // A pin the sweep may take is a big one left long; a tab
+                    // an agent opened for itself, once the agent is done.
+                    must: pinned || crate::agents::opened(&id),
+                    idle,
+                    id,
+                }
             })
             .collect();
-        let chosen = crate::sleep::choose(&candidates, &rules);
-        if chosen.is_empty() {
-            return;
-        }
-        tracing::debug!(count = chosen.len(), "tabs going to sleep");
-        let weak = self.downgrade();
-        P::Loop::spawn_local(async move {
-            for id in chosen {
-                put_to_sleep(&weak, id).await;
-            }
-        });
+        crate::sleep::choose(&candidates, &rules)
     }
 
     // MARK: messages
@@ -1528,6 +1575,78 @@ pub fn zoom_host(url: &str) -> Option<String> {
         .map(|h| h.trim_matches(['[', ']']).to_string())
 }
 
+/// Weigh every page, then put the tabs the policy picks to sleep, the one
+/// left longest first (Mac `sleepIdle`). `after` stands in for the half
+/// hour, everything else as it is (the self-test; the Mac's `bench sleep
+/// sweep`). The tabs it chose.
+pub async fn sweep<P: Platform>(weak: &WeakShell<P>, after: Option<f64>) -> Vec<TabId> {
+    let weighing: Vec<_> = {
+        let Some(s) = weak.upgrade() else {
+            return Vec::new();
+        };
+        if !s.settings().sleeps_tabs() {
+            return Vec::new();
+        }
+        s.pages_map()
+            .borrow()
+            .iter()
+            .map(|(id, slot)| (id.clone(), slot.page.weight()))
+            .collect()
+    };
+    let mut weighed = Vec::new();
+    for (id, weight) in weighing {
+        if let Some(w) = weight.await {
+            weighed.push((id, w));
+        }
+    }
+    let chosen = {
+        let Some(s) = weak.upgrade() else {
+            return Vec::new();
+        };
+        s.weighed(weighed);
+        s.sleepers(after)
+    };
+    if !chosen.is_empty() {
+        tracing::debug!(count = chosen.len(), "tabs going to sleep");
+    }
+    for id in &chosen {
+        put_to_sleep(weak, id.clone()).await;
+    }
+    chosen
+}
+
+impl<P: Platform> Shell<P> {
+    /// The sweep's weights: kept for every tab that still exists, and what
+    /// the pages weigh together said in the log (the Mac trail's `web=`,
+    /// `top=`).
+    fn weighed(&self, now: Vec<(TabId, copper_engine::Weight)>) {
+        let mut processes = std::collections::HashSet::new();
+        let mut total = 0;
+        let mut top: Option<(u64, &TabId)> = None;
+        for (id, w) in &now {
+            if processes.insert(w.process) {
+                total += w.bytes;
+            }
+            if top.is_none_or(|(b, _)| w.bytes > b) {
+                top = Some((w.bytes, id));
+            }
+        }
+        let top = top.map(|(bytes, id)| {
+            let host = self
+                .browser()
+                .tab(id)
+                .map(|t| host_of(&t.url))
+                .unwrap_or_default();
+            format!("{host}:{}MB", bytes >> 20)
+        });
+        tracing::debug!(web = %format!("{}MB", total >> 20), top = top.as_deref().unwrap_or("-"), "pages weighed");
+        let b = self.browser();
+        let mut weights = self.0.weights.borrow_mut();
+        weights.retain(|id, _| b.tab(id).is_some());
+        weights.extend(now);
+    }
+}
+
 /// Ask tab `id`'s page whether it holds anything typed, then let it go —
 /// looking again after each step, since each takes a moment and the tab
 /// may have been picked meanwhile (Mac `Browser.sleep`).
@@ -1569,6 +1688,10 @@ pub async fn put_to_sleep<P: Platform>(weak: &WeakShell<P>, id: TabId) {
     }
     if let Some(cover) = cover {
         s.keep_picture(&id, cover);
+    }
+    // A pin got here only because it may doze: left asleep until looked at.
+    if s.browser().tab(&id).is_some_and(|t| t.is_pinned()) {
+        s.pins_state().dozed.borrow_mut().insert(id.clone());
     }
     s.with_browser(|b| b.set_sleeping(&id, true));
 }

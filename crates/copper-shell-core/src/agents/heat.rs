@@ -1,8 +1,8 @@
 //! What the OS says about Copper's web processes, ahead of what
 //! `browser_perf_probe`'s page script says about itself (Mac:
-//! `Probe.processes`). Linux WebKitGTK does not say which web process
-//! hosts which tab, so the line lists Copper's WebKit processes with their
-//! CPU since the call began (the probe's own window).
+//! `Probe.processes`): Copper's WebKit processes with their CPU since the
+//! call began (the probe's own window). Which tab each web process serves,
+//! and what it holds, follows under Pages' memory (`host.rs`).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -60,7 +60,7 @@ impl Heat {
                 secs.max(1.0)
             ));
         }
-        out.push_str("(WebKitGTK does not say which web process hosts which tab.)\n\n");
+        out.push('\n');
         out
     }
 

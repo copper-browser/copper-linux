@@ -10,13 +10,19 @@
 //!   kept, spaces, selection), only the selected tab has a page, private
 //!   tabs are gone; selecting another tab wakes it.
 //! * `mac` — a world holding the Mac `session.json` fixture: it opens.
-//! * `chrome` — Mac #181's small chrome items: a globe (never a letter) for
-//!   a site with no icon, in a pin and a row; the can't-connect page and its
-//!   Details; "Not secure" on an http page's address under the pointer.
 //! * `calendar` — the Calendar pin's card: with no calendar, then with one
 //!   this run serves (meetings around now); what it lists and leaves out,
 //!   that the page keeps the keyboard, and that it goes when the pointer
 //!   leaves. Saves the card light and dark.
+//! * `sleep` — tab memory (Copper#131, #134, #181, #127): heavy pages,
+//!   a light page, two pins and another space's own tab; the sweep with
+//!   seconds standing in for the half hour puts the heavy ones and the big
+//!   pin to sleep and leaves the rest; a pin's killed process comes back in
+//!   the background three times; a page on screen killed three times stops
+//!   with "This page keeps closing as it loads."; Ctrl+W on a pin steps
+//!   away. Writes nothing for the next phase but the session.
+//! * `sleep-restore` — the same world again: the big pin asleep at quit
+//!   stays asleep, the other pin loads in the background.
 //!
 //! Headless weston has no seat, so input is driven through the shell and
 //! the widgets' own signals (`insert-at-cursor` for typing).
@@ -128,7 +134,8 @@ pub fn start(shell: &Shell, phase: String, out: PathBuf) {
             "restore" => restore(&run).await,
             "mac" => mac(&run).await,
             "calendar" => calendar(&run).await,
-            "chrome" => chrome(&run).await,
+            "sleep" => sleep(&run).await,
+            "sleep-restore" => sleep_restore(&run).await,
             other => run.check(false, &format!("unknown phase {other}")),
         }
         let failures = run.failures.borrow().clone();
@@ -617,14 +624,29 @@ async fn restore(run: &Run) {
             println!("expected {e}\n     got {now}");
         }
     }
+    // Pins load in the background once the launch settles (Copper#134).
+    let pinned = |t: &&TabInfo| t.pinned;
+    let start = Instant::now();
+    while run.infos().iter().filter(pinned).any(|t| !t.live)
+        && start.elapsed() < Duration::from_secs(20)
+    {
+        glib::timeout_future(Duration::from_millis(200)).await;
+    }
     let infos = run.infos();
-    let live = infos.iter().filter(|t| t.live).count();
+    let live = infos.iter().filter(|t| t.live && !t.pinned).count();
     run.check(
         live == 1,
-        &format!("only the selected tab has a page ({live} live)"),
+        &format!("only the selected tab of the row has a page ({live} live)"),
     );
     run.check(
-        infos.iter().filter(|t| !t.active).all(|t| t.sleeping),
+        infos.iter().filter(pinned).all(|t| t.live),
+        "every pin has its page",
+    );
+    run.check(
+        infos
+            .iter()
+            .filter(|t| !t.active && !t.pinned)
+            .all(|t| t.sleeping),
         "every other tab is asleep",
     );
     run.check(
@@ -647,6 +669,246 @@ async fn restore(run: &Run) {
     }
 }
 
+/// A page that holds `?mb` megabytes, as X or Gmail hold a gigabyte (the
+/// Mac's `docs/fixtures/heavy.html`).
+const HEAVY: &str = r#"<!doctype html><title>page</title><body><script>
+const q = new URLSearchParams(location.search), mb = +q.get('mb') || 0;
+window.held = [];
+for (let i = 0; i < mb; i += 50) held.push(new Uint8Array(50 << 20).fill(1));
+document.title = q.get('name') || 'page';
+</script>"#;
+
+/// What tab `id`'s page weighs now, in MB, and its web process.
+async fn weigh(s: &Shell, id: &TabId) -> Option<(u32, u64)> {
+    let page = s.page(id)?;
+    page.weight().await.map(|w| (w.process, w.bytes >> 20))
+}
+
+/// End tab `id`'s web process the way the OS would under memory pressure.
+async fn kill(s: &Shell, id: &TabId) -> bool {
+    let Some((pid, _)) = weigh(s, id).await else {
+        return false;
+    };
+    std::process::Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .status()
+        .is_ok_and(|st| st.success())
+}
+
+/// Wait up to `secs` for `ok`.
+async fn until(secs: u64, ok: impl Fn() -> bool) -> bool {
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(secs) {
+        if ok() {
+            return true;
+        }
+        glib::timeout_future(Duration::from_millis(100)).await;
+    }
+    ok()
+}
+
+async fn sleep(run: &Run) {
+    use copper_core::settings::keys;
+    let s = &run.shell;
+    // Heavy at 300 MB whatever this machine's memory, every page under the
+    // count and the footprint, a pin big at 300 MB after two seconds.
+    s.update_settings(|st| {
+        st.set(keys::SLEEP_HEAVY, 300);
+        st.set(keys::SLEEP_KEEP, 40);
+        st.set(keys::SLEEP_BUDGET, 100_000);
+        st.set(keys::PINS_SLEEP_AFTER, 2);
+    });
+    let heavy = |name: &str, mb: u32| format!("/heavy?name={name}&mb={mb}");
+    let front = run.open(&heavy("front", 0), true);
+    run.wait_loaded(&front).await;
+    let mut tabs = Vec::new();
+    for (name, mb) in [
+        ("heavy", 400),
+        ("light", 0),
+        ("pinbig", 400),
+        ("pinlight", 0),
+    ] {
+        let id = run.open(&heavy(name, mb), false);
+        run.wait_loaded(&id).await;
+        tabs.push(id);
+    }
+    let [loose, light, pin_big, pin_light] = <[TabId; 4]>::try_from(tabs).expect("four");
+    s.pin(&pin_big);
+    s.pin(&pin_light);
+    // Another space whose own tab is heavy, then back.
+    let home = s.browser().current_space_id().to_string();
+    let away = s.add_space("Away");
+    let other = run.open(&heavy("other", 400), true);
+    run.wait_loaded(&other).await;
+    s.switch_space(&home);
+    s.select(&front);
+    run.check(
+        s.browser().is_remembered(&other),
+        "the other space comes back to its heavy tab",
+    );
+    let _ = away;
+    let mut before = 0;
+    for id in [&front, &loose, &light, &pin_big, &pin_light, &other] {
+        let w = weigh(s, id).await;
+        println!(
+            "note: {} weighs {w:?}",
+            s.browser()
+                .tab(id)
+                .map(|t| t.title.clone())
+                .unwrap_or_default()
+        );
+        before += w.map_or(0, |w| w.1);
+    }
+    run.check(
+        weigh(s, &loose).await.is_some_and(|w| w.1 >= 400),
+        "a heavy page's web process is found and weighed",
+    );
+
+    // The sweep, three seconds standing in for the half hour.
+    glib::timeout_future(Duration::from_secs(3)).await;
+    let chosen = copper_shell_core::shell::sweep(&s.downgrade(), Some(2.0)).await;
+    glib::timeout_future(Duration::from_millis(500)).await;
+    let live = |id: &TabId| s.slot(id).is_some();
+    println!("note: the sweep chose {}", chosen.len());
+    run.check(!live(&loose), "the heavy page left alone sleeps");
+    run.check(!live(&other), "the other space's heavy tab sleeps");
+    run.check(
+        !live(&pin_big),
+        "the big pin left alone sleeps (Let big pins sleep)",
+    );
+    run.check(live(&light), "the light page under the budget stays");
+    run.check(live(&pin_light), "the light pin stays");
+    run.check(live(&front), "the page on screen stays");
+    run.check(
+        s.browser().tab(&loose).is_some_and(|t| t.sleeping),
+        "the heavy tab is still in the row, asleep",
+    );
+    let mut after = 0;
+    for id in [&front, &light, &pin_light] {
+        after += weigh(s, id).await.map_or(0, |w| w.1);
+    }
+    println!("note: {before} MB → {after} MB");
+    run.check(before >= after + 1100, "over a gigabyte comes back");
+    let status = s.pins_status(None);
+    println!("note: pins {status}");
+    run.check(
+        status["pins"].as_array().is_some_and(|p| {
+            p.iter()
+                .any(|p| p["dozed"] == true && p["title"] == "pinbig")
+        }),
+        "copper pins says the big pin dozed",
+    );
+    // Nobody loads a dozed pin again; the loader does load a pin with no page.
+    glib::timeout_future(Duration::from_secs(2)).await;
+    run.check(
+        !live(&pin_big),
+        "the dozed pin is not loaded again behind your back",
+    );
+    s.pin(&loose);
+    run.check(
+        until(10, || live(&loose)).await,
+        "a sleeping tab pinned is loaded in the background",
+    );
+    run.check(
+        s.active_id() == Some(front.clone()),
+        "…without coming on screen",
+    );
+
+    // A pin's process killed out of sight comes back, three times in ten minutes.
+    for n in 1..=3 {
+        run.check(
+            kill(s, &pin_light).await,
+            &format!("pin process killed ({n})"),
+        );
+        let back = until(10, || {
+            s.slot(&pin_light)
+                .is_some_and(|x| !x.crashed.get() && !x.loading.get())
+        })
+        .await;
+        run.wait_loaded(&pin_light).await;
+        run.check(
+            back && weigh(s, &pin_light).await.is_some(),
+            &format!("the pin reloads in the background ({n})"),
+        );
+    }
+    kill(s, &pin_light).await;
+    run.check(
+        until(5, || s.slot(&pin_light).is_some_and(|x| x.crashed.get())).await,
+        "the fourth death in ten minutes leaves the pin stopped",
+    );
+
+    // The page on screen: reloaded twice, the third death stops it.
+    for n in 1..=2 {
+        run.check(
+            kill(s, &front).await,
+            &format!("front process killed ({n})"),
+        );
+        glib::timeout_future(Duration::from_millis(600)).await;
+        run.wait_loaded(&front).await;
+        run.check(
+            s.slot(&front).is_some_and(|x| !x.crashed.get()),
+            &format!("the page on screen loads again at once ({n})"),
+        );
+    }
+    kill(s, &front).await;
+    let stopped = until(5, || {
+        s.slot(&front)
+            .is_some_and(|x| x.crashed.get() && x.failed_url.borrow().is_some())
+    })
+    .await;
+    run.check(
+        stopped,
+        "the third death in half a minute stops: This page keeps closing as it loads.",
+    );
+    run.shot("50-keeps-closing").await;
+    s.reload(&front);
+    run.wait_loaded(&front).await;
+    run.check(
+        s.slot(&front).is_some_and(|x| !x.crashed.get()),
+        "Try Again loads the address afresh",
+    );
+
+    // Ctrl+W on a pin steps away; its page stays.
+    s.select(&pin_light);
+    s.close(&pin_light);
+    run.check(
+        s.active_id() != Some(pin_light.clone()),
+        "Ctrl+W on a pin steps away",
+    );
+    run.check(
+        live(&pin_light) && s.browser().pins().iter().any(|t| t.id == pin_light),
+        "…and the pin keeps its page",
+    );
+    s.save_now();
+}
+
+async fn sleep_restore(run: &Run) {
+    let s = &run.shell;
+    let pin = |title: &str| {
+        s.browser()
+            .pins()
+            .iter()
+            .find(|t| t.title == title)
+            .map(|t| t.id.clone())
+    };
+    let (Some(big), Some(light)) = (pin("pinbig"), pin("pinlight")) else {
+        run.check(false, "the pins came back");
+        return;
+    };
+    run.check(
+        until(15, || s.slot(&light).is_some()).await,
+        "a pin is loaded in the background at launch",
+    );
+    glib::timeout_future(Duration::from_secs(2)).await;
+    run.check(
+        s.slot(&big).is_none(),
+        "a pin asleep at quit stays asleep at launch",
+    );
+    s.select(&big);
+    run.wait_loaded(&big).await;
+    run.check(s.slot(&big).is_some(), "…until you go to it");
+}
+
 async fn mac(run: &Run) {
     let s = &run.shell;
     let spaces = crate::control::space_infos(s);
@@ -660,123 +922,12 @@ async fn mac(run: &Run) {
         infos.iter().filter(|t| t.pinned).count() == 6,
         "its six pins",
     );
+    // Pins load in the background once the launch settles (Copper#134).
     run.check(
-        infos.iter().filter(|t| t.live).count() <= 1,
-        "nothing but the selected tab loads",
+        infos.iter().filter(|t| t.live && !t.pinned).count() <= 1,
+        "nothing but the selected tab and the pins loads",
     );
     run.shot("30-mac-session").await;
-}
-
-async fn chrome(run: &Run) {
-    let s = &run.shell;
-    s.set_look(Look::Light);
-    s.set_tabs_position(TabsPosition::Left);
-    let studio = run.open("/studio", true);
-    run.wait_loaded(&studio).await;
-    // A plain-text 404: no icon, ever.
-    let bare = run.open("/no-icon", true);
-    run.wait_loaded(&bare).await;
-    let pin = run.open("/no-icon-pinned", true);
-    run.wait_loaded(&pin).await;
-    s.pin(&pin);
-    s.select(&bare);
-    glib::timeout_future(Duration::from_millis(800)).await;
-    run.check(
-        !s.favicons().borrow().contains_key(&bare),
-        "a site with no icon has none",
-    );
-    let window: gtk::Widget = s.window().clone().upcast();
-    let globes = descendants(&window)
-        .filter(|w| w.has_css_class("globe") && w.is_drawable())
-        .count();
-    run.check(
-        globes >= 2,
-        &format!("its pin and its row wear a globe ({globes})"),
-    );
-    run.check(
-        !descendants(&window).any(|w| w.has_css_class("chip")),
-        "no letter tiles",
-    );
-
-    // "Not secure" under the pointer on the http page's address.
-    let insecure = || {
-        descendants(&window)
-            .find(|w| w.has_css_class("not-secure"))
-            .is_some_and(|w| w.is_drawable())
-    };
-    s.ui().header.set_hovering(s, false);
-    run.check(!insecure(), "no \"Not secure\" until the pointer is on it");
-    s.ui().header.set_hovering(s, true);
-    glib::timeout_future(Duration::from_millis(300)).await;
-    run.check(
-        insecure(),
-        "an http page's address says \"Not secure\" under the pointer",
-    );
-    run.shot("60-not-secure").await;
-    s.ui().header.set_hovering(s, false);
-    run.shot("61-globes").await;
-
-    // Can't connect.
-    let failed = s.open(
-        "http://copper-selftest.invalid/",
-        OpenTab {
-            foreground: true,
-            ..Default::default()
-        },
-    );
-    let start = Instant::now();
-    while start.elapsed() < Duration::from_secs(10)
-        && !s
-            .slot(&failed)
-            .is_some_and(|x| x.failed_url.borrow().is_some())
-    {
-        glib::timeout_future(Duration::from_millis(100)).await;
-    }
-    let page = descendants(&window)
-        .filter_map(|w| w.downcast::<libadwaita::StatusPage>().ok())
-        .find(|p| p.is_drawable());
-    let said = page.as_ref().map(|p| {
-        (
-            p.title().to_string(),
-            p.description().unwrap_or_default().to_string(),
-        )
-    });
-    println!("note: the page says {said:?}");
-    run.check(
-        said.as_ref().is_some_and(|(t, d)| {
-            t == "Can\u{2019}t connect to copper-selftest.invalid"
-                && d == "No site at that address."
-        }),
-        "a page that can't load says which site and why",
-    );
-    run.shot("62-cant-connect").await;
-    let details = page
-        .and_then(|p| descendants(p.upcast_ref()).find_map(|w| w.downcast::<gtk::Expander>().ok()));
-    run.check(
-        details.as_ref().is_some_and(|d| d.is_drawable()),
-        "with its details on request",
-    );
-    if let Some(d) = details {
-        d.set_expanded(true);
-    }
-    run.shot("63-cant-connect-details").await;
-    s.select(&bare);
-    s.set_tabs_position(TabsPosition::Top);
-    run.shot("64-globes-top").await;
-}
-
-/// Every widget under `root`, depth first.
-fn descendants(root: &gtk::Widget) -> impl Iterator<Item = gtk::Widget> {
-    let mut stack = vec![root.clone()];
-    std::iter::from_fn(move || {
-        let w = stack.pop()?;
-        let mut c = w.first_child();
-        while let Some(k) = c {
-            c = k.next_sibling();
-            stack.push(k);
-        }
-        Some(w)
-    })
 }
 
 /// What a relaunch must show, without ids (they are fresh each run).
@@ -1157,6 +1308,12 @@ fn answer(mut stream: std::net::TcpStream, icons: &[Vec<u8>]) {
             0,
         );
         ("200 OK", "text/html; charset=utf-8", html.into_bytes())
+    } else if path.starts_with("/heavy") {
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            HEAVY.as_bytes().to_vec(),
+        )
     } else if path == CALENDAR {
         ("200 OK", "text/calendar", calendar_ics().into_bytes())
     } else if let Some((i, p)) = PAGES.iter().enumerate().find(|(_, p)| p.path == path) {

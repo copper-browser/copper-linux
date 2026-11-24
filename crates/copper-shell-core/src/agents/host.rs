@@ -46,6 +46,46 @@ impl<P: Platform> AppHost<P> {
     }
 }
 
+/// `## Pages' memory`: each loaded page's web process and what it held at
+/// the last idle sweep, heaviest first (the Mac's `bench heat` megabytes).
+/// Empty before the first sweep.
+fn memory_line<P: Platform>(shell: &Shell<P>) -> String {
+    let mut by: Vec<(u32, u64, Vec<String>)> = Vec::new();
+    for id in shell.pages_map().borrow().keys() {
+        let Some(w) = shell.weight_of(id) else {
+            continue;
+        };
+        let host = shell
+            .browser()
+            .tab(id)
+            .map(|t| crate::shell::host_of(&t.url))
+            .unwrap_or_default();
+        match by.iter_mut().find(|(p, ..)| *p == w.process) {
+            Some((_, _, hosts)) => hosts.push(host),
+            None => by.push((w.process, w.bytes, vec![host])),
+        }
+    }
+    if by.is_empty() {
+        return String::new();
+    }
+    by.sort_by_key(|a| std::cmp::Reverse(a.1));
+    let mut out = String::from("## Pages' memory (at the last idle sweep)\n");
+    for (pid, bytes, hosts) in &by {
+        out.push_str(&format!(
+            "- {} (pid {pid}): {} MB\n",
+            hosts.join(", "),
+            bytes >> 20
+        ));
+    }
+    let total: u64 = by.iter().map(|b| b.1).sum();
+    out.push_str(&format!(
+        "Total: {} MB in {} web processes\n\n",
+        total >> 20,
+        by.len()
+    ));
+    out
+}
+
 /// Wrap a live page for the tools.
 pub fn engine_page<V: PageView + 'static>(page: &V) -> EnginePage<V> {
     let w = page.downgrade();
@@ -124,13 +164,15 @@ impl<P: Platform> Host for AppHost<P> {
         let Some(shell) = self.shell() else {
             return TabId::new();
         };
-        shell.open(
+        let id = shell.open(
             url,
             crate::shell::OpenTab {
                 foreground,
                 ..Default::default()
             },
-        )
+        );
+        super::OPENED.with_borrow_mut(|o| o.insert(id.clone()));
+        id
     }
 
     fn show_tab(&self, id: &TabId) {
@@ -235,7 +277,8 @@ impl<P: Platform> Host for AppHost<P> {
     }
 
     fn processes_line(&self, _id: &TabId) -> String {
-        self.heat.line()
+        let memory = self.shell().map(|s| memory_line(&s)).unwrap_or_default();
+        format!("{}{memory}", self.heat.line())
     }
 
     // -- page tools (tools-page) ----------------------------------------------
@@ -404,6 +447,9 @@ impl<P: Platform> Host for AppHost<P> {
             }
             Some(shell) if method == "copper/claude" => crate::claude::account(shell.store())
                 .control(params, || crate::claude::sign_in(&shell)),
+            Some(shell) if method == "copper/pins" => {
+                shell.pins_status(params.get("on").and_then(Value::as_bool))
+            }
             // `copper/link`, `copper/bitwarden`: not here yet.
             _ => {
                 serde_json::json!({ "error": format!("{method} is not available in this build yet") })

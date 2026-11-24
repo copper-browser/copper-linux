@@ -172,6 +172,8 @@ pub fn clear_cache(shell: &Shell) {
 
 /// The shared jar and each space profile's.
 fn remove(shell: &Shell, kinds: WebsiteDataKinds, said: &'static str) {
+    // Pages' kept pictures go with whatever is cleared (Mac `Covers.clear`).
+    shell.cover_store().remove_all();
     let mut names: Vec<Option<String>> = vec![None];
     names.extend(shell.browser().profiles().into_iter().map(Some));
     let engine = shell.engine().clone();

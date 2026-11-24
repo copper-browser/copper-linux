@@ -311,9 +311,6 @@ pub struct GtkFrame {
     status: gtk::Box,
     status_page: adw::StatusPage,
     status_button: gtk::Button,
-    button_words: gtk::Label,
-    details: gtk::Expander,
-    detail: gtk::Label,
 }
 
 impl GtkFrame {
@@ -326,36 +323,12 @@ impl GtkFrame {
         view.set_vexpand(true);
         overlay.set_child(Some(&view));
 
-        // Mac `Trouble`: a symbol, which site, why, a real button with its
-        // key, and the engine's words folded away under Details.
         let status_page = adw::StatusPage::new();
         status_page.add_css_class("compact");
-        let button = gtk::Button::new();
-        button.add_css_class("pill");
-        button.set_halign(gtk::Align::Center);
-        let words = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let button_words = gtk::Label::new(Some("Reload"));
-        words.append(&button_words);
-        let key = gtk::Label::new(Some("Ctrl+R"));
-        key.add_css_class("dim-label");
-        words.append(&key);
-        button.set_child(Some(&words));
-        let detail = gtk::Label::new(None);
-        detail.set_selectable(true);
-        detail.set_wrap(true);
-        detail.set_wrap_mode(gtk::pango::WrapMode::WordChar);
-        detail.set_justify(gtk::Justification::Center);
-        detail.set_max_width_chars(60);
-        detail.add_css_class("monospace");
-        detail.add_css_class("dim-label");
-        let details = gtk::Expander::new(Some("Details"));
-        details.set_halign(gtk::Align::Center);
-        details.add_css_class("dim-label");
-        details.set_child(Some(&detail));
-        let under = gtk::Box::new(gtk::Orientation::Vertical, 14);
-        under.append(&button);
-        under.append(&details);
-        status_page.set_child(Some(&under));
+        let status_button = gtk::Button::with_label("Reload");
+        status_button.add_css_class("pill");
+        status_button.set_halign(gtk::Align::Center);
+        status_page.set_child(Some(&status_button));
         let status = gtk::Box::new(gtk::Orientation::Vertical, 0);
         status.add_css_class("copper-status");
         status.append(&status_page);
@@ -365,7 +338,6 @@ impl GtkFrame {
 
         let weak = shell.downgrade();
         let tab = tab.clone();
-        let status_button = button;
         status_button.connect_clicked(move |_| {
             if let Some(s) = weak.upgrade() {
                 s.reload(&tab);
@@ -377,9 +349,6 @@ impl GtkFrame {
             status,
             status_page,
             status_button,
-            button_words,
-            details,
-            detail,
         }
     }
 
@@ -399,20 +368,9 @@ impl std::ops::Deref for GtkFrame {
 
 impl PageFrame for GtkFrame {
     fn show_status(&self, status: &PageStatus) {
-        self.status_page.set_icon_name(Some(if status.offline {
-            "network-wireless-offline-symbolic"
-        } else {
-            "dialog-warning-symbolic"
-        }));
         self.status_page.set_title(&status.title);
         self.status_page.set_description(Some(&status.description));
-        self.button_words.set_label(&status.button);
-        self.status_button
-            .update_property(&[gtk::accessible::Property::Label(&status.button)]);
-        self.detail
-            .set_text(status.detail.as_deref().unwrap_or_default());
-        self.details.set_expanded(false);
-        self.details.set_visible(status.detail.is_some());
+        self.status_button.set_label(&status.button);
         self.status.set_visible(true);
     }
 

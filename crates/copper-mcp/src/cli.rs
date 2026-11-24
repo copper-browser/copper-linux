@@ -99,6 +99,8 @@ pub const USAGE: &str = "Usage: copper [--json] [--launch] [--tab ID] <command> 
   claude [status|signin|paste -|signout|cancel]
                                             Claude account sign-in and status; never prints a token
                                             (copper claude --help)
+  pins [status] | pins sleep on|off         every pin's state, and whether big pins may sleep
+                                            (Settings › Tabs › Let big pins sleep)
   cloud-history delete [--since 1h|24h|7d|TIME] [--until TIME] [--host SITE]... [--page URL]... [--device ID|this] [--all]
                                             delete your history on Copper Cloud (every computer's); this
                                             one's stays. A site matches its subdomains; nothing chosen needs --all
@@ -274,6 +276,23 @@ fn intelligence(args: &[String]) -> Result<Spec, Early> {
         }
     }
     Ok(rpc("copper/intelligence", Value::Object(params)))
+}
+
+/// `copper pins [status]` / `copper pins sleep on|off` (`CLI.runPins`):
+/// Settings › Tabs › Let big pins sleep, and every pin's state, through the
+/// loopback-only `copper/pins` method.
+fn pins(args: &[String]) -> Result<Spec, Early> {
+    let on = match args {
+        [] => None,
+        [status] if status == "status" => None,
+        [sleep, on] if sleep == "sleep" && (on == "on" || on == "off") => Some(on == "on"),
+        _ => return bad("usage: copper pins [status] | copper pins sleep on|off"),
+    };
+    let mut params = Map::new();
+    if let Some(on) = on {
+        params.insert("on".into(), json!(on));
+    }
+    Ok(rpc("copper/pins", Value::Object(params)))
 }
 
 /// Commands the Mac has that this build does not (yet).
@@ -824,6 +843,7 @@ pub fn make_request(command: &str, args: &[String]) -> Result<Spec, Early> {
         // Answered without a window, before this parser (crate::cloud_cli).
         "intelligence" => intelligence(args),
         "claude" => claude(args),
+        "pins" => pins(args),
         "cloud" => bad("cloud runs on its own: copper cloud pair|sso|status (copper cloud help)"),
         // Answered without a window, before this parser (copper_botpass::cli).
         "botpass" => {
@@ -1869,6 +1889,26 @@ mod tests {
         assert!(!generated_name("copper-20261118-110640-.png"));
         assert!(!generated_name("copper-2026111-110640.png"));
         assert!(!generated_name("shot.png"));
+    }
+
+    #[test]
+    fn pins_controls() {
+        let request = |a: &[&str]| parse(&s(a), false).unwrap().spec.request.unwrap();
+        assert_eq!(request(&["pins"])["method"], "copper/pins");
+        assert_eq!(request(&["pins"])["params"], json!({}));
+        assert_eq!(request(&["pins", "status"])["params"], json!({}));
+        assert_eq!(
+            request(&["pins", "sleep", "off"])["params"],
+            json!({"on": false})
+        );
+        assert_eq!(
+            request(&["pins", "sleep", "on"])["params"],
+            json!({"on": true})
+        );
+        assert!(matches!(
+            parse(&s(&["pins", "sleep"]), false),
+            Err(Early::Usage(t)) if t.starts_with("usage: copper pins")
+        ));
     }
 
     #[test]

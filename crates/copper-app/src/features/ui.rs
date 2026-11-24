@@ -58,6 +58,7 @@ const CSS: &str = r#"
 .copper-panel .bar progress { min-height: 2px; background-color: alpha(@copper_ink, .7); border: none; }
 .copper-panel .bar { margin-top: 5px; }
 .copper-panel .file-mark { opacity: .72; }
+.copper-panel .chip { background-color: alpha(@copper_ink, .08); color: alpha(@copper_ink, .62); }
 .copper-settings-note { font-size: 12.5px; opacity: .65; }
 "#;
 

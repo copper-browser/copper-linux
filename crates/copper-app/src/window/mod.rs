@@ -354,44 +354,23 @@ fn install_base_css() {
     );
 }
 
-/// A site with no icon yet: a plain globe the size of an icon, in the
-/// surface's quiet ink, never a letter (Mac `Globe`, copper-browser/Copper#181).
-/// Drawn, not themed: icon themes have no dependable globe.
-pub fn globe(size: i32) -> gtk::DrawingArea {
-    let area = gtk::DrawingArea::new();
-    area.set_content_width(size);
-    area.set_content_height(size);
-    area.set_halign(gtk::Align::Center);
-    area.set_valign(gtk::Align::Center);
-    area.add_css_class("globe");
-    area.set_accessible_role(gtk::AccessibleRole::Presentation);
-    area.set_draw_func(|area, cr, w, h| {
-        use std::f64::consts::PI;
-        let ink = area.color();
-        cr.set_source_rgba(
-            ink.red() as f64,
-            ink.green() as f64,
-            ink.blue() as f64,
-            ink.alpha() as f64,
-        );
-        let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0);
-        // 0.8 of the box: a rim, a meridian and the equator (more lines
-        // blur at 16 px).
-        let r = w.min(h) as f64 * 0.4;
-        cr.set_line_width((r / 7.0).max(1.0));
-        cr.arc(cx, cy, r, 0.0, 2.0 * PI);
-        let _ = cr.stroke();
-        cr.save().ok();
-        cr.translate(cx, cy);
-        cr.scale(0.45, 1.0);
-        cr.arc(0.0, 0.0, r, 0.0, 2.0 * PI);
-        cr.restore().ok();
-        let _ = cr.stroke();
-        cr.move_to(cx - r, cy);
-        cr.line_to(cx + r, cy);
-        let _ = cr.stroke();
-    });
-    area
+/// A letter on a soft square (the mark of a tab without an icon).
+pub fn letter_chip(text: &str, size: i32) -> gtk::Label {
+    let letter: String = text
+        .trim_start_matches("www.")
+        .chars()
+        .find(|c| c.is_alphanumeric())
+        .map(|c| c.to_uppercase().collect())
+        .unwrap_or_else(|| "·".into());
+    let l = gtk::Label::new(Some(&letter));
+    l.add_css_class("chip");
+    if size > 18 {
+        l.add_css_class("big");
+    }
+    l.set_size_request(size, size);
+    l.set_halign(gtk::Align::Center);
+    l.set_valign(gtk::Align::Center);
+    l
 }
 
 /// A window menu (the column's foot, the tab row's end).

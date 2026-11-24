@@ -43,6 +43,16 @@ thread_local! {
     static AGENTS: RefCell<Option<Rc<dyn Any>>> = const { RefCell::new(None) };
     /// Who else follows the drivers ([`on_drive`]).
     static DRIVE_LISTENERS: RefCell<Vec<DriveListener>> = const { RefCell::new(Vec::new()) };
+    /// Tabs an agent opened for itself (`browser_tabs new`, `jev_run
+    /// newTab`; Mac `AgentTabs.opened`).
+    static OPENED: RefCell<std::collections::HashSet<TabId>> = RefCell::default();
+}
+
+/// Whether an agent opened `tab` for itself: once the agent is done with it
+/// and it has been left half an hour, it sleeps whatever the budget says
+/// (nobody chose to keep it loaded; [`crate::sleep`]).
+pub fn opened(tab: &TabId) -> bool {
+    OPENED.with_borrow(|o| o.contains(tab))
 }
 
 /// Someone following the drivers ([`on_drive`]).

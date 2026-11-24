@@ -237,10 +237,10 @@ pub fn go(shell: &Shell, url: &str) {
     }
 }
 
-/// A site's mark: its kept icon, or a globe until there is one.
-pub fn site_mark(shell: &Shell, url: &str) -> gtk::Widget {
+/// A site's mark: its kept icon, or its letter.
+pub fn site_mark(shell: &Shell, url: &str, letter_from: &str) -> gtk::Widget {
     if let Some(tex) = shell.cached_icon(url).or_else(|| shell.open_icon(url)) {
         return crate::window::tabs::icon_image(&tex, 16).upcast();
     }
-    crate::window::globe(16).upcast()
+    crate::window::letter_chip(letter_from, 16).upcast()
 }

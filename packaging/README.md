@@ -172,8 +172,7 @@ for the user from Flathub (~3 GB on disk). Everything else lives in
 - **Permissions** (PLAN §7 Security): `--share=network`, `--share=ipc`,
   `--socket=wayland`, `--socket=fallback-x11`, `--device=dri`,
   `--socket=pulseaudio`, `--talk-name=org.freedesktop.secrets`,
-  `--system-talk-name=org.freedesktop.login1` (the morning page hears the
-  computer wake), `--filesystem=xdg-download`. Everything else (saving elsewhere, Chrome
+  `--filesystem=xdg-download`. Everything else (saving elsewhere, Chrome
   import) goes through the file-chooser portal. MCP on 127.0.0.1:4123 is covered
   by `network`.
 - **Bundle:** `flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo`.

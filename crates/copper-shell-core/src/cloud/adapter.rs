@@ -475,7 +475,7 @@ mod tests {
         ));
         assert!(b.tab(&saved).unwrap().sleeping);
         assert_eq!(kept_in(&b), before);
-        // The pin put down: still kept too.
+        // Ctrl+W on the pin steps away from it: still kept too.
         b.close_tab(&pin, false);
         assert_eq!(kept_in(&b), before);
         // The command line's close: still kept.

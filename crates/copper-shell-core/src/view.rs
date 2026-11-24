@@ -74,11 +74,6 @@ pub struct PageStatus {
     pub description: String,
     /// The button's label (`Reload`, `Try Again`).
     pub button: String,
-    /// The engine's own words and the address, folded away under Details
-    /// (`None`: no Details).
-    pub detail: Option<String>,
-    /// The computer is offline: the symbol is Wi-Fi, not a warning.
-    pub offline: bool,
 }
 
 /// A yes/no question for the user, over the window (a site asking for the
