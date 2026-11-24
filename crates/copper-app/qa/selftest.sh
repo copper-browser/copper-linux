@@ -40,6 +40,8 @@ world m2mac
 mkdir -p "$HOME/.local/share/copper-m2mac"
 cp fixtures/mac/session.json "$HOME/.local/share/copper-m2mac/session.json"
 timeout 180 "$bin" --selftest-ui mac --out "$out" 2>"$out/mac.err" | tee "$out/mac.log" || status=1
+world m2chrome
+timeout 120 "$bin" --selftest-ui chrome --out "$out" 2>"$out/chrome.err" | tee "$out/chrome.log" || status=1
 # The --screenshot hook on its own (COPPER_SCREENSHOT works the same way).
 world m2shot
 timeout 60 "$bin" --screenshot "$out/40-screenshot-hook.png" \

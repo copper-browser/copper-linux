@@ -105,39 +105,77 @@ fn crash_status(reason: CrashReason) -> PageStatus {
         }
         .into(),
         button: "Reload".into(),
+        detail: None,
+        offline: false,
     }
 }
 
-/// What a page that failed to load says.
+/// What a page that failed to load says (Mac `Stage.swift` `Trouble`,
+/// copper-browser/Copper#181): which site, why in one line, Try Again, and
+/// the engine's own words under Details.
 fn failure_status(url: &str, error: &str, online: bool) -> PageStatus {
-    let (title, description) = if online {
-        (format!("Couldn’t open {}", host_of(url)), sentence(error))
+    let host = url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string))
+        .filter(|h| !h.is_empty());
+    let description = if online {
+        failure_reason(error)
     } else {
-        (
-            "You’re offline".to_string(),
-            "Copper will load this page once you are connected.".to_string(),
-        )
+        OFFLINE
     };
     PageStatus {
-        title,
-        description,
+        title: match host {
+            Some(h) => format!("Can\u{2019}t connect to {h}"),
+            None => "This page didn\u{2019}t load".into(),
+        },
+        description: description.into(),
         button: "Try Again".into(),
+        detail: Some(format!("{}\n{url}", error.trim())),
+        offline: description == OFFLINE,
     }
 }
 
-/// WebKit's error text as one sentence.
-fn sentence(error: &str) -> String {
-    let e = error.trim().trim_end_matches('.');
-    if e.is_empty() {
-        return "The page could not be loaded.".into();
+/// The Mac's line for no network (`Browser.offline`).
+const OFFLINE: &str = "No connection.";
+
+/// Why a load failed, in the Mac's words (`Browser.message(for:)`), from
+/// the engine's error: WebKitGTK's `message (domain code)` or WebView2's
+/// status name.
+fn failure_reason(error: &str) -> &'static str {
+    let e = error.trim().trim_end_matches('.').to_ascii_lowercase();
+    // WebKitGTK: the GError's domain and code, at the end.
+    let glib = e
+        .rsplit_once(" (")
+        .and_then(|(_, t)| t.strip_suffix(')'))
+        .and_then(|t| t.split_once(' '))
+        .map(|(d, c)| (d, c.parse::<i32>().unwrap_or(-1)));
+    const NO_HOST: &str = "No site at that address.";
+    const SLOW: &str = "The site took too long to answer.";
+    const REFUSED: &str = "The site refused the connection.";
+    const INSECURE: &str = "The connection isn't secure.";
+    match glib {
+        Some(("g-resolver-error-quark", _)) | Some(("g-io-error-quark", 28)) => return NO_HOST,
+        // GIOErrorEnum: TIMED_OUT, HOST_UNREACHABLE, NETWORK_UNREACHABLE,
+        // CONNECTION_REFUSED, BROKEN_PIPE (connection closed), NOT_CONNECTED.
+        Some(("g-io-error-quark", 24)) => return SLOW,
+        Some(("g-io-error-quark", 37 | 39)) => return REFUSED,
+        Some(("g-io-error-quark", 38 | 44 | 45)) => return OFFLINE,
+        Some(("g-tls-error-quark", _)) => return INSECURE,
+        Some(_) => return DIDNT_LOAD,
+        None => {}
     }
-    let mut c = e.chars();
-    let first = c
-        .next()
-        .map(|f| f.to_uppercase().collect::<String>())
-        .unwrap_or_default();
-    format!("{first}{}.", c.as_str())
+    match e.as_str() {
+        "host name not resolved" => NO_HOST,
+        "disconnected" | "connection reset" => OFFLINE,
+        "timeout" => SLOW,
+        "connection refused" | "cannot connect" | "server unreachable" => REFUSED,
+        e if e.starts_with("certificate") || e.starts_with("client certificate") => INSECURE,
+        _ => DIDNT_LOAD,
+    }
 }
+
+/// The Mac's line when nothing better is known.
+const DIDNT_LOAD: &str = "The page didn't load.";
 
 /// A profile id the engine accepts, from a Mac profile name (`Work`,
 /// `Client A`): `[A-Za-z0-9._-]`, never leading `.`.
@@ -802,6 +840,75 @@ pub fn profile_key<P: Profile>(p: &P) -> String {
 mod tests {
     use super::*;
 
+    /// Mac `Browser.message(for:)` and `Trouble`: the title names the
+    /// host, the line says why, the engine's words wait under Details.
+    #[test]
+    fn a_failed_load_says_what_the_mac_says() {
+        let s = failure_status(
+            "http://copper-nope.invalid/x",
+            "Error resolving \u{201c}copper-nope.invalid\u{201d}: Name or service not known (g-resolver-error-quark 0)",
+            true,
+        );
+        assert_eq!(s.title, "Can\u{2019}t connect to copper-nope.invalid");
+        assert_eq!(s.description, "No site at that address.");
+        assert_eq!(s.button, "Try Again");
+        assert!(!s.offline);
+        assert_eq!(
+            s.detail.as_deref(),
+            Some(
+                "Error resolving \u{201c}copper-nope.invalid\u{201d}: Name or service not known (g-resolver-error-quark 0)\nhttp://copper-nope.invalid/x"
+            )
+        );
+        let www = failure_status("https://www.example.com/", "timeout", true);
+        assert_eq!(www.title, "Can\u{2019}t connect to www.example.com");
+        let r = |e: &str| failure_status("https://a.example/", e, true).description;
+        // WebKitGTK (GLib domains and codes).
+        assert_eq!(
+            r("Could not connect to localhost: Connection refused (g-io-error-quark 39)"),
+            "The site refused the connection."
+        );
+        assert_eq!(
+            r("Socket I/O timed out (g-io-error-quark 24)"),
+            "The site took too long to answer."
+        );
+        assert_eq!(
+            r("Network is unreachable (g-io-error-quark 38)"),
+            "No connection."
+        );
+        assert_eq!(
+            r("Unacceptable TLS certificate (g-tls-error-quark 2)"),
+            "The connection isn't secure."
+        );
+        assert_eq!(
+            r("Load request cancelled (WebKitNetworkError 302)"),
+            "The page didn't load."
+        );
+        // WebView2 (its status names).
+        assert_eq!(r("Host name not resolved."), "No site at that address.");
+        assert_eq!(r("disconnected"), "No connection.");
+        assert_eq!(r("connection reset"), "No connection.");
+        assert_eq!(r("timeout"), "The site took too long to answer.");
+        assert_eq!(r("cannot connect"), "The site refused the connection.");
+        assert_eq!(r("connection refused"), "The site refused the connection.");
+        assert_eq!(r("server unreachable"), "The site refused the connection.");
+        assert_eq!(r("certificate expired"), "The connection isn't secure.");
+        assert_eq!(
+            r("client certificate contains errors"),
+            "The connection isn't secure."
+        );
+        assert_eq!(r("unknown error"), "The page didn't load.");
+        assert_eq!(r(""), "The page didn't load.");
+        // Offline: Wi-Fi, whatever the engine said.
+        let off = failure_status("https://a.example/", "timeout", false);
+        assert_eq!(off.description, "No connection.");
+        assert!(off.offline);
+        // No host (a file, a bad address): the page didn't load.
+        assert_eq!(
+            failure_status("file:///nope.html", "x", true).title,
+            "This page didn\u{2019}t load"
+        );
+    }
+
     #[test]
     fn profile_ids_from_mac_names() {
         assert_eq!(profile_id(None).as_str(), "default");
@@ -850,14 +957,5 @@ mod tests {
         assert_eq!(rel("about:blank"), None);
         assert_eq!(rel("file:///home/x.html"), None);
         assert_eq!(rel("copper://canvas/1").as_deref(), Some("canvas/1.png"));
-    }
-
-    #[test]
-    fn errors_read_as_sentences() {
-        assert_eq!(
-            sentence("could not resolve host"),
-            "Could not resolve host."
-        );
-        assert_eq!(sentence(""), "The page could not be loaded.");
     }
 }

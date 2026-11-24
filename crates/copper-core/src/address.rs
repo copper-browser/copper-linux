@@ -103,6 +103,19 @@ pub fn pretty_str(url: &str) -> String {
         .unwrap_or_else(|_| url.to_string())
 }
 
+/// What the address says, under the pointer, of a page over plain http
+/// (Mac `SideAddress.Host`, copper-browser/Copper#181).
+pub const NOT_SECURE: &str = "Not secure";
+/// The line under it (`.help`).
+pub const NOT_SECURE_HELP: &str = "This page's connection isn't encrypted";
+
+/// A page over plain http, which the address marks [`NOT_SECURE`] (Mac:
+/// `url.scheme?.lowercased() == "http"`).
+pub fn is_not_secure(url: &str) -> bool {
+    url.get(..7)
+        .is_some_and(|s| s.eq_ignore_ascii_case("http://"))
+}
+
 /// The history key for a URL: [`pretty`], lowercased.
 pub fn history_key(url: &Url) -> String {
     pretty(url).to_lowercase()
@@ -201,6 +214,16 @@ pub fn destination(typed: &str, engine: &SearchEngine) -> Option<Url> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_plain_http_is_not_secure() {
+        assert!(is_not_secure("http://example.com/"));
+        assert!(is_not_secure("HTTP://Example.com"));
+        assert!(!is_not_secure("https://example.com/"));
+        assert!(!is_not_secure("about:blank"));
+        assert!(!is_not_secure("file:///tmp/a.html"));
+        assert!(!is_not_secure(""));
+    }
 
     #[test]
     fn typed_text() {

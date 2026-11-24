@@ -10,6 +10,9 @@
 //!   kept, spaces, selection), only the selected tab has a page, private
 //!   tabs are gone; selecting another tab wakes it.
 //! * `mac` — a world holding the Mac `session.json` fixture: it opens.
+//! * `chrome` — Mac #181's small chrome items: a globe (never a letter) for
+//!   a site with no icon, in a pin and a row; the can't-connect page and its
+//!   Details; "Not secure" on an http page's address under the pointer.
 //! * `calendar` — the Calendar pin's card: with no calendar, then with one
 //!   this run serves (meetings around now); what it lists and leaves out,
 //!   that the page keeps the keyboard, and that it goes when the pointer
@@ -125,6 +128,7 @@ pub fn start(shell: &Shell, phase: String, out: PathBuf) {
             "restore" => restore(&run).await,
             "mac" => mac(&run).await,
             "calendar" => calendar(&run).await,
+            "chrome" => chrome(&run).await,
             other => run.check(false, &format!("unknown phase {other}")),
         }
         let failures = run.failures.borrow().clone();
@@ -661,6 +665,118 @@ async fn mac(run: &Run) {
         "nothing but the selected tab loads",
     );
     run.shot("30-mac-session").await;
+}
+
+async fn chrome(run: &Run) {
+    let s = &run.shell;
+    s.set_look(Look::Light);
+    s.set_tabs_position(TabsPosition::Left);
+    let studio = run.open("/studio", true);
+    run.wait_loaded(&studio).await;
+    // A plain-text 404: no icon, ever.
+    let bare = run.open("/no-icon", true);
+    run.wait_loaded(&bare).await;
+    let pin = run.open("/no-icon-pinned", true);
+    run.wait_loaded(&pin).await;
+    s.pin(&pin);
+    s.select(&bare);
+    glib::timeout_future(Duration::from_millis(800)).await;
+    run.check(
+        !s.favicons().borrow().contains_key(&bare),
+        "a site with no icon has none",
+    );
+    let window: gtk::Widget = s.window().clone().upcast();
+    let globes = descendants(&window)
+        .filter(|w| w.has_css_class("globe") && w.is_drawable())
+        .count();
+    run.check(
+        globes >= 2,
+        &format!("its pin and its row wear a globe ({globes})"),
+    );
+    run.check(
+        !descendants(&window).any(|w| w.has_css_class("chip")),
+        "no letter tiles",
+    );
+
+    // "Not secure" under the pointer on the http page's address.
+    let insecure = || {
+        descendants(&window)
+            .find(|w| w.has_css_class("not-secure"))
+            .is_some_and(|w| w.is_drawable())
+    };
+    s.ui().header.set_hovering(s, false);
+    run.check(!insecure(), "no \"Not secure\" until the pointer is on it");
+    s.ui().header.set_hovering(s, true);
+    glib::timeout_future(Duration::from_millis(300)).await;
+    run.check(
+        insecure(),
+        "an http page's address says \"Not secure\" under the pointer",
+    );
+    run.shot("60-not-secure").await;
+    s.ui().header.set_hovering(s, false);
+    run.shot("61-globes").await;
+
+    // Can't connect.
+    let failed = s.open(
+        "http://copper-selftest.invalid/",
+        OpenTab {
+            foreground: true,
+            ..Default::default()
+        },
+    );
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(10)
+        && !s
+            .slot(&failed)
+            .is_some_and(|x| x.failed_url.borrow().is_some())
+    {
+        glib::timeout_future(Duration::from_millis(100)).await;
+    }
+    let page = descendants(&window)
+        .filter_map(|w| w.downcast::<libadwaita::StatusPage>().ok())
+        .find(|p| p.is_drawable());
+    let said = page.as_ref().map(|p| {
+        (
+            p.title().to_string(),
+            p.description().unwrap_or_default().to_string(),
+        )
+    });
+    println!("note: the page says {said:?}");
+    run.check(
+        said.as_ref().is_some_and(|(t, d)| {
+            t == "Can\u{2019}t connect to copper-selftest.invalid"
+                && d == "No site at that address."
+        }),
+        "a page that can't load says which site and why",
+    );
+    run.shot("62-cant-connect").await;
+    let details = page
+        .and_then(|p| descendants(p.upcast_ref()).find_map(|w| w.downcast::<gtk::Expander>().ok()));
+    run.check(
+        details.as_ref().is_some_and(|d| d.is_drawable()),
+        "with its details on request",
+    );
+    if let Some(d) = details {
+        d.set_expanded(true);
+    }
+    run.shot("63-cant-connect-details").await;
+    s.select(&bare);
+    s.set_tabs_position(TabsPosition::Top);
+    run.shot("64-globes-top").await;
+}
+
+/// Every widget under `root`, depth first.
+fn descendants(root: &gtk::Widget) -> impl Iterator<Item = gtk::Widget> {
+    let mut stack = vec![root.clone()];
+    std::iter::from_fn(move || {
+        let w = stack.pop()?;
+        let mut c = w.first_child();
+        while let Some(k) = c {
+            c = k.next_sibling();
+            stack.push(k);
+        }
+        Some(w)
+    })
 }
 
 /// What a relaunch must show, without ids (they are fresh each run).
