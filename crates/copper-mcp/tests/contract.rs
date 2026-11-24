@@ -38,11 +38,14 @@ struct World {
     released: Vec<TabId>,
     /// The fake page's state for Jev: clicked once → marker m2.
     clicked: bool,
-    /// Jev's fake page: the button's name (else "Search"), whether a click
-    /// sends its form (`fired`), and whether something is drawn over it.
+    /// Jev's fake page: the button's name (else "Search"), and whether
+    /// something is drawn over it.
     button: Option<String>,
-    fires: bool,
     covered: bool,
+    /// A click posts with fetch (no form), as a Pay button may: the
+    /// engine's request log has it.
+    posts: bool,
+    net: copper_engine::NetLog,
     /// What `page/due.js` answers: a short timer the page started, ms.
     due: f64,
     jev_endpoint: Option<String>,
@@ -267,7 +270,6 @@ impl Page for FakePage {
                 Script::JevResolve => json!({"x": 60, "y": 35}),
                 Script::JevCovered if world.borrow().covered => json!([1]),
                 Script::JevCovered => json!([]),
-                Script::JevFired => json!(world.borrow().fires && world.borrow().clicked),
                 Script::Due => json!(world.borrow().due),
                 Script::JevSettle => json!(true),
                 _ => Value::Null,
@@ -283,9 +285,20 @@ impl Page for FakePage {
         let mut w = self.world.borrow_mut();
         if matches!(event, InputEvent::Click { .. }) {
             w.clicked = true;
+            if w.posts {
+                let id = w.inputs.len() as u64 + 1;
+                w.net
+                    .sent(id, "POST", "https://pay.test/api/pay", "fetch", false);
+                w.net.answered(id, 200);
+                w.net.finished(id, None);
+            }
         }
         w.inputs.push((self.tab.short(), event));
         async { Ok(()) }
+    }
+
+    fn network(&self) -> Option<copper_engine::NetLog> {
+        Some(self.world.borrow().net.clone())
     }
 
     fn zoom(&self) -> f64 {
@@ -1683,7 +1696,7 @@ async fn jev_run_doubts_a_low_done_then_ends_unsure_in_a_private_tab() {
 
 #[tokio::test]
 async fn jev_run_never_sends_a_payment_twice() {
-    // "Pay now" sent its form and the page showed nothing new: Jev choosing it
+    // "Pay now" posted and the page showed nothing new: Jev choosing it
     // again is not clicked; it is asked DONE or BLOCKED instead.
     local()
         .run_until(async {
@@ -1697,7 +1710,7 @@ async fn jev_run_never_sends_a_payment_twice() {
                 let mut w = r.host.0.borrow_mut();
                 w.jev_endpoint = Some(url);
                 w.button = Some("Pay now".into());
-                w.fires = true;
+                w.posts = true;
             }
             let (text, error) = tool(
                 r.server.port,
@@ -1716,8 +1729,10 @@ async fn jev_run_never_sends_a_payment_twice() {
                 "{run}"
             );
             assert_eq!(run["actions"], 1);
-            assert_eq!(run["steps"][0]["form_sent"], true);
+            // Sent with fetch, no form: the engine's log has the POST.
             assert_eq!(run["steps"][0]["sent"], true);
+            assert!(run["steps"][0].get("form_sent").is_none());
+            assert_eq!(run["steps"][0]["net"], json!(["200 pay"]));
             assert_eq!(run["totals"]["resends_stopped"], 1);
             let clicks = r
                 .host

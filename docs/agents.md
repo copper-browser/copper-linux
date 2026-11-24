@@ -361,8 +361,10 @@ then the run ends unsure. A control with something drawn over it is left out
 and Jev uses what is on top. A control that asks for a human check — *I am
 human*, a CAPTCHA, *press and hold* — is never clicked or typed into: the run
 ends BLOCKED and says to hand the page to the user. What a page asks its
-server is heard in the page (its `fetch` and `XMLHttpRequest` calls); the
-Mac hears it from WebKit itself.
+server is what `browser_network_requests` lists: heard from the engine, not
+from a script in the page. On WebKitGTK a request's kind comes from its
+address and answer, so a data call that answers with HTML counts as a page
+load.
 
 `model` asks another Jev for the run (`jev-preview`, `jev-1.14.0`).
 `json: true` (`copper run --json-run`) returns the run as one object —

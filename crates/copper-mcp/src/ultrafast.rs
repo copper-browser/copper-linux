@@ -350,10 +350,10 @@ fn ms_since(started: Instant) -> f64 {
 
 /// What the action asked the page's server, said in the step: the last six
 /// calls, and whether any was still out.
-fn note_calls(step: &mut Step, (calls, now): &(Vec<pj::NetEntry>, f64)) {
+fn note_calls(step: &mut Step, (calls, now): &(Vec<copper_engine::NetEntry>, Instant)) {
     let skip = calls.len().saturating_sub(6);
     step.net = calls[skip..].iter().map(net::brief).collect();
-    step.in_flight = calls.iter().any(|c| net::pending(c, *now, net::EXPIRE_MS));
+    step.in_flight = calls.iter().any(|c| net::pending(c, *now, net::EXPIRE));
 }
 
 /// `3` and `3:2` both sort as numbers.
@@ -486,12 +486,9 @@ struct Reading<'a> {
     deep: bool,
 }
 
-/// Where the page's request log stood: its document and its last request.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct NetMark {
-    doc: f64,
-    seq: u64,
-}
+/// Where the page's request log stood: its last request's `seq`
+/// (`NetLog.mark`). Requests after it are the next action's.
+pub type NetMark = u64;
 
 /// Why an action did not go in.
 enum Miss {
@@ -1004,65 +1001,52 @@ impl<H: Host> Mcp<H> {
         format!("Page changed since this decision ({why}). Observe again.")
     }
 
-    // MARK: the page's requests (the Mac's NetLog, kept by the page script)
+    // MARK: the page's requests (the engine's NetLog, as the Mac's)
 
-    async fn net_snapshot(&self, page: &H::Page, after: u64) -> Option<pj::NetSnapshot> {
-        js(page, &pj::net(after)).await.ok()
+    /// The tab's request log (kept from the moment the tab is readied).
+    fn net_log(&self, tab: &TabId) -> Option<copper_engine::NetLog> {
+        self.host.page(tab)?.network()
     }
 
     /// Where the log is now: requests after this are the next action's.
     pub(crate) async fn net_mark(&self, tab: &TabId) -> Option<NetMark> {
-        let page = self.host.page(tab)?;
-        let s = self.net_snapshot(&page, u64::MAX).await?;
-        Some(NetMark {
-            doc: s.doc,
-            seq: s.seq,
-        })
+        Some(self.net_log(tab)?.sequence())
     }
 
-    /// `mark`, or the start of the page now in the tab if it came after.
+    /// `mark`, or the start of the page now in the tab if it came after
+    /// (`NetLog.current`).
     async fn net_current(&self, tab: &TabId, mark: Option<NetMark>) -> Option<NetMark> {
-        let now = self.net_mark(tab).await?;
-        Some(match mark {
-            Some(m) if m.doc == now.doc => m,
-            _ => NetMark {
-                doc: now.doc,
-                seq: 0,
-            },
-        })
+        let log = self.net_log(tab)?;
+        Some(mark.unwrap_or(log.document_at()).max(log.document_at()))
     }
 
-    /// The page's data calls since `mark`, less its bookkeeping, and the
-    /// page's clock; `None` when the page left for another since `mark`.
+    /// The page's data calls since `mark` (`None`: since it loaded), less its
+    /// bookkeeping, and the time; `None` when the page left for another since
+    /// `mark` (`NetLog.dataCalls`).
     pub(crate) async fn data_calls(
         &self,
         tab: &TabId,
         mark: Option<NetMark>,
-    ) -> Option<(Vec<pj::NetEntry>, f64)> {
-        let page = self.host.page(tab)?;
-        let after = mark.map_or(0, |m| m.seq);
-        let s = self.net_snapshot(&page, after).await?;
-        if mark.is_some_and(|m| m.doc != s.doc) {
+    ) -> Option<(Vec<copper_engine::NetEntry>, Instant)> {
+        let log = self.net_log(tab)?;
+        if mark.is_some_and(|m| log.document_at() > m) {
             return None;
         }
-        Some((net::data_calls(&s.entries, after), s.now))
+        let since = mark.unwrap_or(log.document_at());
+        Some((net::data_calls(&log.entries(), since), Instant::now()))
     }
 
-    /// Where the non-GET requests since `mark` went (none when the page left).
+    /// Where the non-GET requests since `mark` went (`NetLog.posts`).
     async fn net_posts(&self, tab: &TabId, mark: Option<NetMark>) -> Vec<String> {
-        let Some(mark) = mark else { return Vec::new() };
-        let Some(page) = self.host.page(tab) else {
-            return Vec::new();
-        };
-        match self.net_snapshot(&page, mark.seq).await {
-            Some(s) if s.doc == mark.doc => net::posts(&s.entries, mark.seq),
+        match (mark, self.net_log(tab)) {
+            (Some(mark), Some(log)) => net::posts(&log.entries(), mark),
             _ => Vec::new(),
         }
     }
 
     /// Until the page's data calls since `mark` are answered and nothing new
-    /// came back for `linger`, or `cap`: what they were, and the page's clock
-    /// then (`NetLog.answered`). `start`: with no call asked yet, how long to
+    /// came back for `linger`, or `cap`: what they were, and when
+    /// (`NetLog.answered`). `start`: with no call asked yet, how long to
     /// wait for one to begin (a search's page asks for its results a moment
     /// after the address changes).
     async fn answered(
@@ -1072,17 +1056,16 @@ impl<H: Host> Mcp<H> {
         cap: Duration,
         linger: Duration,
         start: Duration,
-    ) -> (Vec<pj::NetEntry>, f64) {
+    ) -> (Vec<copper_engine::NetEntry>, Instant) {
         let begun = Instant::now();
-        let linger_ms = linger.as_secs_f64() * 1000.0;
         while let Some((calls, now)) = self.data_calls(tab, mark).await {
-            let quiet = net::quiet(&calls, now, linger_ms);
+            let quiet = net::quiet(&calls, now, linger);
             if begun.elapsed() >= cap || (quiet && !(calls.is_empty() && begun.elapsed() < start)) {
                 return (calls, now);
             }
             self.host.sleep(Duration::from_millis(25)).await;
         }
-        (Vec::new(), 0.0)
+        (Vec::new(), Instant::now())
     }
 
     /// Before a second look at a doubtful DONE/BLOCKED: the page's load (≤ 3 s)
@@ -1110,17 +1093,16 @@ impl<H: Host> Mcp<H> {
         let started = Instant::now();
         let from = self.net_current(tab, since).await;
         let (mut awaited, mut changed, mut looked) = (false, false, Instant::now());
-        let linger_ms = rules::WAIT_LINGER.as_secs_f64() * 1000.0;
         while started.elapsed() < rules::WAIT_CAP {
             let Some((calls, now)) = self.data_calls(tab, from).await else {
                 return;
             };
-            let pending = calls.iter().any(|c| net::pending(c, now, net::EXPIRE_MS));
+            let pending = calls.iter().any(|c| net::pending(c, now, net::EXPIRE));
             awaited |= pending;
             if started.elapsed() >= rules::WAIT_FLOOR
                 && !pending
                 && (awaited || changed)
-                && net::quiet(&calls, now, linger_ms)
+                && net::quiet(&calls, now, rules::WAIT_LINGER)
             {
                 return;
             }

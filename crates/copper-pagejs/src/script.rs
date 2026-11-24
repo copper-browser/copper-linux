@@ -155,7 +155,7 @@ scripts! {
     Due = "page/due.js", Call, Page, None;
 
     // ---- Jev (Fork/MCP/Ultrafast.swift) ----
-    /// `window.__jevFast`: observe, marker, check, resolve, covered, reveal, insert, arm, settle, … and the page's own net log.
+    /// `window.__jevFast`: observe, marker, check, resolve, covered, reveal, insert, arm, settle, …
     JevFast = "jev/fast.js", Installer, Page, None;
     /// The page as Jev sees it (`jev_observe`).
     JevObserve = "jev/observe.js", Call, Page, JEV;
@@ -195,8 +195,6 @@ scripts! {
     JevFired = "jev/fired.js", Call, Page, None;
     /// Address, scroll and field values.
     JevPageKey = "jev/page_key.js", Call, Page, JEV;
-    /// The page's data calls after a `seq`.
-    JevNet = "jev/net.js", Call, Page, JEV;
     /// `''` while the helpers' document is still there, else `document.readyState`.
     JevReadyState = "jev/ready_state.js", Call, Page, None;
     /// Scroll by a delta, instantly.

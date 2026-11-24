@@ -35,7 +35,6 @@ pub fn main() {
         case!(jev_covered_targets_are_named),
         case!(jev_query_text_boxes_are_lone_searches),
         case!(jev_reach_arm_and_settle),
-        case!(jev_net_log),
         case!(trail_layer),
         case!(perf_probe_text),
         case!(perf_probe_json),
@@ -778,17 +777,6 @@ async fn read(h: &H, deep: bool) -> Result<jev::Observation, String> {
         .ok_or_else(|| "no observation".into())
 }
 
-/// Wait (≤ 3 s) for a page expression to be true.
-async fn until(h: &H, expression: &str) -> Res {
-    for _ in 0..150 {
-        if h.js(expression).await? == json!(true) {
-            return Ok(());
-        }
-        sleep(20).await;
-    }
-    Err(format!("never true: {expression}"))
-}
-
 async fn jev_deep_reads_shadow_roots_and_frames_and_acts_there(h: &H) -> Res {
     h.load("jev-deep.html").await?;
     let flat = read(h, false).await?;
@@ -1043,88 +1031,6 @@ async fn jev_reach_arm_and_settle(h: &H) -> Res {
     let report = after.settle.clone().ok_or("no settle report")?;
     ensure!(report.ms < 400.0 && !report.capped, "{report:?}");
     ensure!(after.action("e1").is_some(), "{:?}", labels(&after));
-    Ok(())
-}
-
-/// The page's own data calls: those before the first read seeded as
-/// answered, then each fetch and xhr as it goes, answered as before.
-async fn jev_net_log(h: &H) -> Res {
-    h.load("jev-net.html").await?;
-    until(h, "window.early === true").await?;
-    let first = h.run(&jev::net(0)).await?;
-    ensure_eq!(
-        Some(first.doc),
-        h.js("performance.timeOrigin").await?.as_f64()
-    );
-    let early = first
-        .entries
-        .iter()
-        .find(|e| e.url == h.url("frame.html"))
-        .ok_or_else(|| format!("no seeded call in {first:?}"))?;
-    ensure!(
-        early.kind == "fetch"
-            && early.method == "GET"
-            && early.done
-            && early.status == Some(200)
-            && early.answered_at.is_some_and(|t| t >= early.at),
-        "{early:?}"
-    );
-    let mark = first.seq;
-    h.js("(() => { window.got = [];
-        fetch('jev.html').then(r => r.text()).then(t => got.push('get ' + t.includes('Copper Jev fixture')))
-          .then(() => fetch(new Request('frame.html', {method: 'post'}))).then(r => got.push('post ' + r.status))
-          .then(() => new Promise(done => { const x = new XMLHttpRequest(); x.open('post', 'jev.html');
-            x.onloadend = () => { got.push('xhr ' + x.status); done(); }; x.send(); }))
-          .then(() => fetch('http://127.0.0.1:9/')).catch(e => got.push('failed ' + e.name));
-        return true; })()")
-        .await?;
-    until(h, "window.got.length === 4").await?;
-    ensure_eq!(
-        h.js("window.got").await?,
-        json!(["get true", "post 200", "xhr 200", "failed TypeError"])
-    );
-    let snap = h.run(&jev::net(mark)).await?;
-    // method kind path status done error
-    let seen: Vec<String> = snap
-        .entries
-        .iter()
-        .map(|e| {
-            let path = e.url.rsplit('/').next().unwrap_or_default();
-            let status = e.status.map(|s| s.to_string()).unwrap_or("-".into());
-            let error = e.error.is_some();
-            format!("{} {} {path} {status} {} {error}", e.method, e.kind, e.done)
-        })
-        .collect();
-    ensure_eq!(
-        seen,
-        [
-            "GET fetch jev.html 200 true false",
-            "POST fetch frame.html 200 true false",
-            "POST xhr jev.html 200 true false",
-            "GET fetch  - true true",
-        ]
-    );
-    ensure_eq!(snap.entries[0].url, h.url("jev.html"));
-    let seqs: Vec<u64> = snap.entries.iter().map(|e| e.seq).collect();
-    ensure!(
-        seqs.windows(2).all(|w| w[0] < w[1]) && seqs[0] > mark && *seqs.last().unwrap() == snap.seq,
-        "seq {seqs:?} after {mark}, last {}",
-        snap.seq
-    );
-    ensure!(
-        snap.entries
-            .iter()
-            .all(|e| e.answered_at.is_some_and(|t| t >= e.at && t <= snap.now)),
-        "{:?}",
-        snap.entries
-    );
-    // `after` filters by seq; past the last there is nothing.
-    ensure_eq!(h.run(&jev::net(seqs[1])).await?.entries.len(), 2);
-    let none = h.run(&jev::net(snap.seq)).await?;
-    ensure!(
-        none.entries.is_empty() && none.seq == snap.seq && none.doc == snap.doc,
-        "{none:?}"
-    );
     Ok(())
 }
 

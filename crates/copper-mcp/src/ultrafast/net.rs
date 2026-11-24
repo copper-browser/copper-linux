@@ -1,7 +1,10 @@
-//! What a page asked its server (NetLog.swift's Jev part), on the page's own
-//! log (`copper_pagejs::jev::NetEntry`, times in the page's ms).
+//! What a page asked its server (NetLog.swift's Jev part), on the engine's
+//! log of the page's requests (`copper_engine::NetLog`, as the Mac hears
+//! them from WebKit: never from a script in the page).
 
-use copper_pagejs::jev::NetEntry;
+use std::time::{Duration, Instant};
+
+use copper_engine::NetEntry;
 
 /// The calls a page makes for data, not for its looks.
 pub const CALLS: [&str; 2] = ["xhr", "fetch"];
@@ -33,7 +36,7 @@ pub const TRACKERS: &[&str] = &[
 
 /// How long a call that never said anything is waited for (an aborted xhr
 /// may never end).
-pub const EXPIRE_MS: f64 = 1500.0;
+pub const EXPIRE: Duration = Duration::from_millis(1500);
 
 /// A page's own bookkeeping, never its answer: beacons and pings by kind,
 /// the known analytics services by host, and Google's `log?format=json`.
@@ -56,22 +59,22 @@ pub fn noise(e: &NetEntry) -> bool {
         && ["/log", "/gen_204", "/csi", "/jserror"].contains(&url.path().to_lowercase().as_str())
 }
 
-/// Still waited for: not back, no status yet, and asked less than
-/// `expire_ms` ago. A call with a status is answered (a stream, a long poll).
-pub fn pending(e: &NetEntry, now_ms: f64, expire_ms: f64) -> bool {
-    !e.done && e.status.is_none() && now_ms - e.at < expire_ms
+/// Still waited for: not back, no status yet, and asked less than `expire`
+/// ago. A call with a status is answered (a stream, a long poll).
+pub fn pending(e: &NetEntry, now: Instant, expire: Duration) -> bool {
+    !e.done && e.status.is_none() && now.saturating_duration_since(e.at) < expire
 }
 
-/// Nothing pending, and the last answer at least `linger_ms` ago (or no call at all).
-pub fn quiet(calls: &[NetEntry], now_ms: f64, linger_ms: f64) -> bool {
-    if calls.iter().any(|e| pending(e, now_ms, EXPIRE_MS)) {
+/// Nothing pending, and the last answer at least `linger` ago (or no call at all).
+pub fn quiet(calls: &[NetEntry], now: Instant, linger: Duration) -> bool {
+    if calls.iter().any(|e| pending(e, now, EXPIRE)) {
         return false;
     }
     calls
         .iter()
         .filter_map(|e| e.answered_at)
-        .reduce(f64::max)
-        .is_none_or(|last| now_ms - last >= linger_ms)
+        .max()
+        .is_none_or(|last| now.saturating_duration_since(last) >= linger)
 }
 
 /// The page's data calls after `after_seq`, less its bookkeeping.
@@ -129,37 +132,37 @@ mod tests {
     fn entry(seq: u64, method: &str, url: &str, kind: &str) -> NetEntry {
         NetEntry {
             seq,
-            method: method.into(),
-            url: url.into(),
-            kind: kind.into(),
-            ..NetEntry::default()
+            ..NetEntry::new(method, url, kind)
         }
     }
 
+    const MS: Duration = Duration::from_millis(1);
+
     #[test]
     fn waits_only_on_what_is_live() {
-        let now = 10_000.0;
+        let now = Instant::now() + 10_000 * MS;
+        let linger = 150 * MS;
         let mut open = entry(
             1,
             "POST",
             "https://www.google.com/_/FlightsFrontendUi/data/batchexecute",
             "xhr",
         );
-        open.at = now - 500.0;
-        assert!(pending(&open, now, EXPIRE_MS));
+        open.at = now - 500 * MS;
+        assert!(pending(&open, now, EXPIRE));
         // An aborted call that never ends stops counting after 1.5 s.
-        open.at = now - 2000.0;
-        assert!(!pending(&open, now, EXPIRE_MS));
+        open.at = now - 2000 * MS;
+        assert!(!pending(&open, now, EXPIRE));
         // A call with a status is answered, open stream or not.
         let mut streaming = entry(2, "GET", "https://x.test/stream", "fetch");
         streaming.status = Some(200);
         streaming.at = now;
-        assert!(!pending(&streaming, now, EXPIRE_MS));
+        assert!(!pending(&streaming, now, EXPIRE));
         // Quiet: nothing pending and the last answer 150 ms ago.
-        streaming.answered_at = Some(now - 50.0);
-        assert!(!quiet(std::slice::from_ref(&streaming), now, 150.0));
-        streaming.answered_at = Some(now - 200.0);
-        assert!(quiet(std::slice::from_ref(&streaming), now, 150.0) && quiet(&[], now, 150.0));
+        streaming.answered_at = Some(now - 50 * MS);
+        assert!(!quiet(std::slice::from_ref(&streaming), now, linger));
+        streaming.answered_at = Some(now - 200 * MS);
+        assert!(quiet(std::slice::from_ref(&streaming), now, linger) && quiet(&[], now, linger));
     }
 
     #[test]

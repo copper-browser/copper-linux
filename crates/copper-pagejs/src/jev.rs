@@ -116,47 +116,6 @@ impl Observation {
     }
 }
 
-/// One request the page made for data (`window.__jevFast.net`, the page-side
-/// stand-in for the Mac's `NetLog.Entry`). Times are the page's
-/// `performance.now()`, ms.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct NetEntry {
-    /// Order of asking, per document.
-    pub seq: u64,
-    pub method: String,
-    pub url: String,
-    /// `fetch` or `xhr` (what the page's own calls are), `beacon`.
-    pub kind: String,
-    /// When it was asked.
-    pub at: f64,
-    /// When its answer began (a status) or it ended.
-    #[serde(
-        default,
-        rename = "answeredAt",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub answered_at: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<u16>,
-    /// Ended (answered in full, failed or aborted).
-    #[serde(default)]
-    pub done: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-/// `window.__jevFast.net(after)`: the page's data calls after `seq` `after`.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct NetSnapshot {
-    /// The document's `performance.timeOrigin`: another value is another page.
-    pub doc: f64,
-    /// The last call's `seq`: the mark for the next action.
-    pub seq: u64,
-    /// The page's `performance.now()`, to age `at` / `answeredAt` with.
-    pub now: f64,
-    pub entries: Vec<NetEntry>,
-}
-
 /// A point to put input, viewport CSS pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Point {
@@ -277,11 +236,6 @@ pub fn fired() -> Call<bool> {
 /// [`Observation::page_key`].
 pub fn page_key() -> Call<String> {
     Call::new(Script::JevPageKey, json!({}))
-}
-
-/// The page's data calls (fetch, xhr) with `seq` above `after`.
-pub fn net(after: u64) -> Call<NetSnapshot> {
-    Call::new(Script::JevNet, json!({ "after": after }))
 }
 
 /// During a navigation: `""` while the old document (with the helpers) is
@@ -563,32 +517,6 @@ mod tests {
         );
         assert_eq!(call.decode(None).unwrap(), None);
         assert!(call.decode(Some(r#"{"y":1}"#)).is_err());
-    }
-
-    #[test]
-    fn net_snapshot_decodes() {
-        let snap = net(1)
-            .decode(Some(
-                r#"{"doc":1700000000000.5,"seq":3,"now":812.25,"entries":[
-                {"seq":2,"method":"GET","url":"http://a.test/x","kind":"fetch","at":10,"answeredAt":20.5,"status":200,"done":true},
-                {"seq":3,"method":"POST","url":"http://a.test/y","kind":"xhr","at":30,"done":false}]}"#,
-            ))
-            .unwrap();
-        assert_eq!((snap.doc, snap.seq, snap.now), (1700000000000.5, 3, 812.25));
-        assert_eq!(snap.entries[0].answered_at, Some(20.5));
-        assert_eq!(snap.entries[0].status, Some(200));
-        assert_eq!(
-            snap.entries[1],
-            NetEntry {
-                seq: 3,
-                method: "POST".into(),
-                url: "http://a.test/y".into(),
-                kind: "xhr".into(),
-                at: 30.0,
-                ..Default::default()
-            }
-        );
-        assert_eq!(net(7).args(), &json!({ "after": 7 }));
     }
 
     #[test]

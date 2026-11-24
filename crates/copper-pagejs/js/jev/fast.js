@@ -550,56 +550,6 @@
     };
     requestAnimationFrame(ready);
   });
-  // Linux: the page's own data calls (the Mac hears them from WebKit's
-  // resource-load delegate, NetLog.swift). fetch and XMLHttpRequest are
-  // wrapped once per document; the wrappers answer exactly as before, and
-  // their bookkeeping never throws. The last 300, `seq` counting up.
-  const log=[]; let seq=0;
-  const note=(method,url,kind)=>{
-    const e={seq:++seq,method:String(method||'GET').toUpperCase(),url,kind,at:performance.now(),done:false};
-    log.push(e); if (log.length>300) log.splice(0,log.length-300); return e; };
-  const absolute=u=>{ try { return new URL(String(u),location.href).href; } catch (_) { return String(u); } };
-  const ended=(e,error)=>{ if (!e) return; e.done=true; e.answeredAt??=performance.now(); if (error!==undefined) e.error=String(error); };
-  // Calls made before the first Jev read, known as answered.
-  try { for (const r of performance.getEntriesByType('resource'))
-    if (r.initiatorType==='fetch' || r.initiatorType==='xmlhttprequest')
-      Object.assign(note('GET',r.name,r.initiatorType==='fetch' ? 'fetch' : 'xhr'),
-        {at:r.startTime,answeredAt:r.responseEnd,status:200,done:true}); } catch (_) {}
-  const fetched=window.fetch;
-  if (typeof fetched==='function') window.fetch=function(input,init){
-    let e=null;
-    try { const asked=typeof Request==='function' && input instanceof Request;
-      e=note(init?.method || (asked ? input.method : 'GET'),absolute(asked ? input.url : input),'fetch'); } catch (_) {}
-    let answer;
-    try { answer=fetched.apply(this,arguments); } catch (x) { try { ended(e,x?.message||x); } catch (_) {} throw x; }
-    if (!e || typeof answer?.then!=='function') return answer;
-    // A new promise, so a failure the page leaves unhandled is still reported as one.
-    return answer.then(r=>{ try { e.status=r.status; ended(e); } catch (_) {} return r; },
-      x=>{ try { ended(e,x?.message||x); } catch (_) {} throw x; });
-  };
-  const xhr=window.XMLHttpRequest?.prototype;
-  if (xhr) {
-    const open=xhr.open, send=xhr.send, asked=new WeakMap();
-    xhr.open=function(method,url){
-      try { asked.set(this,{method,url:absolute(url)}); } catch (_) {}
-      return open.apply(this,arguments); };
-    xhr.send=function(){
-      let e=null;
-      try { const x=this, o=asked.get(x);
-        if (o) { e=note(o.method,o.url,'xhr'); o.e=e;
-          // Only this send's: a reopened request is a new entry.
-          const mine=()=>asked.get(x)?.e===e;
-          x.addEventListener('readystatechange',()=>{ try {
-            if (mine() && x.readyState>=2 && x.status && e.status===undefined) { e.status=x.status; e.answeredAt=performance.now(); }
-          } catch (_) {} });
-          for (const t of ['error','abort','timeout']) x.addEventListener(t,()=>{ if (mine()) e.error=t; });
-          x.addEventListener('loadend',()=>{ try { if (!mine()) return;
-            if (x.status) e.status??=x.status; ended(e,x.status ? undefined : e.error||'failed'); } catch (_) {} });
-        } } catch (_) { e=null; }
-      try { return send.apply(this,arguments); } catch (x) { try { ended(e,x?.name||x); } catch (_) {} throw x; }
-    };
-  }
-  cache.net=after=>({doc:performance.timeOrigin,seq,now:performance.now(),entries:log.filter(e=>e.seq>after)});
   cache.ready=true;
   return true;
 }

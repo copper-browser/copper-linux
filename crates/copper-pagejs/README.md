@@ -86,13 +86,6 @@ Two deliberate Linux changes to the helper, both marked `// Linux:` in
   `scroll-behavior: smooth`, so on such pages the box was measured before the
   scroll and the real click landed on whatever had been there.
 
-One Linux addition to Jev's `jev/fast.js`, marked `// Linux:`: the page's
-own data calls. The Mac hears every request from WebKit's resource-load
-delegate (`NetLog.swift`); WebKitGTK has none, so the installer wraps
-`fetch` and `XMLHttpRequest` once per document and keeps the last 300
-(`jev::net`, `NetEntry`). Calls that finished before the first Jev read come
-from `performance.getEntriesByType('resource')`.
-
 ## Tests
 
 `timeout 900 bin/dbx cargo test -p copper-pagejs -- --test-threads=1`
@@ -172,7 +165,6 @@ from `performance.getEntriesByType('resource')`.
 | `jev/leaving.js` | `JevLeaving` | `Fork/MCP/Ultrafast.swift:1951` `Ultrafast.awaitLeaving` | call | page |  |
 | `jev/fired.js` | `JevFired` | `Fork/MCP/Ultrafast.swift:2660` `Session.tick` | call | page |  |
 | `jev/page_key.js` | `JevPageKey` | `Fork/MCP/Ultrafast.swift:1858` `Ultrafast.act` | call | page | `jev/fast.js` |
-| `jev/net.js` | `JevNet` | `Fork/MCP/NetLog.swift:167` `NetLog.dataCalls` (the log is kept in the page on Linux) | call | page | `jev/fast.js` |
 | `jev/ready_state.js` | `JevReadyState` | `Fork/MCP/Ultrafast.swift:1276` `Ultrafast.observe` | call | page |  |
 | `trail/layer.js` | `TrailLayer` | `Fork/MCP/Trail.swift:146` `Trail.script` | installer | page |  |
 | `trail/glide.js` | `TrailGlide` | `Fork/MCP/Trail.swift:55` `Trail.glide` | async call | page | `trail/layer.js` |

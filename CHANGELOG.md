@@ -39,16 +39,17 @@ release dates.
   soon as it stands still, a new page as soon as it is parsed; and a checkbox
   drawn by its label can be clicked. `jev_run` takes `private: true` for a
   tab that keeps nothing. As on the Mac (copper-browser/Copper#181).
-- **Jev waits for a page's answer, and never sends a payment twice.** What a
-  page asks its server (`fetch`, `XMLHttpRequest`) is now heard in the page:
-  a WAIT or a click waits for those calls to come back before Jev decides
+- **Jev waits for a page's answer, and never sends a payment twice.** Jev
+  now hears what a page asks its server, from the same log as
+  `browser_network_requests`: a WAIT or a click waits for those calls to
+  come back before Jev decides
   again, and a click the page has not answered gets a second first. A form
   or a POST the page took without a word is never sent again — Jev is asked
   whether the goal is met and the run ends "submitted, no confirmation
   shown" — while a search, a retry or a Reload may go again; the same button
   clicked twice on an unchanged page becomes a WAIT, then the run stops.
-  Each step's trace says what it sent and which calls it made. The Mac hears
-  the calls from WebKit itself. As on the Mac (copper-browser/Copper#181).
+  Each step's trace says what it sent and which calls it made. As on the
+  Mac (copper-browser/Copper#181).
 - **Jev says Done only when sure.** A DONE or BLOCKED under 80% gets a
   second look once the page has settled in full; still doubtful, the run
   ends "unsure" ("Not sure it worked" in the chat), as does a DONE whose

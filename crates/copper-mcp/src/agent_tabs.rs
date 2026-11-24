@@ -458,9 +458,9 @@ impl<H: Host> Mcp<H> {
             if mark.is_none() {
                 return false;
             }
-            self.data_calls(id, mark).await.is_some_and(|(calls, now)| {
-                calls.iter().any(|c| net::pending(c, now, net::EXPIRE_MS))
-            })
+            self.data_calls(id, mark)
+                .await
+                .is_some_and(|(calls, now)| calls.iter().any(|c| net::pending(c, now, net::EXPIRE)))
         };
         while !self.host.is_loading(id)
             && Instant::now() < cap
