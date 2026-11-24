@@ -197,7 +197,7 @@ impl<H: Host> Mcp<H> {
                     "protocolVersion": version,
                     "capabilities": { "tools": { "listChanged": false }, "resources": {}, "prompts": {} },
                     "serverInfo": { "name": "copper", "version": settings.version },
-                    "instructions": catalogue::instructions(settings.jev),
+                    "instructions": catalogue::instructions(settings.jev, self.host.canvas_in_use()),
                 }))
             }
             "notifications/initialized"
@@ -206,7 +206,9 @@ impl<H: Host> Mcp<H> {
             "ping" => reply(json!({})),
             "tools/list" => {
                 let jev = self.settings.borrow().jev;
-                reply(json!({ "tools": catalogue::catalogue(jev, loopback) }))
+                reply(
+                    json!({ "tools": catalogue::catalogue(jev, loopback, self.host.canvas_in_use()) }),
+                )
             }
             "tools/call" => {
                 let name = params.get("name").and_then(Value::as_str).unwrap_or("");

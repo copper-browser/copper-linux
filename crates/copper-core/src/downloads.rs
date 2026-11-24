@@ -6,6 +6,7 @@
 //! finished, failed) on top, for the door and the panel. It holds no engine
 //! objects: the shell maps engine download events onto [`DownloadId`]s.
 
+use crate::TabId;
 use crate::date::SwiftDate;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -65,6 +66,8 @@ pub struct LiveDownload {
     pub speed: f64,
     /// Finished but not looked at yet (the door's dot).
     pub unseen: bool,
+    /// The tab it came from, and that tab's opener — browser_downloads lists a tab's own.
+    pub tabs: Vec<TabId>,
     started: Instant,
     sample: (Instant, u64),
 }
@@ -142,6 +145,7 @@ impl Downloads {
                 total,
                 speed: 0.0,
                 unseen: false,
+                tabs: Vec::new(),
                 started: now,
                 sample: (now, 0),
             },
@@ -159,6 +163,19 @@ impl Downloads {
             }
             self.generation += 1;
         }
+    }
+
+    /// The page in `tabs[0]` started it (`tabs[1]`: the tab that opened that one).
+    pub fn set_tabs(&mut self, id: DownloadId, tabs: Vec<TabId>) {
+        if let Some(d) = self.live.iter_mut().find(|d| d.id == id) {
+            d.tabs = tabs;
+            self.generation += 1;
+        }
+    }
+
+    /// This session's rows `tab` started (or a popup it opened), newest first.
+    pub fn from_tab<'a>(&'a self, tab: &'a TabId) -> impl Iterator<Item = &'a LiveDownload> {
+        self.live.iter().filter(move |d| d.tabs.contains(tab))
     }
 
     /// Bytes arrived. Speed is re-sampled at most every half second.
@@ -281,6 +298,29 @@ impl Downloads {
     }
 }
 
+/// Bytes like macOS's file-style `ByteCountFormatter`: decimal units,
+/// whole KB, one decimal for MB, two for GB.
+pub fn bytes(n: u64) -> String {
+    let n = n as f64;
+    if n < 1000.0 {
+        return if n as u64 == 1 {
+            "1 byte".into()
+        } else {
+            format!("{} bytes", n as u64)
+        };
+    }
+    if n < 1e6 {
+        return format!("{} KB", (n / 1e3).round() as u64);
+    }
+    if n < 1e9 {
+        return format!("{:.1} MB", n / 1e6);
+    }
+    if n < 1e12 {
+        return format!("{:.2} GB", n / 1e9);
+    }
+    format!("{:.2} TB", n / 1e12)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,5 +349,34 @@ mod tests {
         }
         assert_eq!(d.kept().len(), KEEP_CAP);
         assert_eq!(d.kept()[0].name, "59");
+    }
+
+    #[test]
+    fn a_tab_lists_its_own_and_its_popups() {
+        let tab = |s: &str| TabId(s.into());
+        let mut d = Downloads::new(vec![Keep {
+            name: "old.bin".into(),
+            from: String::new(),
+            path: "/tmp/old.bin".into(),
+            date: SwiftDate(0.0),
+            extra: Map::new(),
+        }]);
+        let own = d.start("a.bin", "https://x.test/a.bin", None);
+        d.set_tabs(own, vec![tab("A")]);
+        // A popup B that A opened: B's and A's.
+        let popup = d.start("b.bin", "https://x.test/b.bin", None);
+        d.set_tabs(popup, vec![tab("B"), tab("A")]);
+        // The user's own download (no page): nobody's.
+        d.start("c.bin", "https://x.test/c.bin", None);
+        let names = |d: &Downloads, t: &str| -> Vec<String> {
+            d.from_tab(&tab(t)).map(|r| r.name.clone()).collect()
+        };
+        assert_eq!(names(&d, "A"), ["b.bin", "a.bin"]);
+        assert_eq!(names(&d, "B"), ["b.bin"]);
+        assert!(names(&d, "C").is_empty());
+        // Kept rows from earlier sessions belong to no tab.
+        assert_eq!(d.kept().len(), 1);
+        d.set_tabs(DownloadId(99), vec![tab("C")]);
+        assert!(names(&d, "C").is_empty());
     }
 }

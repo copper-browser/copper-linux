@@ -2,7 +2,7 @@
 //! window and how they reach into it. Everything here runs on the main loop
 //! (`Mcp::serve` is spawned there).
 
-use super::{AgentsApp, crashes, groups, heat};
+use super::{AgentsApp, crashes, groups, handoff, heat};
 use crate::main_loop::MainLoop;
 use crate::shell::{Shell, WeakShell};
 use crate::{PageOf, Platform, ShellView};
@@ -23,6 +23,7 @@ pub struct AppHost<P: Platform> {
     shell: WeakShell<P>,
     app: Rc<dyn AgentsApp<P>>,
     heat: heat::Heat,
+    pub(crate) handoff: Rc<handoff::Handoff>,
 }
 
 impl<P: Platform> AppHost<P> {
@@ -31,6 +32,7 @@ impl<P: Platform> AppHost<P> {
             shell: shell.downgrade(),
             app,
             heat: heat::Heat::default(),
+            handoff: Rc::default(),
         }
     }
 
@@ -405,6 +407,16 @@ impl<P: Platform> Host for AppHost<P> {
         }
     }
 
+    /// Mac `CanvasTools.inUse`: any canvas but Personal, or a board kept on
+    /// disk (opening one, Personal too, gives it a folder under `canvas/`).
+    fn canvas_in_use(&self) -> bool {
+        use crate::canvas::registry;
+        registry::with(|r| r.all.iter().any(|e| !registry::is_personal(e)))
+            || crate::canvas::data_dir()
+                .and_then(|d| std::fs::read_dir(d).ok())
+                .is_some_and(|mut d| d.any(|e| e.is_ok_and(|e| e.path().is_dir())))
+    }
+
     fn cloud_history_delete(
         &self,
         args: &Map<String, Value>,
@@ -418,13 +430,94 @@ impl<P: Platform> Host for AppHost<P> {
         }
     }
 
+    // -- browser state (tools-state) --
+
+    fn history(&self, query: &str, limit: usize) -> Vec<copper_core::history::Trace> {
+        let Some(shell) = self.shell() else {
+            return Vec::new();
+        };
+        let history = shell.history();
+        if query.is_empty() {
+            history.recent(limit)
+        } else {
+            let mut found = history.search(query);
+            found.truncate(limit);
+            found
+        }
+    }
+
+    fn bookmarks(&self) -> Vec<copper_core::Bookmark> {
+        self.shell()
+            .map(|s| s.bookmarks().roots().to_vec())
+            .unwrap_or_default()
+    }
+
+    fn add_bookmark(&self, url: &str, title: &str) -> bool {
+        let Some(shell) = self.shell() else {
+            return false;
+        };
+        if shell.bookmarks_mut().add(url, title).is_none() {
+            return false;
+        }
+        let roots = shell.bookmarks().roots().to_vec();
+        shell.saver().schedule(roots);
+        true
+    }
+
+    fn spaces(&self) -> Vec<copper_mcp::SpaceInfo> {
+        let Some(shell) = self.shell() else {
+            return Vec::new();
+        };
+        let b = shell.browser();
+        let here = b.current_space_id().to_string();
+        b.spaces()
+            .map(|space| copper_mcp::SpaceInfo {
+                id: space.id.clone(),
+                name: space.name.clone(),
+                profile: space.profile.clone(),
+                tabs: b.row(&space.id).len(),
+                on_screen: space.id == here,
+            })
+            .collect()
+    }
+
+    fn space_of(&self, tab: &TabId) -> Option<String> {
+        let shell = self.shell()?;
+        let b = shell.browser();
+        let t = b.tab(tab)?;
+        (!t.is_pinned()).then(|| t.space.clone())
+    }
+
+    fn move_to_space(&self, tab: &TabId, space: &str) -> bool {
+        self.shell().is_some_and(|s| s.move_to_space(tab, space))
+    }
+
     fn crashes(&self, args: &Map<String, Value>) -> Result<String, String> {
         let shell = self.shell().ok_or("no window")?;
         crashes::answer(shell.store(), args)
     }
 
+    fn vault_write(&self, op: &str, args: &Map<String, Value>) -> impl Future<Output = Value> {
+        let shell = self.shell();
+        let (op, args) = (op.to_string(), args.clone());
+        async move {
+            match shell {
+                Some(shell) => crate::forms::mcp::vault_write(shell, op, args).await,
+                None => serde_json::json!({ "ok": false, "error": "no window" }),
+            }
+        }
+    }
+
     fn control(&self, method: &str, params: &Map<String, Value>) -> impl Future<Output = Value> {
+        // `copper bitwarden save -|note -`: the same write as the tools.
+        let op = params.get("op").and_then(Value::as_str).unwrap_or("status");
+        let save = (method == "copper/bitwarden" && matches!(op, "save" | "note")).then(|| {
+            let mut args = params.clone();
+            args.remove("op");
+            (self.shell(), op.to_string(), args)
+        });
         let answer = match self.shell() {
+            _ if save.is_some() => Value::Null,
             Some(shell) if method == "copper/intelligence" => {
                 let cloud = crate::cloud::get();
                 let fetch = cloud.map_or("never".into(), |c| c.intelligence.last_outcome());
@@ -450,12 +543,23 @@ impl<P: Platform> Host for AppHost<P> {
             Some(shell) if method == "copper/pins" => {
                 shell.pins_status(params.get("on").and_then(Value::as_bool))
             }
-            // `copper/link`, `copper/bitwarden`: not here yet.
+            Some(_) if method == "copper/bitwarden" => {
+                serde_json::json!({ "error": format!("bitwarden {op} is not available in this build yet") })
+            }
+            // `copper/link`: not here yet.
             _ => {
                 serde_json::json!({ "error": format!("{method} is not available in this build yet") })
             }
         };
-        async move { answer }
+        async move {
+            match save {
+                Some((Some(shell), op, args)) => {
+                    crate::forms::mcp::vault_write(shell, op, args).await
+                }
+                Some((None, ..)) => serde_json::json!({ "ok": false, "error": "no window" }),
+                None => answer,
+            }
+        }
     }
 
     fn intelligence(&self) -> IntelligenceSource {
@@ -487,6 +591,55 @@ impl<P: Platform> Host for AppHost<P> {
     fn claude_ready(&self) -> bool {
         self.shell()
             .is_some_and(|s| crate::claude::ready(s.store()))
+    }
+
+    // -- downloads (tools-state) --
+
+    fn tab_downloads(&self, tab: &TabId) -> copper_mcp::downloads::TabDownloads {
+        use copper_core::downloads::DownloadState as Row;
+        use copper_mcp::downloads::{DownloadRow, DownloadState, TabDownloads};
+        let Some(shell) = self.shell() else {
+            return TabDownloads::default();
+        };
+        let downloads = shell.downloads();
+        let rows = downloads
+            .model(&shell)
+            .from_tab(tab)
+            .map(|d| DownloadRow {
+                name: d.name.clone(),
+                state: match &d.state {
+                    Row::Active => DownloadState::Running,
+                    Row::Finished => DownloadState::Finished,
+                    Row::Failed { reason } => DownloadState::Failed(reason.clone()),
+                    Row::Cancelled => DownloadState::Cancelled,
+                },
+                done: d.received,
+                total: d.total,
+                path: d.path.clone(),
+                from: crate::shell::host_of(&d.source_url),
+            })
+            .collect();
+        TabDownloads {
+            rows,
+            folder: downloads.folder(&shell).to_string_lossy().into_owned(),
+        }
+    }
+
+    // -- handoff (tools-state) --
+
+    fn handoff(
+        &self,
+        tab: &TabId,
+        agent: &str,
+        message: &str,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<Option<copper_mcp::HandoffAnswer>, String>> {
+        let (id, new) = self.handoff.ask(tab, agent, message);
+        if new && !super::headless() {
+            self.app.attention();
+        }
+        let wait = self.handoff.wait::<P::Loop>(id, timeout);
+        async move { Ok(wait.await) }
     }
 }
 

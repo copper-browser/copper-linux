@@ -36,6 +36,7 @@ pub const VERBS: &[&str] = &[
     "click",
     "type",
     "key",
+    "downloads",
     "hover",
     "select",
     "scroll",

@@ -14,6 +14,9 @@ use std::rc::Rc;
 
 pub struct Stage {
     pub widget: gtk::Box,
+    /// Over the page: progress, the link under the pointer, find, the
+    /// agents' handoff bar.
+    pub overlay: gtk::Overlay,
     stack: gtk::Stack,
     empty: gtk::Box,
     empty_line: gtk::Label,
@@ -112,6 +115,7 @@ impl Stage {
 
         Rc::new(Stage {
             widget,
+            overlay,
             stack,
             empty,
             empty_line,

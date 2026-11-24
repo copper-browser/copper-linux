@@ -92,10 +92,14 @@ pub const USAGE: &str = "Usage: copper [--json] [--launch] [--tab ID] <command> 
   upload PATH... | --cancel                 answer the file chooser your click opened (or arm the next one)
   dialog accept [TEXT] | dismiss            answer the page's alert, confirm or prompt
   pdf [PATH]                                save the page as a PDF (default: the downloads folder)
+  downloads [--wait SECONDS]                downloads your tab started, and where the files are
   tools                                     list available tools
   health                                    check the agent server and Jev mode
   intelligence [status|sources|refresh|set|reload]  model access, keys, their source and readiness; never prints a key
                                             (copper intelligence --help)
+  bitwarden save -|note -                   keep a login or a secure note in the open Bitwarden vault;
+                                            ONE JSON object on stdin, never a value back
+                                            (copper bitwarden --help)
   claude [status|signin|paste -|signout|cancel]
                                             Claude account sign-in and status; never prints a token
                                             (copper claude --help)
@@ -171,6 +175,106 @@ never contains a token. Use a Claude Pro, Max, Team or Enterprise account.
 Exit 0 on success, 1 when the app refuses an operation, 2 on usage or when
 Copper is unreachable.
 ";
+
+pub const BITWARDEN_USAGE: &str = "Usage: copper bitwarden <command>
+
+The Bitwarden vault in the running Copper (Settings › Passwords › Bitwarden).
+Output is always JSON — never a password, key or session.
+
+  save -                     keep a login; reads ONE JSON object from stdin:
+                             {url (or host), username, password, totp? (otpauth URI
+                              or base32 secret), notes?, name? (default: the host),
+                              folder?}
+                             The same site + username already saved: its password
+                             (and totp/notes when given) change instead.
+  note -                     keep a secure note (backup codes); stdin:
+                             {name, text, folder?} — the note with exactly that name
+                             gets the new text.
+                             save and note answer {ok, id, created, updated, name,
+                             folder}, never a value. Unlocked only; with agent access
+                             by folder new items go to the Agents folder, and only
+                             items shared with agents can change.
+
+status, login -, cancel, lock, logout, sync and policy are not available in this
+build yet: sign in and unlock in Settings › Passwords.
+
+Exit 0 on ok, 1 when the result says {ok: false}, 2 on usage or when Copper is unreachable.
+";
+
+/// The values `copper bitwarden` never shows, even with --dry-run.
+const BITWARDEN_SECRETS: [&str; 7] = [
+    "password",
+    "clientId",
+    "clientSecret",
+    "otp",
+    "totp",
+    "notes",
+    "text",
+];
+
+/// `copper bitwarden save -|note -` (`CLI.runBitwarden`): the loopback-only
+/// `copper/bitwarden` method. Values come only on stdin, never as arguments.
+fn bitwarden(args: &[String], stdin: &mut dyn Read) -> Result<Spec, Early> {
+    let (op, rest) = match args.split_first() {
+        Some((op, rest)) => (op.as_str(), rest),
+        None => ("status", args),
+    };
+    if ["help", "-h", "--help"].contains(&op) || rest.iter().any(|a| a == "-h" || a == "--help") {
+        return Err(Early::HelpFor(BITWARDEN_USAGE));
+    }
+    let fields: &[&str] = match op {
+        "save" => &[
+            "name", "url", "host", "username", "password", "totp", "notes", "folder",
+        ],
+        "note" => &["name", "text", "folder"],
+        "status" | "login" | "cancel" | "lock" | "logout" | "sync" | "policy" => {
+            return bad(format!("bitwarden {op} is not available in this build yet"));
+        }
+        _ => {
+            return bad(format!(
+                "unknown bitwarden command: {op} (see copper bitwarden --help)"
+            ));
+        }
+    };
+    if rest != ["-"] {
+        return bad(format!(
+            "bitwarden {op} reads its JSON from stdin: `copper bitwarden {op} -` (secrets are never accepted as arguments)"
+        ));
+    }
+    let limit = 64 * 1024;
+    let mut data = Vec::new();
+    let read = stdin.take(limit + 1).read_to_end(&mut data);
+    let object = match serde_json::from_slice::<Value>(&data) {
+        Ok(Value::Object(o)) if read.is_ok() && data.len() as u64 <= limit => o,
+        _ => return bad(format!("bitwarden {op} - : stdin must be one JSON object")),
+    };
+    let mut params = Map::new();
+    params.insert("op".into(), json!(op));
+    for field in fields {
+        if let Some(v) = object.get(*field).filter(|v| !v.is_null()) {
+            params.insert((*field).into(), v.clone());
+        }
+    }
+    Ok(rpc("copper/bitwarden", Value::Object(params)))
+}
+
+/// What `--dry-run` prints of a request: every secret a control carries as `…`.
+fn shown(request: &Value) -> Value {
+    let mut shown = request.clone();
+    if shown["method"] == "copper/bitwarden" {
+        for secret in BITWARDEN_SECRETS {
+            if let Some(v) = shown["params"].get_mut(secret) {
+                *v = json!("…");
+            }
+        }
+    }
+    for secret in ["jevKey", "routerKey", "code"] {
+        if let Some(v) = shown["params"].get_mut(secret) {
+            *v = json!("…");
+        }
+    }
+    shown
+}
 
 /// `copper claude …` (`CLI.runClaude`): the loopback-only `copper/claude`
 /// method.
@@ -296,11 +400,10 @@ fn pins(args: &[String]) -> Result<Spec, Early> {
 }
 
 /// Commands the Mac has that this build does not (yet).
-pub(crate) const ELSEWHERE: [&str; 7] = [
+pub(crate) const ELSEWHERE: [&str; 6] = [
     "setup",
     "session",
     "link",
-    "bitwarden",
     "crashes",
     "listen",
     "transcript",
@@ -747,6 +850,14 @@ pub fn make_request(command: &str, args: &[String]) -> Result<Spec, Early> {
             };
             Ok(call("browser_pdf_save", arguments))
         }
+        "downloads" => match args {
+            [] => Ok(call("browser_downloads", json!({}))),
+            [flag, seconds] if flag == "--wait" => match seconds.parse::<f64>() {
+                Ok(s) => Ok(call("browser_downloads", json!({ "wait": s }))),
+                Err(_) => bad("downloads takes [--wait SECONDS]"),
+            },
+            _ => bad("downloads takes [--wait SECONDS]"),
+        },
         "tools" => {
             if !args.is_empty() {
                 return bad("tools takes no arguments");
@@ -844,6 +955,7 @@ pub fn make_request(command: &str, args: &[String]) -> Result<Spec, Early> {
         "intelligence" => intelligence(args),
         "claude" => claude(args),
         "pins" => pins(args),
+        "bitwarden" => bitwarden(args, &mut io::stdin()),
         "cloud" => bad("cloud runs on its own: copper cloud pair|sso|status (copper cloud help)"),
         // Answered without a window, before this parser (copper_botpass::cli).
         "botpass" => {
@@ -1126,6 +1238,16 @@ fn health(port: u16) -> Option<(Value, bool)> {
 }
 
 /// POST one request; `None` after saying why on stderr.
+/// Seconds a `browser_handoff` call may take: its own wait (default 15, at
+/// most 600) and half a minute more.
+pub(crate) fn handoff_wait(args: &Value) -> u64 {
+    let wait = args["timeout"]
+        .as_f64()
+        .filter(|s| *s > 0.0)
+        .unwrap_or(15.0);
+    wait.min(600.0).ceil() as u64 + 30
+}
+
 fn post(env: &mut Env<'_>, request: &Value, conf: &Endpoint, timeout: Duration) -> Option<Value> {
     let headers = [
         ("Content-Type", "application/json".to_string()),
@@ -1201,15 +1323,7 @@ pub fn run_with(args: &[String], env: &mut Env<'_>) -> i32 {
         let running = (env.endpoint)().is_some_and(|c| health(c.port).is_some_and(|(_, r)| r));
         if running {
             match &spec.request {
-                Some(request) => {
-                    let mut shown = request.clone();
-                    for secret in ["jevKey", "routerKey", "code"] {
-                        if let Some(v) = shown["params"].get_mut(secret) {
-                            *v = json!("…");
-                        }
-                    }
-                    print_json(env, &shown)
-                }
+                Some(request) => print_json(env, &shown(request)),
                 None => {
                     let _ = writeln!(env.out, "GET /health");
                 }
@@ -1237,6 +1351,7 @@ pub fn run_with(args: &[String], env: &mut Env<'_>) -> i32 {
     };
     let name = request["params"]["name"].as_str().unwrap_or("");
     let timeout = Duration::from_secs(match name {
+        "browser_handoff" => handoff_wait(&request["params"]["arguments"]),
         "jev_run" => 240,
         "cloud_history_delete" => 600,
         // A big canvas may take up to a minute to come up before the call runs.
@@ -1262,6 +1377,11 @@ fn render_control(env: &mut Env<'_>, response: &Value) -> i32 {
         error(env, "Copper returned no result");
         return 2;
     };
+    // `bitwarden save|note`: {ok:false, error} is the answer itself (exit 1).
+    if result["ok"] == false {
+        print_json(env, result);
+        return 1;
+    }
     if let Some(message) = result["error"].as_str().filter(|m| !m.is_empty()) {
         error(env, message);
         return 1;
@@ -1944,6 +2064,69 @@ mod tests {
     }
 
     #[test]
+    fn bitwarden_save_and_note() {
+        let run = |a: &[&str], stdin: &str| bitwarden(&s(a), &mut stdin.as_bytes());
+        let params = |a: &[&str], stdin: &str| run(a, stdin).unwrap().request.unwrap();
+        let save = params(
+            &["save", "-"],
+            r#"{"url":"https://x.com","username":"me","password":"pw-1","totp":null,"extra":1}"#,
+        );
+        assert_eq!(
+            save,
+            json!({"jsonrpc": "2.0", "id": 1, "method": "copper/bitwarden",
+                   "params": {"op": "save", "url": "https://x.com", "username": "me", "password": "pw-1"}})
+        );
+        let note = params(
+            &["note", "-"],
+            r#"{"name":"Codes","text":"1111","url":"x"}"#,
+        );
+        assert_eq!(
+            note["params"],
+            json!({"op": "note", "name": "Codes", "text": "1111"})
+        );
+        // Values only on stdin, one JSON object of at most 64 KiB.
+        assert_eq!(
+            run(&["save", "pw-1"], ""),
+            Err(Early::Usage("bitwarden save reads its JSON from stdin: `copper bitwarden save -` (secrets are never accepted as arguments)".into()))
+        );
+        assert!(run(&["note"], "{}").is_err());
+        assert_eq!(
+            run(&["note", "-"], "[1]"),
+            Err(Early::Usage(
+                "bitwarden note - : stdin must be one JSON object".into()
+            ))
+        );
+        let big = format!(r#"{{"name":"n","text":"{}"}}"#, "x".repeat(64 * 1024));
+        assert!(run(&["note", "-"], &big).is_err());
+        // The rest is the Mac's but not here yet; help is the save/note lines.
+        assert_eq!(
+            run(&[], ""),
+            Err(Early::Usage(
+                "bitwarden status is not available in this build yet".into()
+            ))
+        );
+        assert_eq!(
+            run(&["frobnicate"], ""),
+            Err(Early::Usage(
+                "unknown bitwarden command: frobnicate (see copper bitwarden --help)".into()
+            ))
+        );
+        assert_eq!(run(&["--help"], ""), Err(Early::HelpFor(BITWARDEN_USAGE)));
+        assert!(!ELSEWHERE.contains(&"bitwarden"));
+        // --dry-run shows every key but no value.
+        let full = params(
+            &["save", "-"],
+            r#"{"url":"x.com","username":"me","password":"pw-1","totp":"JBSWY3DP","notes":"n-2"}"#,
+        );
+        let dry = shown(&full).to_string();
+        for secret in ["pw-1", "JBSWY3DP", "n-2"] {
+            assert!(!dry.contains(secret), "{dry}");
+        }
+        assert!(dry.contains("x.com") && dry.contains("\"password\":\"…\""));
+        assert!(!shown(&note).to_string().contains("1111"));
+    }
+
+    #[test]
     fn intelligence_controls() {
         let params =
             |a: &[&str]| parse(&s(a), false).unwrap().spec.request.unwrap()["params"].clone();
@@ -2001,6 +2184,32 @@ mod tests {
     }
 
     #[test]
+    fn downloads_verb() {
+        let p = parse(&s(&["downloads"]), false).unwrap();
+        let params = &p.spec.request.as_ref().unwrap()["params"];
+        assert_eq!(params["name"], "browser_downloads");
+        assert_eq!(args_of(&p), json!({}));
+        let p = parse(&s(&["downloads", "--wait", "5"]), false).unwrap();
+        assert_eq!(args_of(&p), json!({"wait": 5.0}));
+        for bad in [
+            &["downloads", "--wait"][..],
+            &["downloads", "--wait", "soon"],
+            &["downloads", "5"],
+            &["downloads", "--wait", "5", "x"],
+            &["downloads", "--for", "5"],
+        ] {
+            assert_eq!(
+                parse(&s(bad), false),
+                Err(Early::Usage("downloads takes [--wait SECONDS]".into())),
+                "{bad:?}"
+            );
+        }
+        assert!(USAGE.contains(
+            "  downloads [--wait SECONDS]                downloads your tab started, and where the files are\n"
+        ));
+    }
+
+    #[test]
     fn usage_errors() {
         assert_eq!(parse(&s(&[]), false), Err(Early::Help));
         assert_eq!(
@@ -2052,5 +2261,14 @@ mod tests {
             exe == std::env::current_exe().unwrap()
                 || installed_copper_exe().is_some_and(|i| i == exe)
         );
+    }
+
+    #[test]
+    fn a_handoff_call_may_wait_its_timeout_and_half_a_minute() {
+        assert_eq!(handoff_wait(&json!({})), 45);
+        assert_eq!(handoff_wait(&json!({"timeout": 600})), 630);
+        assert_eq!(handoff_wait(&json!({"timeout": 9000})), 630);
+        assert_eq!(handoff_wait(&json!({"timeout": 2.5})), 33);
+        assert_eq!(handoff_wait(&json!({"timeout": -1})), 45);
     }
 }
