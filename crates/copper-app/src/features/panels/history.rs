@@ -154,7 +154,7 @@ impl HistoryPanel {
         } else {
             &t.title
         };
-        let mark = site_mark(shell, &t.url, &t.key);
+        let mark = site_mark(shell, &t.url);
         let r = ui::row(&mark, title, &t.key);
         r.row.set_widget_name(&t.url);
         r.row.set_tooltip_text(Some(&t.url));

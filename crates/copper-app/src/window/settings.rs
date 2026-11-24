@@ -6,7 +6,7 @@
 use crate::shell::GtkShell;
 use crate::shell::Shell;
 use copper_core::address::ENGINES;
-use copper_core::settings::{Glyph, Look, TabsPosition, keys};
+use copper_core::settings::{Look, TabsPosition, keys};
 use gtk4 as gtk;
 use libadwaita as adw;
 use libadwaita::prelude::*;
@@ -148,25 +148,6 @@ fn general(shell: &Shell) -> adw::PreferencesPage {
         }
     });
     tabs.add(&position);
-    let icons = crate::window::tabs::shows_icons(shell);
-    let glyph = combo(
-        "Beside titles",
-        &["Site icons", "Letters"],
-        if icons { 0 } else { 1 },
-    );
-    let weak = shell.downgrade();
-    glyph.connect_selected_notify(move |r| {
-        if let Some(s) = weak.upgrade() {
-            let g = if r.selected() == 1 {
-                Glyph::Letters
-            } else {
-                Glyph::Icons
-            };
-            s.update_settings(|st| st.set_glyph(g));
-            s.ui().refresh(&s, &crate::window::Refresh::all());
-        }
-    });
-    tabs.add(&glyph);
     let sleep = adw::SwitchRow::new();
     sleep.set_title("Put idle tabs to sleep");
     sleep.set_subtitle("A sleeping tab frees its memory and loads again when you return to it.");

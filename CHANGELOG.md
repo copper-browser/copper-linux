@@ -7,6 +7,29 @@ release dates.
 
 ### Added
 
+- **Tidy files your loose tabs into folders.** With three or more loose tabs
+  in a space, "Tidy" stands on the line above them (also Ctrl+K › Tidy
+  Tabs): one click files them into a few named folders in Saved, reusing a
+  folder the space already has when it fits, and Undo (or Ctrl+Z) on the
+  pill that follows puts every tab back where it was. With a model set up in
+  Settings › Intelligence, the model names the folders from the tabs' titles
+  and sites only, never their pages; without one, or if it takes over 8
+  seconds, tabs are filed by site, two or more to a folder. A tab that fits
+  nowhere stays loose, and private tabs are never filed. As on the Mac
+  (copper-browser/Copper#200).
+- **A morning page, once a day.** Settings › General › Morning page takes an
+  address; the first launch, return to Copper or wake after 3 AM opens it as
+  the active tab (or brings back the tab already showing it), and every other
+  launch that day restores as it always did. Empty, the default, is off. The
+  hour is `daily.hour` in `settings.json` (`"daily.hour": 4`); `daily.shown`
+  keeps it to once a day (copper-shell-core `daily`). Waking is logind's
+  `PrepareForSleep`, so the Flatpak may now talk to `org.freedesktop.login1`
+  on the system bus. As on the Mac (copper-browser/Copper#198).
+- **A light on pins with something new.** A pinned tab whose page title
+  starts with an unread count, like `(1) Paper`, `(3) Inbox` or Gmail's
+  `Inbox (3)`, wears a small copper dot on its square in the column and the
+  tab row until you go to it. A sleeping pin keeps its dot (copper-shell-core
+  `pinlight`). As on the Mac (copper-browser/Copper#199).
 - **Heavy pages you've left give their memory back.** A page holding more
   than a thirty-second of this computer's memory (at least 500 MB: X,
   Gmail, YouTube) sleeps once you've left it half an hour, however few tabs
@@ -29,13 +52,24 @@ release dates.
   `copper pins` lists every pin's state. As on the Mac
   (copper-browser/Copper#181).
 
+### Changed
+
+- **Tabs and pins always show the site's own icon.** The "Tabs show: Site
+  icons / Letters" choice is gone from Settings › Tabs; a site whose icon
+  hasn't arrived yet shows a plain globe, never a letter, in tabs, pins,
+  Ctrl+K and History. An old `letters` setting is simply not read, and the
+  choice no longer syncs. As on the Mac (copper-browser/Copper#181).
+- **A page that can't load says so plainly.** "Can't connect to <site>",
+  why in one line (no site at that address, the site refused the
+  connection, took too long, the connection isn't secure, no connection),
+  a Try Again button with its key (Ctrl+R) and the engine's own words under
+  Details. As on the Mac (copper-browser/Copper#181).
+- **http pages say "Not secure" under the pointer.** Rest the pointer on
+  the address of a page over plain http and it says so. As on the Mac
+  (copper-browser/Copper#181).
+
 ### Fixed
 
-- **A page that keeps closing as it loads stops.** The page on screen whose
-  process goes away is loaded again at once; the third time in half a
-  minute Copper stops and says “This page keeps closing as it loads.” with
-  Try Again, instead of reloading for ever. As on the Mac
-  (copper-browser/Copper#127).
 - **An agent fills a login only on the exact address it was saved for.**
   Scheme, host and port must match: `www.example.com` and `example.com` are
   two sites unless the saved item lists both, a login saved from an `http://`
@@ -100,6 +134,11 @@ release dates.
   name the next step. Absurd numbers (`deltaY: 1e100`) are refused, and
   scrolling a row scrolls the list around it (`docs/fixtures/page-tools-e2e.py`).
   As on the Mac (copper-browser/Copper#181).
+- **A page that keeps closing as it loads stops.** The page on screen whose
+  process goes away is loaded again at once; the third time in half a
+  minute Copper stops and says “This page keeps closing as it loads.” with
+  Try Again, instead of reloading for ever. As on the Mac
+  (copper-browser/Copper#127).
 
 ## 0.6.4 — 2026-11-17
 

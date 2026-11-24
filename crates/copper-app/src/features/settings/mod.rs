@@ -12,7 +12,7 @@ pub mod privacy;
 use crate::actions::{SettingsPage, register_settings_page};
 use crate::shell::GtkShell;
 use crate::shell::Shell;
-use copper_core::settings::{ArchiveAfter, Glyph, TabSwitching, TabsPosition, keys};
+use copper_core::settings::{ArchiveAfter, TabSwitching, TabsPosition, keys};
 use gtk4 as gtk;
 use gtk4::prelude::*;
 use libadwaita as adw;
@@ -232,19 +232,6 @@ fn tabs(shell: &Shell) -> adw::PreferencesPage {
         })
     }));
     layout.add(&position);
-    let icons = crate::window::tabs::shows_icons(shell);
-    layout.add(&combo(
-        shell,
-        "Tabs show",
-        "Beside the title, and on a pinned square",
-        &["Site icons", "Letters"],
-        if icons { 0 } else { 1 },
-        |s, i| {
-            let g = if i == 1 { Glyph::Letters } else { Glyph::Icons };
-            s.update_settings(|st| st.set_glyph(g));
-            s.ui().refresh(s, &crate::window::Refresh::all());
-        },
-    ));
     page.add(&layout);
 
     let switching = group(Some("Switching"));

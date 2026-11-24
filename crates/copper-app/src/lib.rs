@@ -38,6 +38,7 @@ pub mod selftest;
 pub mod shell;
 pub mod spaces;
 pub mod style;
+pub mod tidy; // Tidy: loose tabs into folders, with Undo (copper-shell-core `tidy`)
 pub mod window;
 
 pub use copper_shell_core::{control, crash, downloads, options, private, session};
