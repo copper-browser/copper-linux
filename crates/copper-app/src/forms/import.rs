@@ -193,11 +193,7 @@ pub async fn run(shell: &Shell, choice: &Choice, progress: impl Fn(&str, f64)) -
                         }
                     ));
                 }
-                let logins: Vec<(String, String, String, Option<f64>)> = found
-                    .logins
-                    .into_iter()
-                    .map(|l| (l.host, l.user, l.password, l.used))
-                    .collect();
+                let logins = found.logins;
                 let wanted = logins.len();
                 progress("Saving passwords to the keyring…", (done + 0.5) / steps);
                 match super::vault() {

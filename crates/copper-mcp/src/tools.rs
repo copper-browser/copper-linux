@@ -17,7 +17,7 @@ use futures_util::future::{Either, select};
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
-use crate::agent_tabs::short;
+use crate::agent_tabs::{fence, short};
 use crate::catalogue;
 use crate::drive::{looks_secret, string_list};
 use crate::host::{Content, Host, Page, TabId, TabInfo};
@@ -181,6 +181,8 @@ impl<H: Host> Mcp<H> {
         args: &Map<String, Value>,
         ctx: &mut CallCtx,
     ) -> Result<Vec<Content>, Failure> {
+        ctx.reading = crate::agent_tabs::READS.contains(&name);
+        // browser_tabs reads `tab` as the tab to close or select, not to work in.
         if name != "browser_tabs"
             && let Some(named) = self.resolve(args.get("tab"), ctx)?
         {
@@ -212,7 +214,7 @@ impl<H: Host> Mcp<H> {
         match name {
             "browser_tabs" => return self.tabs_tool(args, ctx).await,
             "browser_close" => {
-                let tab = self.current(ctx)?;
+                let tab = self.closable(ctx)?;
                 let said = self.close_tab(&tab.id);
                 return Ok(vec![Content::text(format!(
                     "{said} {}",
@@ -312,8 +314,9 @@ impl<H: Host> Mcp<H> {
                     .await
                     .map_err(|_| Failure::new("snapshot gave nothing"))?;
                 Ok(vec![Content::Text(format!(
-                    "{}\n\n{text}",
-                    self.page_line(&id)
+                    "{}\n\n{}",
+                    self.page_line(&id),
+                    fence(&text)
                 ))])
             }
             "browser_click" => {
@@ -553,16 +556,16 @@ impl<H: Host> Mcp<H> {
             "browser_get_text" => {
                 let target = locator(args).ok();
                 let result = js_value(&page, &pj::text(target.as_ref())).await?;
-                Ok(vec![Content::Text(render(Some(&result)))])
+                Ok(vec![Content::Text(fence(&render(Some(&result))))])
             }
             "browser_console_messages" => {
                 let result = js_value(&page, &pj::console()).await?;
-                Ok(vec![Content::Text(render(Some(&result)))])
+                Ok(vec![Content::Text(fence(&render(Some(&result))))])
             }
             "browser_find" => {
                 let text = arg_str(args, "text").ok_or("text required")?;
                 let result = js_value(&page, &pj::find_text(text)).await?;
-                Ok(vec![Content::Text(render(Some(&result)))])
+                Ok(vec![Content::Text(fence(&render(Some(&result))))])
             }
             _ => Err(Failure(format!("Unknown tool {name}"))),
         }
@@ -789,8 +792,7 @@ impl<H: Host> Mcp<H> {
             {
                 return Ok(active);
             }
-            self.target(ctx)
-                .ok_or_else(|| Failure::new("no active tab"))
+            self.target(ctx).ok_or_else(|| self.missing(ctx))
         };
         match action {
             "list" => Ok(vec![Content::Text(self.tab_list(ctx))]),
@@ -821,7 +823,11 @@ impl<H: Host> Mcp<H> {
                 ))])
             }
             "close" => {
-                let tab = pick(false)?;
+                let named = args.get("tab").or_else(|| args.get("index"));
+                let tab = match self.resolve(named, ctx)? {
+                    Some(tab) => tab,
+                    None => self.closable(ctx)?,
+                };
                 let said = self.close_tab(&tab.id);
                 Ok(vec![Content::text(format!(
                     "{said} {}",

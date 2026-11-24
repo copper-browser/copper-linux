@@ -240,6 +240,14 @@ pub fn agent_allowed_id<P: Platform>(shell: &Shell<P>, stable: &str) -> bool {
             .any(|a| a == stable)
 }
 
+/// A card, identity or field shared with agents, by the full policy a login
+/// has (Mac `Autofill.isAllowed`): its deny field keeps it back, its Agents
+/// folder (1Password: vault or `copper-agent` tag) shares it, else the
+/// switch and the list.
+pub fn autofill_allowed<P: Platform>(shell: &Shell<P>, stable: &str, hint: AgentHint) -> bool {
+    hint != AgentHint::Deny && (hint == AgentHint::Allow || agent_allowed_id(shell, stable))
+}
+
 pub fn set_agent_allowed<P: Platform>(shell: &Shell<P>, c: &Credential, on: bool) {
     let id = c.id.to_string();
     let mut list = string_list(shell, keys::ALLOWED);

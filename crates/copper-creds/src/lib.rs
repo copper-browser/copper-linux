@@ -10,7 +10,8 @@
 //!   `CredentialStore.swift`).
 //! - [`offer`] — when a sign-in took and what to offer (`Tab.swift`,
 //!   `Browser.swift`), pure.
-//! - [`site`] — registrable domains and vault URI matching; [`totp`] codes.
+//! - [`site`] — registrable domains and vault URI matching; [`origin`] —
+//!   the exact address (scheme, host, port) a login belongs to; [`totp`] codes.
 //!
 //! Nothing here logs a secret, puts one on a command line, or writes one to
 //! disk outside the platform store and private session files (0600 on Unix;
@@ -20,6 +21,7 @@ pub mod bitwarden;
 pub mod credential;
 pub mod offer;
 pub mod onepassword;
+pub mod origin;
 mod process;
 /// A private Secret Service for tests (its own D-Bus + gnome-keyring).
 /// Linux only: Windows has no daemon to stand up — Credential Manager is

@@ -53,6 +53,9 @@ pub(crate) struct TabForms<U: FormsUi> {
     auto_coded: Option<f64>,
     /// The field the list is up for (`kind|label`).
     anchor: Option<String>,
+    /// The page's origin when the list came up: a row fills only while the
+    /// page is still of it (a page that navigated since gets nothing).
+    list_origin: Option<String>,
     /// Bumped on every caret move: an answer for an older one is dropped.
     focus_gen: u64,
     /// The list's lowering a beat after the caret left ([`Forms::lower_soon`]).
@@ -199,6 +202,7 @@ impl<U: FormsUi> Forms<U> {
             signed_at: None,
             auto_coded: None,
             anchor: None,
+            list_origin: None,
             focus_gen: 0,
             lowering: None,
         }
@@ -273,10 +277,13 @@ impl<U: FormsUi> Forms<U> {
         let Some((_, slot)) = self.page_of(tab) else {
             return;
         };
-        let host = slot.page.url().as_deref().and_then(site_host);
+        let url = slot.page.url();
+        let host = url.as_deref().and_then(site_host);
+        let origin = url.as_deref().and_then(copper_creds::origin::origin_of);
         let now = self.now();
         self.with_tab(tab, |t| {
-            t.watch.sent(host.as_deref(), &user, &password, now)
+            t.watch
+                .sent(host.as_deref(), origin.as_deref(), &user, &password, now)
         });
     }
 
@@ -378,6 +385,7 @@ impl<U: FormsUi> Forms<U> {
                             host: sent.host.clone(),
                             user: sent.user.clone(),
                             used: None,
+                            origin: None,
                         }
                         .credential();
                         rt::run(async move { v.touch(&c).await }).await;
@@ -518,12 +526,13 @@ impl<U: FormsUi> Forms<U> {
                 if rows.is_empty() {
                     f.lower_now(&tab);
                 } else {
-                    f.show_picker(&tab, key, rect, rows);
+                    f.show_picker(&tab, key, rect, rows, origin);
                 }
                 return;
             }
             let h = host.clone();
-            let all = rt::run(async move { v.candidates(&h, origin.as_deref()).await })
+            let o = origin.clone();
+            let all = rt::run(async move { v.candidates(&h, o.as_deref()).await })
                 .await
                 .unwrap_or_default();
             let Some(f) = weak.upgrade() else { return };
@@ -556,11 +565,18 @@ impl<U: FormsUi> Forms<U> {
                 f.lower_now(&tab);
                 return;
             }
-            f.show_picker(&tab, key, rect, rows);
+            f.show_picker(&tab, key, rect, rows, origin);
         });
     }
 
-    fn show_picker(self: &Rc<Self>, tab: &TabId, key: String, rect: FieldRect, rows: Vec<Row>) {
+    fn show_picker(
+        self: &Rc<Self>,
+        tab: &TabId,
+        key: String,
+        rect: FieldRect,
+        rows: Vec<Row>,
+        origin: Option<String>,
+    ) {
         let Some((shell, slot)) = self.page_of(tab) else {
             return;
         };
@@ -572,6 +588,7 @@ impl<U: FormsUi> Forms<U> {
         self.with_tab(tab, |t| {
             t.picker = Some(p);
             t.anchor = Some(key);
+            t.list_origin = origin;
         });
     }
 
@@ -636,20 +653,27 @@ impl<U: FormsUi> Forms<U> {
         let weak = Rc::downgrade(self);
         let tab = tab.clone();
         let page = slot.page.clone();
-        if let Some(id) = row.autofill_id() {
-            return self.pick_values(&shell, tab, &page, row.kind, id);
+        // The origin the list came up for: every read and fill below is for
+        // it, and goes in only while the page is still of it — a page that
+        // navigated since is not filled for the old one (Mac form-target).
+        let Some(origin) = self.with_tab(&tab, |t| t.list_origin.clone()).flatten() else {
+            return;
+        };
+        if page.url().as_deref().and_then(site_origin).as_deref() != Some(origin.as_str()) {
+            return self.lower_now(&tab);
         }
-        // The origin the page is on now: a page that navigated away since
-        // the list opened is not filled for the old one.
-        let origin = page.url().as_deref().and_then(site_origin);
+        if let Some(id) = row.autofill_id() {
+            return self.pick_values(&shell, tab, &page, row.kind, id, origin);
+        }
         Loop::<U>::spawn_local(async move {
             let id = row.credential.id.clone();
             let code = row.kind == RowKind::Code;
+            let o = origin.clone();
             let got = rt::run(async move {
                 if code {
-                    v.totp_at(&id, origin.as_deref()).await
+                    v.totp_at(&id, Some(&o)).await
                 } else {
-                    v.secret_at(&id, origin.as_deref()).await
+                    v.secret_at(&id, Some(&o)).await
                 }
             })
             .await
@@ -668,15 +692,18 @@ impl<U: FormsUi> Forms<U> {
             // Secret redaction: never read back out to an agent (copper_mcp::secrets).
             copper_mcp::secrets::remember(&tab, &value);
             let filled = if code {
-                call(&page, &copper_pagejs::forms::fill_otp(&value))
+                call(&page, &copper_pagejs::forms::fill_otp(&value).at(&origin))
                     .await
                     .ok()
                     .flatten()
             } else {
-                match call(&page, &copper_pagejs::forms::fill_login(user, &value))
-                    .await
-                    .ok()
-                    .flatten()
+                match call(
+                    &page,
+                    &copper_pagejs::forms::fill_login(user, &value).at(&origin),
+                )
+                .await
+                .ok()
+                .flatten()
                 {
                     Some(true) => Some(true),
                     // A sign-in that asks for the name first (Google): the
@@ -684,7 +711,7 @@ impl<U: FormsUi> Forms<U> {
                     // the password page.
                     _ => {
                         name_only = true;
-                        call(&page, &copper_pagejs::forms::fill_name(user))
+                        call(&page, &copper_pagejs::forms::fill_name(user).at(&origin))
                             .await
                             .ok()
                             .flatten()
@@ -729,6 +756,7 @@ impl<U: FormsUi> Forms<U> {
         page: &PageOf<U::Platform>,
         kind: RowKind,
         id: String,
+        origin: String,
     ) {
         let v = self.vault.clone();
         let weak = Rc::downgrade(self);
@@ -760,7 +788,11 @@ impl<U: FormsUi> Forms<U> {
                 return;
             };
             super::mcp::remember_secret_values(&tab, &values);
-            let filled = call(&page, &copper_pagejs::forms::fill_values(&values)).await;
+            let filled = call(
+                &page,
+                &copper_pagejs::forms::fill_values(&values).at(&origin),
+            )
+            .await;
             drop(values);
             f.lower_now(&tab);
             if filled.ok().flatten().unwrap_or(0) == 0 {
@@ -803,6 +835,7 @@ impl<U: FormsUi> Forms<U> {
             return;
         };
         let origin = page_url.as_deref().and_then(site_origin);
+        let o = origin.clone();
         let v = self.vault.clone();
         let weak = Rc::downgrade(self);
         let tab = tab.clone();
@@ -817,7 +850,13 @@ impl<U: FormsUi> Forms<U> {
             .flatten();
             let Some(code) = code else { return };
             copper_mcp::secrets::remember(&tab, &code);
-            let filled = call(&page, &copper_pagejs::forms::fill_otp(&code)).await;
+            // Only into the page the code was read for.
+            let fill = copper_pagejs::forms::fill_otp(&code);
+            let fill = match &o {
+                Some(o) => fill.at(o),
+                None => fill,
+            };
+            let filled = call(&page, &fill).await;
             drop(code);
             let Some(f) = weak.upgrade() else { return };
             if filled.ok().flatten() != Some(true)
@@ -902,6 +941,7 @@ mod tests {
             host: "example.com".into(),
             user: "me".into(),
             used: None,
+            origin: None,
         }
         .credential();
         c.has_totp = true;

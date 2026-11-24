@@ -751,11 +751,31 @@ async fn forms_login(h: &H) -> Res {
         h.js("document.getElementById('password').value").await?,
         json!("hunter2")
     );
-    ensure_eq!(h.run(&forms::fill_otp("123456")).await?, Some(true));
+    // Pinned to another origin (the page navigated meanwhile): nothing goes in.
+    ensure_eq!(
+        h.run(&forms::fill_otp("999999").at("http://localhost:1"))
+            .await?,
+        None
+    );
+    ensure_eq!(
+        h.js("document.getElementById('otp').value").await?,
+        json!("")
+    );
+    let here = h.js("location.origin").await?;
+    let here = here.as_str().unwrap_or_default();
+    ensure_eq!(
+        h.run(&forms::fill_otp("123456").at(here)).await?,
+        Some(true)
+    );
     ensure_eq!(
         h.js("document.getElementById('otp').value").await?,
         json!("123456")
     );
+    // The code's own form is sent (a code page has no password box to send from).
+    h.js("window.__otpSent = 0; document.getElementById('code').addEventListener('submit', e => { e.preventDefault(); window.__otpSent++; }); true")
+        .await?;
+    ensure_eq!(h.run(&forms::submit_otp().at(here)).await?, true);
+    ensure_eq!(h.js("window.__otpSent").await?, json!(1));
     h.clear_messages();
     ensure_eq!(h.run(&forms::submit()).await?, Some(true));
     let sent = h

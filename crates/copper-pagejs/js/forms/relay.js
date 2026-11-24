@@ -617,6 +617,40 @@ function () {
     return result;
   }
 
+  function submitFrom(field) {
+    ['keydown', 'keypress', 'keyup'].forEach(function (kind) {
+      var event = new KeyboardEvent(kind, {
+        key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+        bubbles: true, cancelable: true
+      });
+      try { Object.defineProperty(event, 'keyCode', { value: 13 }); } catch (ignored) {}
+      try { Object.defineProperty(event, 'which', { value: 13 }); } catch (ignored) {}
+      field.dispatchEvent(event);
+    });
+    if (field.form) {
+      if (typeof field.form.requestSubmit === 'function') {
+        field.form.requestSubmit();
+      } else if (typeof field.form.submit === 'function') {
+        field.form.submit();
+      } else {
+        return false;
+      }
+      return true;
+    }
+    var container = field.parentElement;
+    while (container) {
+      var button = container.querySelector(
+        'button[type="submit"], input[type="submit"], button'
+      );
+      if (button) {
+        button.click();
+        return true;
+      }
+      container = container.parentElement;
+    }
+    return false;
+  }
+
   window.__officeForms = {
     unsaved: unsaved,
     fill: function (user, password) {
@@ -651,37 +685,15 @@ function () {
     submit: function () {
       var both = pair();
       if (!both) return false;
-      ['keydown', 'keypress', 'keyup'].forEach(function (kind) {
-        var event = new KeyboardEvent(kind, {
-          key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
-          bubbles: true, cancelable: true
-        });
-        try { Object.defineProperty(event, 'keyCode', { value: 13 }); } catch (ignored) {}
-        try { Object.defineProperty(event, 'which', { value: 13 }); } catch (ignored) {}
-        both.pass.dispatchEvent(event);
-      });
-      if (both.pass.form) {
-        if (typeof both.pass.form.requestSubmit === 'function') {
-          both.pass.form.requestSubmit();
-        } else if (typeof both.pass.form.submit === 'function') {
-          both.pass.form.submit();
-        } else {
-          return false;
-        }
-        return true;
-      }
-      var container = both.pass.parentElement;
-      while (container) {
-        var button = container.querySelector(
-          'button[type="submit"], input[type="submit"], button'
-        );
-        if (button) {
-          button.click();
-          return true;
-        }
-        container = container.parentElement;
-      }
-      return false;
+      return submitFrom(both.pass);
+    },
+    // A code page has no password box to send from: the code box's own form,
+    // or the button nearest it (Mac Forms.swift, otp-submit).
+    submitOTP: function () {
+      var split = splitOTPFields();
+      var box = split ? split[split.length - 1] : otpField();
+      if (!box) return false;
+      return submitFrom(box);
     },
     otpField: otpField,
     fillOTP: function (code) {

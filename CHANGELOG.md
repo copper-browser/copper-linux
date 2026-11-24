@@ -47,6 +47,42 @@ release dates.
   the address of a page over plain http and it says so. As on the Mac
   (copper-browser/Copper#181).
 
+### Fixed
+
+- **An agent fills a login only on the exact address it was saved for.**
+  Scheme, host and port must match: `www.example.com` and `example.com` are
+  two sites unless the saved item lists both, a login saved from an `http://`
+  page or another port is filled only there, and a login kept as a bare
+  `localhost` or `127.0.0.1` is never filled by an agent (any server on the
+  computer answers there; you can still pick it from the list yourself). The
+  same holds for a custom field an agent fills. Copper now keeps the scheme
+  and port of the passwords it saves, and of the rows a CSV or Chrome import
+  brings. As on the Mac (copper-browser/Copper#181).
+- **Agents' fills stay on the page and address they were meant for.** A
+  sign-in, one-time code, card, identity or custom field an agent fills goes
+  to the page the call started on, and only while that page is still of the
+  same origin: a page that navigates during the call gets nothing. A row
+  picked from the list under a sign-in box is held to the same rule. As on
+  the Mac (copper-browser/Copper#181).
+- **An agent whose tab was closed is never moved onto yours.** Until it opens
+  another, it can only read the tab on screen; anything that would change a
+  page is refused with "your tab was closed". `browser_close` closes only the
+  agent's own tab, a tab named with `tab` that closes during a call fails the
+  call, and an agent without a tab can't have Jev read yours into a model.
+  As on the Mac (copper-browser/Copper#181).
+- **A one-time code an agent fills is sent.** `browser_sign_in` with
+  `what: otp` sends the code's own form; a code page has no password box to
+  send from, so `submitted` was always false. As on the Mac
+  (copper-browser/Copper#181).
+- **A card or identity in the Agents folder counts as shared with agents**,
+  as a login there does (a `copper-agent: deny` field still keeps it back).
+  Naming an account that is not shared says where to share it. As on the Mac
+  (copper-browser/Copper#181).
+- **Pages can't pass their words off as Copper's.** A page's title comes back
+  to an agent as one quoted line, and the text of a snapshot, a page read,
+  a find or the console comes back fenced as untrusted page content, with a
+  fence the page can't forge. As on the Mac (copper-browser/Copper#181).
+
 ## 0.6.4 — 2026-11-17
 
 Agents never see a secret Copper filled.

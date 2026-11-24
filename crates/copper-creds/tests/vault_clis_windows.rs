@@ -63,7 +63,10 @@ async fn bitwarden_through_a_batch_file() {
 
     assert_eq!(b.password("i-example").await.unwrap(), "example-pw");
     // Save goes through `bw encode` + stdin.
-    let id = b.create("new.example", "zoe", "zoe-pw").await.unwrap();
+    let id = b
+        .create("new.example", "zoe", "zoe-pw", None)
+        .await
+        .unwrap();
     assert_eq!(b.password(&id).await.unwrap(), "zoe-pw");
 
     b.lock().await;

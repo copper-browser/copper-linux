@@ -8,7 +8,9 @@
 //!
 //! Every login of ours carries `app=Copper` (a test store uses its own value),
 //! `origin=<host>` and `username=<user>`; when it was last used rides in
-//! `used` (Unix seconds), as the keychain's comment does on macOS. Lists read
+//! `used` (Unix seconds), as the keychain's comment does on macOS; the page
+//! it was saved from, when known, in `protocol` and `port`
+//! ([`crate::origin::place`]). Lists read
 //! attributes only; a secret is read for one account at a time. Nothing here
 //! logs a secret.
 //!
@@ -136,10 +138,27 @@ impl SecretStore {
         password: &str,
         used: Option<f64>,
     ) -> Result<(), StoreError> {
+        self.save_from(host, user, password, used, None).await
+    }
+
+    /// [`Self::save`], remembering the page it was saved from (`origin`:
+    /// `location.origin`) as `protocol` and `port` ([`crate::origin::place`]),
+    /// so an agent fills it there and nowhere else. With no origin an
+    /// existing item keeps the place it had.
+    pub async fn save_from(
+        &self,
+        host: &str,
+        user: &str,
+        password: &str,
+        used: Option<f64>,
+        origin: Option<&str>,
+    ) -> Result<(), StoreError> {
         if host.is_empty() || password.is_empty() {
             return Err(StoreError::Empty);
         }
-        self.inner.save(host, user, password, used).await
+        self.inner
+            .save(host, user, password, used, &crate::origin::place(origin))
+            .await
     }
 
     /// It was just used to sign in: lists put it first from now on. Only the

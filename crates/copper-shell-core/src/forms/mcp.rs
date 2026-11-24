@@ -5,20 +5,25 @@
 //! with the tab it resolved; signatures are fixed.
 
 use super::watch::call;
-use super::{FormsUi, agent_allowed, agent_allowed_id, rt, site_host, site_origin};
+use super::{FormsUi, agent_allowed, autofill_allowed, rt, site_host, site_origin};
 use crate::shell::Shell;
 use crate::{PageOf, Platform};
 use copper_core::TabId;
-use copper_creds::credential::{AutofillCard, AutofillIdentity, Credential, Source};
+use copper_creds::credential::{AgentHint, AutofillCard, AutofillIdentity, Credential, Source};
 use copper_engine::PageView;
 use copper_pagejs::jev::Extras;
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 
+/// Where an agent's fill goes, fixed when the call starts (Mac
+/// `Tab.FormTarget`): the page, its site, and its origin (scheme, host and
+/// port). Every read, fill and submit goes there and only while the page is
+/// still of that origin ([`copper_pagejs::Call::at`]): a page that navigates
+/// during the call gets nothing.
 struct Target<V> {
     page: V,
     host: String,
-    origin: Option<String>,
+    origin: String,
 }
 
 fn target<P: Platform>(
@@ -37,7 +42,7 @@ fn target<P: Platform>(
     let page = shell.ensure_page(tab).ok_or("no active tab")?;
     let url = page.url().filter(|u| !u.is_empty()).unwrap_or(url);
     let host = site_host(&url).ok_or("current tab has no host")?;
-    let origin = site_origin(&url);
+    let origin = site_origin(&url).ok_or("current tab has no host")?;
     Ok(Target { page, host, origin })
 }
 
@@ -65,27 +70,52 @@ fn locked_hint(c: &Credential, e: String) -> String {
     }
 }
 
-/// The origin to fill for: the page's own, now. BotPass is asked for the
-/// origin the page is on at the moment of filling; a page that moved to
-/// another site since the accounts were listed is refused, not filled.
-fn fill_origin<V: PageView>(
-    page: &V,
-    listed: &Option<String>,
-    c: &Credential,
-) -> Result<Option<String>, String> {
-    let now = page.url().as_deref().and_then(site_origin);
-    if c.source == Source::BotPass && now != *listed {
-        return Err("the page moved to another site while signing in — try again".into());
+/// The page is still where the call started: else nothing is read from the
+/// vault, and nothing is filled. (BotPass, asked per origin, would answer
+/// for the new one.)
+fn still_there<V: PageView>(page: &V, origin: &str) -> Result<(), String> {
+    if page.url().as_deref().and_then(site_origin).as_deref() != Some(origin) {
+        return Err(format!(
+            "the page left {origin} during the call — nothing was filled; take a fresh browser_snapshot and call again"
+        ));
     }
-    Ok(now.or_else(|| listed.clone()))
+    Ok(())
 }
 
-async fn submit<V: PageView>(page: &V) -> bool {
-    call(page, &copper_pagejs::forms::submit())
+/// Send the form the password box is in — or, for a code, the code box's.
+async fn submit<V: PageView>(page: &V, origin: &str, code: bool) -> bool {
+    if code {
+        return call(page, &copper_pagejs::forms::submit_otp().at(origin))
+            .await
+            .unwrap_or(false);
+    }
+    call(page, &copper_pagejs::forms::submit().at(origin))
         .await
         .ok()
         .flatten()
         .unwrap_or(false)
+}
+
+/// The shared logins an agent may fill on `origin`: shared, and saved for
+/// that exact address ([`copper_creds::origin::owns`]). BotPass's grants
+/// already answer per origin: what it offers here is this origin's.
+fn owned(c: &Credential, origin: &str) -> bool {
+    c.source == Source::BotPass || copper_creds::origin::owns(c, origin)
+}
+
+/// Why a shared login wasn't used: it is saved for another address.
+fn saved_elsewhere(host: &str, origin: &str, logins: &[&Credential]) -> String {
+    let mut saved: Vec<&str> = logins
+        .iter()
+        .flat_map(|c| c.sites.iter().map(String::as_str))
+        .collect();
+    saved.sort_unstable();
+    saved.dedup();
+    saved.truncate(4);
+    format!(
+        "the shared login for {host} is saved for {}, not {origin} — agents fill a login only on the exact address it was saved for. Save it for this address (add the address to the item) to use it here",
+        saved.join(", ")
+    )
 }
 
 /// Secret redaction: the page's word on an agent's sign-in
@@ -121,19 +151,32 @@ pub async fn sign_in<U: FormsUi>(
     args: Map<String, Value>,
 ) -> Result<Value, String> {
     let Target { page, host, origin } = target(&shell, &tab, "sign-in")?;
+    let what = args
+        .get("what")
+        .and_then(Value::as_str)
+        .unwrap_or("password")
+        .to_lowercase();
+    if what != "password" && what != "otp" {
+        return Err("what must be password or otp".into());
+    }
     let vault = super::vault().ok_or("passwords are not available in this build")?;
     let v = vault.clone();
     let h = host.clone();
     let o = origin.clone();
-    let all = rt::run(async move { v.candidates(&h, o.as_deref()).await })
+    let all = rt::run(async move { v.candidates(&h, Some(&o)).await })
         .await
         .unwrap_or_default();
-    let permitted: Vec<Credential> = all
+    let wider: Vec<&Credential> = all.iter().filter(|c| agent_allowed(&shell, c)).collect();
+    // Only a login saved for this page's exact address (scheme, host and port).
+    let permitted: Vec<Credential> = wider
         .iter()
-        .filter(|c| agent_allowed(&shell, c))
-        .cloned()
+        .filter(|c| owned(c, &origin))
+        .map(|c| (*c).clone())
         .collect();
     if permitted.is_empty() {
+        if !wider.is_empty() {
+            return Err(saved_elsewhere(&host, &origin, &wider));
+        }
         if !all.is_empty() {
             return Err(format!(
                 "credential for {host} exists but is not shared with agents — enable it in Settings › Passwords › Agent access"
@@ -157,23 +200,35 @@ pub async fn sign_in<U: FormsUi>(
         .map(str::trim)
         .filter(|a| !a.is_empty());
     let chosen = match account {
-        Some(a) => Some(
-            permitted
+        Some(a) => {
+            let found = permitted
                 .iter()
                 .find(|c| c.user == a)
-                .or_else(|| permitted.iter().find(|c| c.user.eq_ignore_ascii_case(a)))
-                .cloned()
-                .ok_or_else(|| {
-                    format!(
-                        "no shared account named {a} for {host}; saved: {}",
-                        permitted
-                            .iter()
-                            .map(|c| c.user.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
-                })?,
-        ),
+                .or_else(|| permitted.iter().find(|c| c.user.eq_ignore_ascii_case(a)));
+            let named: Vec<&Credential> = wider
+                .iter()
+                .filter(|c| c.user.eq_ignore_ascii_case(a))
+                .copied()
+                .collect();
+            if found.is_none() && !named.is_empty() {
+                return Err(saved_elsewhere(&host, &origin, &named));
+            }
+            if found.is_none() && all.iter().any(|c| c.user.eq_ignore_ascii_case(a)) {
+                return Err(format!(
+                    "account {a} for {host} is not shared with agents — enable it in Settings › Passwords › Agent access"
+                ));
+            }
+            Some(found.cloned().ok_or_else(|| {
+                format!(
+                    "no shared account named {a} for {host}; saved: {}",
+                    permitted
+                        .iter()
+                        .map(|c| c.user.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })?)
+        }
         None if permitted.len() == 1 => Some(permitted[0].clone()),
         None => None,
     };
@@ -183,29 +238,22 @@ pub async fn sign_in<U: FormsUi>(
             "host": host,
         }));
     };
-    let what = args
-        .get("what")
-        .and_then(Value::as_str)
-        .unwrap_or("password")
-        .to_lowercase();
-    if what != "password" && what != "otp" {
-        return Err("what must be password or otp".into());
-    }
     let wants_submit = args.get("submit").and_then(Value::as_bool).unwrap_or(true);
 
     if what == "password" {
         // The field first, the secret second: a page with nothing to fill
         // never causes a read from the vault.
-        let has = call(&page, &copper_pagejs::forms::has_password())
+        let has = call(&page, &copper_pagejs::forms::has_password().at(&origin))
             .await
             .unwrap_or(false);
         if !has {
             return Err("sign-in fields not found on the page".into());
         }
+        still_there(&page, &origin)?;
         let v = vault.clone();
         let id = credential.id.clone();
-        let o = fill_origin(&page, &origin, &credential)?;
-        let secret = rt::run(async move { v.secret_at(&id, o.as_deref()).await })
+        let o = origin.clone();
+        let secret = rt::run(async move { v.secret_at(&id, Some(&o)).await })
             .await
             .unwrap_or_else(|| Err("the vault did not answer".into()))
             .map_err(|e| locked_hint(&credential, e))?;
@@ -215,7 +263,7 @@ pub async fn sign_in<U: FormsUi>(
         copper_mcp::secrets::remember(&tab, &secret);
         let word = call(
             &page,
-            &copper_pagejs::forms::sign_in(&credential.user, &secret),
+            &copper_pagejs::forms::sign_in(&credential.user, &secret).at(&origin),
         )
         .await
         .ok()
@@ -225,11 +273,7 @@ pub async fn sign_in<U: FormsUi>(
         if let Some(refusal) = sign_in_refusal(&word, &credential.user) {
             return Err(refusal);
         }
-        let submitted = if wants_submit {
-            submit(&page).await
-        } else {
-            false
-        };
+        let submitted = wants_submit && submit(&page, &origin, false).await;
         let v = vault.clone();
         let c = credential.clone();
         rt::run(async move { v.touch(&c).await }).await;
@@ -248,30 +292,28 @@ pub async fn sign_in<U: FormsUi>(
     if !credential.has_totp {
         return Err("no one-time code for this account".into());
     }
-    let has = call(&page, &copper_pagejs::forms::has_otp())
+    let has = call(&page, &copper_pagejs::forms::has_otp().at(&origin))
         .await
         .unwrap_or(false);
     if !has {
         return Err("no one-time-code field on the page".into());
     }
+    still_there(&page, &origin)?;
     let v = vault.clone();
     let id = credential.id.clone();
-    let o = fill_origin(&page, &origin, &credential)?;
-    let code = rt::run(async move { v.totp_at(&id, o.as_deref()).await })
+    let o = origin.clone();
+    let code = rt::run(async move { v.totp_at(&id, Some(&o)).await })
         .await
         .unwrap_or_else(|| Err("the vault did not answer".into()))
         .map_err(|e| locked_hint(&credential, e))?;
     copper_mcp::secrets::remember(&tab, &code);
-    let filled = call(&page, &copper_pagejs::forms::fill_otp(&code)).await;
+    let filled = call(&page, &copper_pagejs::forms::fill_otp(&code).at(&origin)).await;
     drop(code);
     if filled.ok().flatten() != Some(true) {
         return Err("no one-time-code field on the page".into());
     }
-    let submitted = if wants_submit {
-        submit(&page).await
-    } else {
-        false
-    };
+    // A code page has no password box: its own form is sent.
+    let submitted = wants_submit && submit(&page, &origin, true).await;
     Ok(json!({
         "filled": true,
         "account": credential.user,
@@ -293,30 +335,52 @@ pub async fn jev_extras<P: Platform>(shell: Shell<P>, tab: TabId) -> Extras {
     };
     let has = |c: copper_pagejs::Call<bool>| {
         let page = page.clone();
+        let c = c.at(&origin);
         async move { call(&page, &c).await.unwrap_or(false) }
     };
     let mut out = Extras::default();
     if has(copper_pagejs::forms::has_password()).await {
         let v = vault.clone();
-        let all = rt::run(async move { v.candidates(&host, origin.as_deref()).await })
+        let o = origin.clone();
+        let all = rt::run(async move { v.candidates(&host, Some(&o)).await })
             .await
             .unwrap_or_default();
-        out.sign_in = all.iter().any(|c| agent_allowed(&shell, c));
+        out.sign_in = all
+            .iter()
+            .any(|c| agent_allowed(&shell, c) && owned(c, &origin));
     }
     if has(copper_pagejs::forms::has_fields("card")).await {
         let v = vault.clone();
-        let cards = rt::run(async move { v.cards().await })
+        let cards = rt::run(async move { hinted(&v, v.cards().await, |c| &c.id).await })
             .await
             .unwrap_or_default();
         out.autofill_card = cards
             .iter()
-            .any(|c| agent_allowed_id(&shell, &stable(&c.id)));
+            .any(|(c, hint)| autofill_allowed(&shell, &stable(&c.id), *hint));
     }
     if has(copper_pagejs::forms::has_fields("identity")).await {
-        let ids = rt::run(async move { vault.identities().await })
+        let v = vault.clone();
+        let ids = rt::run(async move { hinted(&v, v.identities().await, |i| &i.id).await })
             .await
             .unwrap_or_default();
-        out.autofill_identity = ids.iter().any(|i| agent_allowed_id(&shell, &stable(&i.id)));
+        out.autofill_identity = ids
+            .iter()
+            .any(|(i, hint)| autofill_allowed(&shell, &stable(&i.id), *hint));
+    }
+    out
+}
+
+/// Each card or identity with its agent hint (its Agents folder, tag or
+/// deny field), which shares it as a login's does.
+async fn hinted<T>(
+    v: &super::vault::Vault,
+    items: Vec<T>,
+    id: impl Fn(&T) -> &String,
+) -> Vec<(T, AgentHint)> {
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        let hint = v.agent_hint(id(&item)).await;
+        out.push((item, hint));
     }
     out
 }
@@ -406,12 +470,60 @@ pub fn identity_values(i: &AutofillIdentity) -> BTreeMap<String, String> {
     m
 }
 
+/// For a refusal: the page left the form's origin during the call.
+fn gone<V: PageView>(page: &V, origin: &str) -> String {
+    if page.url().as_deref().and_then(site_origin).as_deref() == Some(origin) {
+        return String::new();
+    }
+    format!(
+        " (the form's document at {origin} changed during the call — nothing was filled; take a fresh browser_snapshot and call again)"
+    )
+}
+
+/// A card's or identity's values into the form, pinned to its origin; the
+/// answer says how many boxes took one, never a value.
+async fn fill_group<V: PageView>(
+    tab: &TabId,
+    page: &V,
+    origin: &str,
+    group: &str,
+    values: BTreeMap<String, String>,
+    should_submit: bool,
+) -> Result<(u32, bool), String> {
+    if !call(page, &copper_pagejs::forms::has_fields(group).at(origin))
+        .await
+        .unwrap_or(false)
+    {
+        return Err(format!(
+            "no {group} fields on the page{}",
+            gone(page, origin)
+        ));
+    }
+    remember_secret_values(tab, &values);
+    let filled = call(page, &copper_pagejs::forms::fill_values(&values).at(origin))
+        .await
+        .ok()
+        .flatten();
+    drop(values);
+    let filled = match (filled, gone(page, origin)) {
+        (Some(n), _) => n,
+        (None, gone) if !gone.is_empty() => {
+            return Err(format!("no {group} fields on the page{gone}"));
+        }
+        (None, _) => 0,
+    };
+    let submitted = should_submit && submit(page, origin, false).await;
+    Ok((filled, submitted))
+}
+
 pub async fn autofill<P: Platform>(
     shell: Shell<P>,
     tab: TabId,
     args: Map<String, Value>,
 ) -> Result<Value, String> {
-    let Target { page, host, .. } = target(&shell, &tab, "autofill")?;
+    // The form's page and origin, fixed here, once: every read, fill and
+    // submit below goes there and only while the page is still of it.
+    let Target { page, host, origin } = target(&shell, &tab, "autofill")?;
     let vault = super::vault().ok_or("autofill is not available in this build")?;
     let snap = vault.snapshot();
     if !snap.bw_unlocked() && !snap.op_unlocked() {
@@ -446,13 +558,13 @@ pub async fn autofill<P: Platform>(
     match kind.as_str() {
         "card" => {
             let v = vault.clone();
-            let all = rt::run(async move { v.cards().await })
+            let all = rt::run(async move { hinted(&v, v.cards().await, |c| &c.id).await })
                 .await
                 .unwrap_or_default();
             let permitted: Vec<AutofillCard> = all
                 .iter()
-                .filter(|c| agent_allowed_id(&shell, &stable(&c.id)))
-                .cloned()
+                .filter(|(c, hint)| autofill_allowed(&shell, &stable(&c.id), *hint))
+                .map(|(c, _)| c.clone())
                 .collect();
             if permitted.is_empty() {
                 return Err(if all.is_empty() {
@@ -497,27 +609,18 @@ pub async fn autofill<P: Platform>(
                 );
             }
             let card = matches.into_iter().next().ok_or("no saved card")?;
-            if !call(&page, &copper_pagejs::forms::has_fields("card"))
-                .await
-                .unwrap_or(false)
-            {
-                return Err("no card fields on the page".into());
-            }
-            let values = card_values(&card);
-            remember_secret_values(&tab, &values);
-            let filled = call(&page, &copper_pagejs::forms::fill_values(&values))
-                .await
-                .ok()
-                .flatten()
-                .unwrap_or(0);
-            let submitted = if should_submit {
-                submit(&page).await
-            } else {
-                false
-            };
+            let (filled, submitted) = fill_group(
+                &tab,
+                &page,
+                &origin,
+                "card",
+                card_values(&card),
+                should_submit,
+            )
+            .await?;
             let mut out = json!({
                 "filled": filled, "kind": kind, "name": card.name, "submitted": submitted,
-                "source": from_vault(&card.id),
+                "origin": origin, "source": from_vault(&card.id),
             });
             if filled == 0 {
                 out["note"] = "the card fields already hold values; nothing overwritten".into();
@@ -526,13 +629,13 @@ pub async fn autofill<P: Platform>(
         }
         "identity" => {
             let v = vault.clone();
-            let all = rt::run(async move { v.identities().await })
+            let all = rt::run(async move { hinted(&v, v.identities().await, |i| &i.id).await })
                 .await
                 .unwrap_or_default();
             let permitted: Vec<AutofillIdentity> = all
                 .iter()
-                .filter(|i| agent_allowed_id(&shell, &stable(&i.id)))
-                .cloned()
+                .filter(|(i, hint)| autofill_allowed(&shell, &stable(&i.id), *hint))
+                .map(|(i, _)| i.clone())
                 .collect();
             if permitted.is_empty() {
                 return Err(if all.is_empty() {
@@ -572,27 +675,18 @@ pub async fn autofill<P: Platform>(
                 );
             }
             let who = matches.into_iter().next().ok_or("no saved identity")?;
-            if !call(&page, &copper_pagejs::forms::has_fields("identity"))
-                .await
-                .unwrap_or(false)
-            {
-                return Err("no identity fields on the page".into());
-            }
-            let values = identity_values(&who);
-            remember_secret_values(&tab, &values);
-            let filled = call(&page, &copper_pagejs::forms::fill_values(&values))
-                .await
-                .ok()
-                .flatten()
-                .unwrap_or(0);
-            let submitted = if should_submit {
-                submit(&page).await
-            } else {
-                false
-            };
+            let (filled, submitted) = fill_group(
+                &tab,
+                &page,
+                &origin,
+                "identity",
+                identity_values(&who),
+                should_submit,
+            )
+            .await?;
             let mut out = json!({
                 "filled": filled, "kind": kind, "name": who.name, "submitted": submitted,
-                "source": from_vault(&who.id),
+                "origin": origin, "source": from_vault(&who.id),
             });
             if filled == 0 {
                 out["note"] = "the identity fields already hold values; nothing overwritten".into();
@@ -602,43 +696,57 @@ pub async fn autofill<P: Platform>(
         _ => {
             let name = name.ok_or("name is required for field")?;
             let v = vault.clone();
-            let (h, n) = (host.clone(), name.clone());
-            let all = rt::run(async move { v.fields(&h, &n).await })
+            let (h, n, o) = (host.clone(), name.clone(), origin.clone());
+            let all = rt::run(async move { v.fields(&h, &n, &o).await })
                 .await
                 .unwrap_or_default();
-            let Some((_, item, field, value)) = all
+            // A field belongs to a login, as a password does: only one saved
+            // for this page's exact address (scheme, host and port).
+            let owned: Vec<&super::vault::FieldHit> = all.iter().filter(|f| f.owned).collect();
+            let Some(hit) = owned
                 .iter()
-                .find(|(id, ..)| agent_allowed_id(&shell, id))
-                .cloned()
+                .find(|f| autofill_allowed(&shell, &f.id, f.hint))
             else {
-                return Err(if all.is_empty() {
-                    format!("no saved field named {name}")
-                } else {
+                return Err(if !owned.is_empty() {
                     "field exists but is not shared with agents — enable it in Settings › Passwords › Agent access".into()
+                } else if !all.is_empty() {
+                    format!(
+                        "the field {name} is saved with a login for another address than {origin} — agents fill it only on the exact address (scheme, host and port) the login was saved for. Add this address to the item to use it here"
+                    )
+                } else {
+                    format!("no saved field named {name}")
                 });
             };
             // A vault field may be hidden (a PIN, a key) and the vault does not
             // say here: every one an agent fills is treated as a secret.
-            copper_mcp::secrets::remember(&tab, &value);
+            copper_mcp::secrets::remember(&tab, &hit.value);
             let filled = call(
                 &page,
-                &copper_pagejs::forms::fill_field_secret(&name, &value),
+                &copper_pagejs::forms::fill_field_secret(&name, &hit.value).at(&origin),
             )
             .await
             .ok()
             .flatten()
             .unwrap_or(false);
             if !filled {
-                let focused = call(&page, &copper_pagejs::forms::fill_focused_secret(&value))
-                    .await
-                    .ok()
-                    .flatten()
-                    .unwrap_or(false);
+                let focused = call(
+                    &page,
+                    &copper_pagejs::forms::fill_focused_secret(&hit.value).at(&origin),
+                )
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or(false);
                 if !focused {
-                    return Err(format!("no field named {name} on the page"));
+                    return Err(format!(
+                        "no field named {name} on the page{}",
+                        gone(&page, &origin)
+                    ));
                 }
             }
-            Ok(json!({ "filled": 1, "kind": "field", "name": field, "item": item }))
+            Ok(json!({
+                "filled": 1, "kind": "field", "name": hit.name, "item": hit.item, "origin": origin,
+            }))
         }
     }
 }

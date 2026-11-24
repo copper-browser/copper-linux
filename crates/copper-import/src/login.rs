@@ -11,6 +11,9 @@ pub struct ImportedLogin {
     pub password: String,
     /// Last used, Unix seconds.
     pub used: Option<f64>,
+    /// The scheme, host and port the address had (`http://example.com:8080`),
+    /// when it had a scheme ([`copper_creds::origin`]).
+    pub origin: Option<String>,
 }
 
 impl std::fmt::Debug for ImportedLogin {
@@ -34,6 +37,7 @@ mod tests {
             user: "u".into(),
             password: "SECRET".into(),
             used: None,
+            origin: None,
         };
         assert!(!format!("{login:?}").contains("SECRET"));
     }

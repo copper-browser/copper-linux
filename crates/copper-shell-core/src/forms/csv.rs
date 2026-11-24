@@ -55,11 +55,7 @@ pub async fn import_file(path: PathBuf, store: &str) -> Said {
         let Some(v) = super::vault() else {
             return (NO_VAULT.into(), false);
         };
-        let logins: Vec<(String, String, String, Option<f64>)> = read
-            .logins
-            .into_iter()
-            .map(|l| (l.host, l.user, l.password, l.used))
-            .collect();
+        let logins = read.logins;
         rt::run(async move { v.save_imported(logins).await })
             .await
             .unwrap_or_else(|| Err(NO_VAULT.into()))
@@ -117,6 +113,7 @@ pub async fn export_file(path: PathBuf, store: &str) -> Said {
                     user: l.user,
                     password,
                     used: l.used,
+                    origin: l.origin,
                 }),
                 Err(_) => missed += 1,
             }
