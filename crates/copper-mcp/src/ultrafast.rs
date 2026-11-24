@@ -842,6 +842,7 @@ impl<H: Host> Mcp<H> {
     /// The router on whichever lane is active (`Router.ask`). `json`: ask the
     /// gateway for JSON mode, which small models answer faster and cleaner
     /// with (the Claude-account lane has no such flag).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn ask_model(
         &self,
         eff: &Effective,
@@ -950,8 +951,7 @@ impl<H: Host> Mcp<H> {
         // A document just parsed is still wiring itself up: with `near` it
         // stands still before the read, or the first decision on it is stale.
         if how.near && navigated && !read {
-            let mut again =
-                Box::pin(self.observe(tab, Some(&synthetic("read", "")), how)).await?;
+            let mut again = Box::pin(self.observe(tab, Some(&synthetic("read", "")), how)).await?;
             if settled.is_some() {
                 again.settle = settled;
             }
@@ -1091,8 +1091,14 @@ impl<H: Host> Mcp<H> {
             self.host.sleep(Duration::from_millis(50)).await;
         }
         let from = self.net_current(tab, since).await;
-        self.answered(tab, from, rules::WAIT_CAP, rules::WAIT_LINGER, Duration::ZERO)
-            .await;
+        self.answered(
+            tab,
+            from,
+            rules::WAIT_CAP,
+            rules::WAIT_LINGER,
+            Duration::ZERO,
+        )
+        .await;
     }
 
     /// WAIT (`watch`): until what Jev reads changes, or the data calls since
@@ -1419,12 +1425,14 @@ impl<H: Host> Mcp<H> {
                 }
                 Err(f) => {
                     let space = action_space(&obs.actions, Extras::default());
-                    asked["your_last_reply"] = json!(reply.text.chars().take(300).collect::<String>());
+                    asked["your_last_reply"] =
+                        json!(reply.text.chars().take(300).collect::<String>());
                     asked["what_was_wrong"] = json!(format!(
                         "{} Answer again with one JSON object using only the operations and indices on offer.",
                         f.0
                     ));
-                    asked["on_offer"] = json!(strategies::offered_ops(&space.targets, &space.controls));
+                    asked["on_offer"] =
+                        json!(strategies::offered_ops(&space.targets, &space.controls));
                     trouble = f;
                 }
             }
@@ -1462,7 +1470,15 @@ impl<H: Host> Mcp<H> {
             // always was, for a gateway that refuses the flag.
             let timeout = Duration::from_secs(if final_try { 25 } else { 8 });
             match self
-                .ask_model(eff, TEXT_VALUE, context, timeout, 600, Some(&model), !final_try)
+                .ask_model(
+                    eff,
+                    TEXT_VALUE,
+                    context,
+                    timeout,
+                    600,
+                    Some(&model),
+                    !final_try,
+                )
                 .await
             {
                 Ok(reply) => {
@@ -1491,7 +1507,9 @@ impl<H: Host> Mcp<H> {
                         e.0.chars().take(160).collect::<String>()
                     );
                     // "No such model" is remembered for the launch; a slow minute is not.
-                    if !final_try && (e.0.starts_with("router 400") || e.0.starts_with("router 404")) {
+                    if !final_try
+                        && (e.0.starts_with("router 400") || e.0.starts_with("router 404"))
+                    {
                         self.state.borrow_mut().refused_text_models.insert(model);
                     }
                 }
@@ -1549,14 +1567,20 @@ impl<H: Host> Mcp<H> {
             if !self.fresh(&page, obs).await {
                 let started = Instant::now();
                 let from = self.net_current(tab, since).await;
-                self.answered(tab, from, rules::WAIT_CAP, rules::WAIT_LINGER, Duration::ZERO)
-                    .await;
+                self.answered(
+                    tab,
+                    from,
+                    rules::WAIT_CAP,
+                    rules::WAIT_LINGER,
+                    Duration::ZERO,
+                )
+                .await;
                 self.pad_wait(started).await;
                 return Ok(false);
             }
-        } else if let Some(n) = node.filter(|_| {
-            kind == "click" || kind == "select" || (hand.narrow && kind == "fill")
-        }) {
+        } else if let Some(n) =
+            node.filter(|_| kind == "click" || kind == "select" || (hand.narrow && kind == "fill"))
+        {
             // The form state and the target's own guard: unrelated content
             // loading in elsewhere doesn't make a click or a typed value wrong.
             if !self.fresh_target(&page, obs, n).await {
@@ -1763,7 +1787,13 @@ impl<H: Host> Mcp<H> {
         let started = Instant::now();
         let schema = rules::answer_schema();
         match self
-            .extract(&s.tab, &s.goal, Some(&schema), true, Duration::from_secs(20))
+            .extract(
+                &s.tab,
+                &s.goal,
+                Some(&schema),
+                true,
+                Duration::from_secs(20),
+            )
             .await
         {
             Ok((reply, words)) => {
@@ -1855,7 +1885,12 @@ impl<H: Host> Mcp<H> {
             if claim == "BLOCKED" {
                 s.blocked_refused = true;
             }
-            self.said(claim, "not sure: reading the page again".into(), decision, true);
+            self.said(
+                claim,
+                "not sure: reading the page again".into(),
+                decision,
+                true,
+            );
             self.settle_fully(&s.tab, s.last_net_mark).await;
             s.settle_before_read = true;
             s.observation = None;
@@ -1873,7 +1908,12 @@ impl<H: Host> Mcp<H> {
             s.done_refusals += 1;
             s.done_refused = true;
             s.refusal = None;
-            self.said("DONE", "refused: something looks undone".into(), decision, true);
+            self.said(
+                "DONE",
+                "refused: something looks undone".into(),
+                decision,
+                true,
+            );
             return;
         }
         // A value typed straight from the goal that the page doesn't show now:
@@ -2147,15 +2187,13 @@ impl<H: Host> Mcp<H> {
         // A send went in and the page has shown nothing since: no control that
         // sends is used again (nor the field it went in from); Jev is asked
         // DONE or BLOCKED instead.
-        if s
-            .quiet_send
+        if s.quiet_send
             .as_ref()
             .is_some_and(|q| q.url != obs.url || !shown_lines.is_subset(&q.lines))
         {
             s.quiet_send = None;
         }
-        if s
-            .navigated_send
+        if s.navigated_send
             .as_ref()
             .is_some_and(|n| n.0 != obs.url || kind == "fill" || kind == "select")
         {
@@ -2328,7 +2366,10 @@ impl<H: Host> Mcp<H> {
                         narrow: false,
                         ..hand
                     };
-                    match self.act(&tab, &other, &obs, Some(&value), later, None).await {
+                    match self
+                        .act(&tab, &other, &obs, Some(&value), later, None)
+                        .await
+                    {
                         Ok(_) => {}
                         Err(Miss::Stale(_) | Miss::Covered(_)) => break,
                         Err(Miss::Fail(f)) => return Err(Miss::Fail(f)),
@@ -2417,7 +2458,8 @@ impl<H: Host> Mcp<H> {
                     if s.stale_streak > 6 {
                         let short: String = label.chars().take(40).collect();
                         s.status = "blocked".into();
-                        s.note = format!("The page kept changing under the agent: {short} was covered");
+                        s.note =
+                            format!("The page kept changing under the agent: {short} was covered");
                     }
                     return Ok(None);
                 }
@@ -2428,8 +2470,7 @@ impl<H: Host> Mcp<H> {
                 self.trace(DriveEvent::Outcome(outcome(format!("covered: {label}"))));
                 if s.covered_refusals > 3 {
                     s.status = "blocked".into();
-                    s.note =
-                        format!("Every control Jev chose had something drawn over it ({by})");
+                    s.note = format!("Every control Jev chose had something drawn over it ({by})");
                 }
                 return Ok(None);
             }
@@ -2513,7 +2554,13 @@ impl<H: Host> Mcp<H> {
         // (≤ 3 s), so Jev isn't asked about a page whose answer is still out.
         if s.strategy.watch && (submitted || kind == "click") {
             let calls = self
-                .answered(&tab, net_mark, Duration::from_secs(3), Duration::ZERO, Duration::ZERO)
+                .answered(
+                    &tab,
+                    net_mark,
+                    Duration::from_secs(3),
+                    Duration::ZERO,
+                    Duration::ZERO,
+                )
                 .await;
             note_calls(&mut step, &calls);
         }
@@ -2541,7 +2588,13 @@ impl<H: Host> Mcp<H> {
         {
             let waited = Instant::now();
             let calls = self
-                .answered(&tab, net_mark, rules::WAIT_CAP, rules::WAIT_LINGER, rules::START_WAIT)
+                .answered(
+                    &tab,
+                    net_mark,
+                    rules::WAIT_CAP,
+                    rules::WAIT_LINGER,
+                    rules::START_WAIT,
+                )
                 .await;
             note_calls(&mut step, &calls);
             if waited.elapsed() > Duration::from_millis(20) {
@@ -2572,8 +2625,8 @@ impl<H: Host> Mcp<H> {
         step.sent = step.form_sent || (kind != "wait" && !link && !posts.is_empty());
         step.nothing_new = strategies::text_lines(&next.text).is_subset(&shown_lines);
         // Only a send that changes something arms the resend guards.
-        step.commit = (step.sent || submitted)
-            && strategies::commit(&action, &label, &posts, &next.url);
+        step.commit =
+            (step.sent || submitted) && strategies::commit(&action, &label, &posts, &next.url);
         if step.quiet_send() {
             s.quiet_send = Some(QuietSend {
                 lines: strategies::text_lines(&next.text),

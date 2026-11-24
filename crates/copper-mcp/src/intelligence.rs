@@ -744,6 +744,7 @@ fn cache_refused(data: &[u8]) -> bool {
 }
 
 /// The gateway lane (`Router.ask`, `lane == .key`).
+#[allow(clippy::too_many_arguments)]
 pub async fn router_ask(
     net: &Net,
     keys: &Keys,
