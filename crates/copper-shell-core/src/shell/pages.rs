@@ -229,24 +229,41 @@ impl<P: Platform> Shell<P> {
         }
         // Woken: its last picture stands in until the page has drawn.
         self.wake_cover(id);
-        let profile = if private {
-            self.engine().profile(&crate::private::profile_id(id), true)
-        } else {
-            self.engine()
-                .profile(&profile_id(profile.as_deref()), false)
-        };
-        let profile = match profile {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::error!(error = %e, "profile unavailable; using the default");
-                self.engine().profile(&profile_id(None), false).ok()?
-            }
-        };
+        let profile = self.profile_for_tab(id, private, profile.as_deref())?;
         self.0.downloads.attach(self, &profile);
         let page = self.engine().new_page(&profile, page_options());
         let load = (!url.is_empty()).then_some(url);
         self.adopt_page(id, page.clone(), load.as_deref(), private);
         Some(page)
+    }
+
+    /// The engine profile (cookie jar) tab `id` uses.
+    pub fn tab_profile(&self, id: &TabId) -> Option<crate::ProfileOf<P>> {
+        let (private, profile) = {
+            let b = self.browser();
+            (b.tab(id)?.private, b.profile_of(id))
+        };
+        self.profile_for_tab(id, private, profile.as_deref())
+    }
+
+    fn profile_for_tab(
+        &self,
+        id: &TabId,
+        private: bool,
+        profile: Option<&str>,
+    ) -> Option<crate::ProfileOf<P>> {
+        let made = if private {
+            self.engine().profile(&crate::private::profile_id(id), true)
+        } else {
+            self.engine().profile(&profile_id(profile), false)
+        };
+        match made {
+            Ok(p) => Some(p),
+            Err(e) => {
+                tracing::error!(error = %e, "profile unavailable; using the default");
+                self.engine().profile(&profile_id(None), false).ok()
+            }
+        }
     }
 
     /// Give `page` to tab `id`: frame it, put it on the stage, listen to it,
@@ -255,6 +272,7 @@ impl<P: Platform> Shell<P> {
         let slot = PageSlot::new(self, id, page.clone(), private);
         self.view().page_added(self, &slot);
         self.set_popup_handler(id, &page);
+        self.dress_permissions(&page, private);
 
         let mut events = page.events();
         let weak = self.downgrade();

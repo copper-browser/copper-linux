@@ -256,6 +256,8 @@ impl<H: Host> Mcp<H> {
     /// True when the page's visibility just changed.
     pub(crate) fn prepare(&self, id: &TabId) -> bool {
         let changed = self.host.prepare_tab(id);
+        // Its questions, file choosers and requests come to agents from now on.
+        self.hook(id);
         let on_screen = self.host.tab(id).is_some_and(|t| t.selected);
         let mut state = self.state.borrow_mut();
         if on_screen {

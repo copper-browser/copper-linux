@@ -105,6 +105,12 @@ tab again, and may sleep.
 | `browser_fill_form` | `[{ref, type, value}]` for textbox, checkbox, radio, combobox and slider. |
 | `browser_press_key` | `Enter`, `Escape`, `ArrowDown`, `Control+a`, `a` and so on, as real key events. |
 | `browser_hover`, `browser_drag`, `browser_select_option`, `browser_scroll` | Hover, drag, choose an option, scroll. |
+| `browser_handle_dialog` | `accept`, `promptText` (Playwright's). An alert, confirm or prompt on an agent's tab stays open after the call that raised it and is listed under `### Dialogs` in that answer; this answers it. With none open it arms the answer for the next one. The agent's next other call on that tab, or 30 s, closes it as a closed dialog would (OK, false, null); one raised while Copper's own script waits on the page (inside `browser_evaluate`) gets that answer at once. "Leave this page?" is answered at once: leave, unless a dismiss was armed. A tab on your screen keeps its dialog for you unless an answer was armed. |
+| `browser_file_upload` | `paths: [absolute]` answers the file chooser your click opened; before the click it arms the next one; no `paths` cancels; with `ref` it drops the files on that element, as from a file manager, for a drop zone with no file input ([Files and browser state](#files-and-browser-state)). |
+| `browser_pdf_save` | The page as a paged PDF (letter); `filename` is absolute, or a name in the downloads folder. |
+| `browser_network_requests` | `[GET] url => [200] (fetch)` per request since the page loaded; `includeStatic`, `limit` (at most 300). |
+| `browser_cookies` | Your tab's site's cookies: `list {name}`, `set {name, value, domain, path, expires, httpOnly, secure, sameSite}`, `delete {name}`. HttpOnly needs Agent access. |
+| `browser_permissions` | `grant` / `revoke` lists of `geolocation`, `camera`, `microphone` for a `site` (default your tab's); none lists them. Camera and microphone are the same per-site Allow the page's question keeps; geolocation is kept in `permissions.geolocation`. The position pages get is the one given with `latitude` / `longitude` (as Playwright's `setGeolocation`); a geolocation grant without them is refused with what to pass. `notifications` is always refused. A site not granted is asked as before (refused on an agent's tab nobody sees). |
 | `browser_take_screenshot` | PNG or JPEG of the viewport, the whole page (`fullPage`), one element (`ref` or `selector`, whole even when taller than the window) or a `region` in CSS px, with `padding` round it, at `scale` 1–4 (2 is HD), saved to `filename` if you give one. See [Screenshots](#screenshots). |
 | `browser_evaluate` | Runs `function: "() => …"`, or `(element) => …` with a `ref`. |
 | `browser_wait_for` | Waits for `text`, for `textGone`, or for `time`. |
@@ -116,6 +122,29 @@ tab again, and may sleep.
 | `browser_sign_in`, `browser_autofill` | Fill a saved sign-in, card, identity or custom field without the secret ever leaving Copper (below). |
 | `cloud_history_delete` | Deletes your history on Copper Cloud ([cloud.md](cloud.md)). History on this computer stays. Loopback clients only. |
 | `canvas_*` | Read and draw on your canvases: `canvas_list` (with the `invitations` waiting for your answer, `{canvas, from}`, when signed in to Copper Cloud), `canvas_open`, `canvas_read`, `canvas_apply`, `canvas_select`, `canvas_focus`, `canvas_create`, `canvas_invite`, `canvas_share_link`, `canvas_join`, `canvas_screenshot`, `canvas_chat`. A big canvas reads in pages: `canvas_read` with `overview` first, then `frame` or `region`, or follow `next` as `cursor`; `ids`, `types` and `query` narrow any read. A canvas that is closed, asleep or still loading is opened behind your tab and waited for (up to a minute for a huge one). |
+
+### Files and browser state
+
+Each of these works on the caller's tab only.
+
+- **Upload.** A chooser your call opened on your tab is held for you (not shown
+  to anyone); the call's answer ends with "The page opened a file chooser", and
+  `browser_file_upload {paths}` answers it. Unanswered, it is cancelled after a
+  minute. Calling first arms the tab: its next chooser (within two minutes)
+  gets the files. Every path must be absolute and exist; more than one file
+  only for `multiple`. A chooser you open on a tab no agent is at is your own
+  file dialog, as before.
+- **PDF.** WebKit prints the page to letter-sized pages, with no dialog.
+- **Network.** WebKit reports every request with its method and status, from
+  the first time an agent uses the tab; nothing runs in the page. The list
+  lives with the page, so a closed tab's never stands in for a new one's.
+  Successful images, scripts and styles are left out unless `includeStatic`.
+- **Cookies.** The tab's own cookie jar (its space's profile), cookies whose
+  domain is the tab's host or a parent of it. `set` takes the host or a parent
+  domain, never a bare top-level domain. HttpOnly cookies are the site's
+  sign-in: their values are listed as hidden, and setting or deleting one is
+  refused, unless the site is shared in Settings › Passwords › Agent access
+  (the same gate as `browser_sign_in`).
 
 ### Screenshots
 
@@ -344,6 +373,11 @@ copper shot ~/Desktop/card.png --selector '.pricing-card' --padding 12 --hd
 copper signin --otp
 copper call browser_navigate '{"url":"https://example.com"}'
 ```
+
+`copper hover`, `select`, `scroll`, `wait`, `back`, `forward`,
+`upload PATH… | --cancel`, `dialog accept [TEXT] | dismiss` and `pdf [PATH]`
+are each one tool, with the arguments above (`copper help`). `copper call
+browser_cookies '{"action":"list"}'` for the rest.
 
 `copper intelligence` shows and sets the model keys in the running Copper,
 through its loopback server. It prints JSON and never a key:

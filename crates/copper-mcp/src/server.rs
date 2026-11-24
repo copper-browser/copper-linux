@@ -218,7 +218,9 @@ impl<H: Host> Mcp<H> {
                     && (loopback || name != catalogue::CLOUD_HISTORY);
                 if !offered {
                     return reply(result(
-                        vec![Content::Text(format!("Unknown tool {name}"))],
+                        vec![Content::Text(format!(
+                            "Unknown tool {name}. Call tools/list for the tools there are."
+                        ))],
                         true,
                         None,
                     ));
@@ -308,7 +310,27 @@ impl<H: Host> Mcp<H> {
             );
             Some(ticket)
         };
+        // A question left open on this tab is closed before anything else
+        // touches it; a file chooser opened during the call is held for the
+        // agent (`dialogs`).
+        let around = landing.as_ref().map(|t| t.id.clone());
+        if name != "browser_handle_dialog" {
+            self.move_on(around.as_ref());
+        }
+        self.began(around.as_ref());
         let outcome = self.call_tool(name, arguments, &mut ctx).await;
+        self.ended(around.as_ref());
+        let outcome = outcome.map(|mut content| {
+            content.extend(self.chooser_note(around.as_ref(), name));
+            // What the page asked while the call ran, and what it was told —
+            // in the next answer after browser_evaluate's, whose text is the
+            // function's value alone.
+            if name != "browser_evaluate" {
+                let tab = self.peek(arguments, &ctx).map(|t| t.id);
+                content.extend(self.dialog_report(tab.as_ref()));
+            }
+            content
+        });
         // Secret redaction: the last thing before an answer leaves — no secret
         // Copper filled reads as itself, whatever the page did with it.
         let (content, error) = match outcome {

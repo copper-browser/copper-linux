@@ -22,7 +22,7 @@ pub const OMITTED: [&str; 2] = ["voice_status", "voice_transcript"];
 pub const JEV: [&str; 4] = ["jev_run", "jev_step", "jev_extract", "jev_observe"];
 
 /// The Playwright-shaped tools plus the probe and crash history, in order.
-pub const PLAYWRIGHT: [&str; 26] = [
+pub const PLAYWRIGHT: [&str; 27] = [
     "browser_tabs",
     "browser_sign_in",
     "browser_autofill",
@@ -36,6 +36,7 @@ pub const PLAYWRIGHT: [&str; 26] = [
     "browser_press_key",
     "browser_hover",
     "browser_select_option",
+    "browser_handle_dialog",
     "browser_drag",
     "browser_take_screenshot",
     "browser_evaluate",
@@ -107,6 +108,8 @@ pub fn catalogue(jev: bool, loopback: bool) -> Vec<Value> {
         names.extend(JEV);
     }
     names.extend(PLAYWRIGHT);
+    // The page tools of `StateTools.catalogue` (tools-page), after browser_crashes.
+    names.extend(crate::page_tools::NAMES);
     names.extend(CANVAS);
     if loopback {
         names.push(CLOUD_HISTORY);

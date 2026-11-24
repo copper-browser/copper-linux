@@ -133,6 +133,8 @@ scripts! {
     Select = "page/select.js", Call, Page, HELPER;
     /// `browser_drag` without real input.
     Drag = "page/drag.js", Call, Page, HELPER;
+    /// `browser_file_upload` with `ref`: files dropped on a drop zone.
+    Drop = "page/drop.js", Call, Page, HELPER;
     /// `browser_wait_for` text / textGone poll.
     HasText = "page/has_text.js", Call, Page, None;
     /// `browser_scroll`.
@@ -143,7 +145,8 @@ scripts! {
     Console = "page/console.js", Call, Page, HELPER;
     /// `browser_find`.
     FindText = "page/find_text.js", Call, Page, HELPER;
-    /// The element behind a ref, for `browser_evaluate` with `ref`.
+    /// `browser_evaluate`: the agent's function (or expression), with the
+    /// element behind a ref; a Promise awaited, the answer as text.
     Element = "page/element.js", Call, Page, HELPER;
     /// The helper's console capture from document start (`window.__copperLogs`),
     /// so `browser_console_messages` also has what the page logged while loading.

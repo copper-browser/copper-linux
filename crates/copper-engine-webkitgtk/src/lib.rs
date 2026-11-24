@@ -16,6 +16,7 @@
 //! `gtk4::init()` on the thread that runs the GTK main loop, and poll the
 //! returned futures on that loop.
 
+mod agent;
 mod backstage;
 mod caps;
 mod capture;

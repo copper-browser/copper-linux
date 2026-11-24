@@ -136,11 +136,11 @@ impl<T> Call<T> {
     }
 
     fn invocation(&self) -> String {
-        let call = format!("({})({})", self.script.function(), literal(&self.args));
+        let args = literal(&self.args);
         match &self.custom {
-            None => call,
-            Some(function) if self.args.is_null() => format!("({function})()"),
-            Some(function) => format!("({function})({call})"),
+            None => format!("({})({args})", self.script.function()),
+            // On lines of its own, so a trailing `// comment` can't swallow the `)`.
+            Some(function) => format!("({})({args}, (\n{function}\n))", self.script.function()),
         }
     }
 
