@@ -30,7 +30,9 @@ use crate::who::Who;
 use crate::{CallCtx, Failure, Mcp};
 use copper_pagejs::trail;
 
-mod strategies;
+pub mod net;
+pub mod rules;
+pub mod strategies;
 pub use strategies::{Assignment, STRATEGY_WORDS, Strategy, literals, strategy_arg};
 
 pub const MAX_STEPS: usize = 60;
