@@ -141,6 +141,29 @@ mod tests {
     }
 
     #[test]
+    fn a_pinned_call_runs_only_on_its_origin() {
+        let body = forms::fill_otp("123456")
+            .at("http://127.0.0.1:8795")
+            .function_body();
+        assert!(body.starts_with(
+            "if (!(location.origin === \"http://127.0.0.1:8795\")) return null;\nreturn ("
+        ));
+        // The origin is data too.
+        let call = forms::submit().at("x\"||1||\"");
+        assert!(
+            call.function_body()
+                .contains(r#"location.origin === "x\"||1||\"""#)
+        );
+        let expr = forms::has_otp().at("https://a.test").expression();
+        assert!(
+            expr.starts_with("((location.origin === \"https://a.test\") ? (")
+                && expr.ends_with(" : null)")
+        );
+        // Unpinned, nothing changes.
+        assert!(forms::submit_otp().function_body().starts_with("return ("));
+    }
+
+    #[test]
     fn evaluate_splices_only_the_agents_function() {
         let call = page::evaluate("() => document.title", None);
         assert!(

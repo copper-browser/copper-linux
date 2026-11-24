@@ -229,6 +229,11 @@ fn login(row: &[String], c: &Columns) -> Option<ImportedLogin> {
         user: row.get(c.user).cloned().unwrap_or_default(),
         password: password.clone(),
         used,
+        // A row's own scheme and port, when its address has them.
+        origin: url
+            .contains("://")
+            .then(|| copper_creds::origin::origin_of(url))
+            .flatten(),
     })
 }
 
@@ -404,7 +409,10 @@ pub fn cell(value: &str) -> String {
 pub fn csv(logins: &[ImportedLogin]) -> String {
     let mut out = String::from("name,url,username,password,note\n");
     for l in logins {
-        let url = format!("https://{}/", l.host);
+        let url = match &l.origin {
+            Some(o) => format!("{o}/"),
+            None => format!("https://{}/", l.host),
+        };
         let row = [l.host.as_str(), &url, &l.user, &l.password, ""];
         out += &row.iter().map(|v| cell(v)).collect::<Vec<_>>().join(",");
         out.push('\n');
@@ -500,6 +508,10 @@ mod tests {
         assert_eq!(read.codes, 0);
         assert_eq!(read.logins.len(), 2);
         assert_eq!(read.logins[0].host, "example.com");
+        assert_eq!(
+            read.logins[0].origin.as_deref(),
+            Some("https://www.example.com")
+        );
         assert_eq!(read.logins[0].user, "ann");
         assert_eq!(read.logins[0].password, "hunter2");
         assert_eq!(read.logins[1].user, "d,an");
@@ -624,6 +636,7 @@ mod tests {
             user: "ann, \"the\" user".into(),
             password: "p,w\nx".into(),
             used: None,
+            origin: Some("http://a.test:8080".into()),
         }];
         let back = read(&csv(&logins)).unwrap();
         assert_eq!(back.logins, logins);

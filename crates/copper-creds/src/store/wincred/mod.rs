@@ -4,7 +4,8 @@
 //! A login is one credential named `Copper/<origin>/<user>` (see
 //! [`super::target`]); its user name and a "user on host (Copper)" comment
 //! are what Credential Manager shows. `app`, `origin` and `username` are read
-//! from the name; `used` and `xdg:schema` ride as credential attributes, so
+//! from the name; `used`, `xdg:schema`, `protocol` and `port` ride as
+//! credential attributes, so
 //! [`super::lookup`] matches the same attributes as on Linux. The secret is
 //! the UTF-8 bytes of the password; one over 2560 bytes is sealed in a DPAPI
 //! file and the credential carries only a pointer to it ([`vault`]).
@@ -29,6 +30,9 @@ use vault::Vault;
 const ATTR_USED: &str = "used";
 /// The schema attribute, as on Linux (lets `lookup` match it).
 const ATTR_SCHEMA: &str = "xdg:schema";
+/// Where the login was saved from (`crate::origin::place`), as on Linux.
+const ATTR_PROTOCOL: &str = "protocol";
+const ATTR_PORT: &str = "port";
 /// Present when the secret is sealed in the vault: the file's name.
 const ATTR_VAULT: &str = "copper:vault";
 /// Attribute names Copper reserves for itself.
@@ -68,6 +72,11 @@ impl Store {
     fn login(&self, c: &Cred) -> Option<Login> {
         let (tag, host, user) = parse_login(&c.target)?;
         (tag == self.app).then(|| Login {
+            origin: crate::origin::placed(
+                c.attribute(ATTR_PROTOCOL),
+                c.attribute(ATTR_PORT),
+                &host,
+            ),
             host,
             user,
             used: c.attribute(ATTR_USED).and_then(|u| u.parse::<f64>().ok()),
@@ -104,16 +113,32 @@ impl Store {
         user: &str,
         password: &str,
         used: Option<f64>,
+        place: &[(&str, String)],
     ) -> Result<(), StoreError> {
         let target = login_target(&self.app, host, user);
-        // Keep the old `used` when nothing new is said.
-        let used = match used {
-            Some(u) => Some(used_text(u)),
-            None => cred::read(&target)?.and_then(|c| c.attribute(ATTR_USED).map(str::to_string)),
+        // What isn't said anew (when it was used, where it was saved from)
+        // is kept from the credential being replaced.
+        let old = cred::read(&target)?;
+        let kept = |key: &str| {
+            old.as_ref()
+                .and_then(|c| c.attribute(key).map(str::to_string))
         };
         let mut attributes = vec![(ATTR_SCHEMA.to_string(), SCHEMA.as_bytes().to_vec())];
-        if let Some(u) = used {
+        if let Some(u) = used.map(used_text).or_else(|| kept(ATTR_USED)) {
             attributes.push((ATTR_USED.to_string(), u.into_bytes()));
+        }
+        if place.is_empty() {
+            for key in [ATTR_PROTOCOL, ATTR_PORT] {
+                if let Some(v) = kept(key) {
+                    attributes.push((key.to_string(), v.into_bytes()));
+                }
+            }
+        } else {
+            attributes.extend(
+                place
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.clone().into_bytes())),
+            );
         }
         let secret = Zeroizing::new(password.as_bytes().to_vec());
         put(
@@ -323,12 +348,16 @@ mod tests {
     fn logins_round_trip_through_credential_manager() {
         let (s, dir) = store("crud");
         block(async {
-            s.save("example.com", "Ann", "pw-A", Some(100.0))
+            s.save("example.com", "Ann", "pw-A", Some(100.0), &[])
                 .await
                 .unwrap();
-            s.save("example.com", "ann", "pw-a", None).await.unwrap();
-            s.save("example.com", "", "pw-none", None).await.unwrap();
-            s.save("other.example.com", "x/y*z", "pw-x", None)
+            s.save("example.com", "ann", "pw-a", None, &[])
+                .await
+                .unwrap();
+            s.save("example.com", "", "pw-none", None, &[])
+                .await
+                .unwrap();
+            s.save("other.example.com", "x/y*z", "pw-x", None, &[])
                 .await
                 .unwrap();
             // Case-distinct users stay distinct.
@@ -356,7 +385,9 @@ mod tests {
             assert_eq!(users, ["", "Ann", "ann"]);
             assert_eq!(s.logins(None).await.unwrap().len(), 4);
             // `used` survives a save without one and moves on touch.
-            s.save("example.com", "Ann", "pw-A2", None).await.unwrap();
+            s.save("example.com", "Ann", "pw-A2", None, &[])
+                .await
+                .unwrap();
             let ann = |l: &Vec<Login>| l.iter().find(|l| l.user == "Ann").unwrap().used;
             assert_eq!(
                 ann(&s.logins(Some("example.com")).await.unwrap()),
@@ -397,7 +428,9 @@ mod tests {
         let target = login_target(s.tag(), "big.example", "ann");
         let big: String = "0123456789abcdef".repeat(400); // 6400 bytes
         block(async {
-            s.save("big.example", "ann", &big, Some(5.0)).await.unwrap();
+            s.save("big.example", "ann", &big, Some(5.0), &[])
+                .await
+                .unwrap();
             assert!(s.vault.holds(&target));
             let c = cred::read(&target).unwrap().unwrap();
             assert_eq!(c.blob.as_slice(), POINTER_BLOB);
@@ -414,7 +447,9 @@ mod tests {
             );
             // Exactly the limit stays inline.
             let edge = "e".repeat(MAX_BLOB);
-            s.save("big.example", "ann", &edge, None).await.unwrap();
+            s.save("big.example", "ann", &edge, None, &[])
+                .await
+                .unwrap();
             assert!(!s.vault.holds(&target), "a shrunk secret leaves no file");
             assert_eq!(cred::read(&target).unwrap().unwrap().blob.len(), MAX_BLOB);
             assert_eq!(
@@ -422,7 +457,7 @@ mod tests {
                 Some(edge.as_str())
             );
             // Big again, then forget: credential and file both go.
-            s.save("big.example", "ann", &big, None).await.unwrap();
+            s.save("big.example", "ann", &big, None, &[]).await.unwrap();
             assert!(s.vault.holds(&target));
             s.forget("big.example", "ann").await.unwrap();
             assert!(!s.vault.holds(&target));

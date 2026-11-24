@@ -129,12 +129,13 @@ pub fn show(
                     changed,
                 } = d;
                 let host = sent.host.clone();
-                let r =
-                    rt::run(
-                        async move { v.save(target, &sent.host, &sent.user, &sent.password).await },
-                    )
-                    .await
-                    .unwrap_or_else(|| Err("Copper couldn't reach the keyring".into()));
+                let r = rt::run(async move {
+                    let origin = sent.origin.as_deref();
+                    v.save(target, &sent.host, &sent.user, &sent.password, origin)
+                        .await
+                })
+                .await
+                .unwrap_or_else(|| Err("Copper couldn't reach the keyring".into()));
                 let vault = target != Source::Keychain;
                 let name = source_title(target);
                 let said = match r {
@@ -195,6 +196,7 @@ mod tests {
     fn mac_wording() {
         let sent = Sent {
             host: "example.com".into(),
+            origin: None,
             user: "ann".into(),
             password: "pw".into(),
             at: 0.0,

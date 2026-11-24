@@ -202,6 +202,8 @@ scripts! {
     FormsSubmit = "forms/submit.js", Call, Page, None;
     /// Fill a one-time code (one box or one box per digit).
     FormsFillOtp = "forms/fill_otp.js", Call, Page, None;
+    /// Send the form the code box is in.
+    FormsSubmitOtp = "forms/submit_otp.js", Call, Page, None;
     /// Fill identity/card values by field kind; answers how many were filled.
     FormsFillValues = "forms/fill_values.js", Call, Page, None;
     /// Fill the focused box.

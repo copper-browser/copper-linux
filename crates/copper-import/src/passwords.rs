@@ -210,6 +210,7 @@ pub fn read(profile_dirs: &[PathBuf], keys: &Keys) -> Result<Found, ImportError>
             }
             found.logins.push(ImportedLogin {
                 host,
+                origin: copper_creds::origin::origin_of(&row.origin),
                 user: row.user,
                 password,
                 used: row.used,
@@ -292,7 +293,8 @@ mod tests {
                     host: "h".into(),
                     user: "u".into(),
                     password: "SECRET".into(),
-                    used: None
+                    used: None,
+                    origin: None
                 }
             )
             .contains("SECRET")

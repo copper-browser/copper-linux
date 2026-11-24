@@ -32,11 +32,13 @@ pub const SETTLE_DELAY: Duration = Duration::from_millis(1500);
 /// What the shell evaluates in the page for [`Settle::AskPage`].
 pub const HAS_PASSWORD_JS: &str = "!!(window.__officeForms && window.__officeForms.hasPassword())";
 
-/// A sign-in the page sent: host (lowercased, no `www.`), user, password,
-/// and when (seconds on any monotonic clock the caller keeps).
+/// A sign-in the page sent: host (lowercased, no `www.`), the page's origin
+/// (`location.origin`, saved with the login: [`crate::origin`]), user,
+/// password, and when (seconds on any monotonic clock the caller keeps).
 #[derive(Clone, PartialEq)]
 pub struct Sent {
     pub host: String,
+    pub origin: Option<String>,
     pub user: String,
     pub password: String,
     pub at: f64,
@@ -46,6 +48,7 @@ impl std::fmt::Debug for Sent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Sent")
             .field("host", &self.host)
+            .field("origin", &self.origin)
             .field("user", &self.user)
             .field("at", &self.at)
             .finish_non_exhaustive()
@@ -74,9 +77,16 @@ impl SignInWatch {
         self.sent.as_ref()
     }
 
-    /// The page sent a sign-in from `host` (the URL's host *now*, while the
-    /// page is still the sign-in page). No host, nothing held.
-    pub fn sent(&mut self, host: Option<&str>, user: &str, password: &str, now: f64) {
+    /// The page sent a sign-in from `host` at `origin` (the URL's *now*,
+    /// while the page is still the sign-in page). No host, nothing held.
+    pub fn sent(
+        &mut self,
+        host: Option<&str>,
+        origin: Option<&str>,
+        user: &str,
+        password: &str,
+        now: f64,
+    ) {
         let Some(host) = host.map(str::to_lowercase).filter(|h| !h.is_empty()) else {
             return;
         };
@@ -86,6 +96,7 @@ impl SignInWatch {
             .unwrap_or(host);
         self.sent = Some(Sent {
             host: bare,
+            origin: origin.map(str::to_string),
             user: user.into(),
             password: password.into(),
             at: now,
@@ -223,8 +234,18 @@ mod tests {
     #[test]
     fn navigation_judges_at_once() {
         let mut w = SignInWatch::default();
-        w.sent(Some("WWW.Example.com"), "ann", "pw", 10.0);
+        w.sent(
+            Some("WWW.Example.com"),
+            Some("https://www.example.com"),
+            "ann",
+            "pw",
+            10.0,
+        );
         assert_eq!(w.held().unwrap().host, "example.com");
+        assert_eq!(
+            w.held().unwrap().origin.as_deref(),
+            Some("https://www.example.com")
+        );
         assert_eq!(w.settle(true, 11.0), Settle::AskPage);
         assert_eq!(
             w.page_answered(Some(true)),
@@ -240,12 +261,12 @@ mod tests {
     #[test]
     fn in_page_forms_wait_and_newer_wins() {
         let mut w = SignInWatch::default();
-        w.sent(Some("example.com"), "ann", "pw", 0.0);
+        w.sent(Some("example.com"), None, "ann", "pw", 0.0);
         let Settle::RecheckAfter { delay, stamp } = w.settle(false, 0.2) else {
             panic!()
         };
         assert_eq!(delay, SETTLE_DELAY);
-        w.sent(Some("example.com"), "ann", "pw2", 0.5);
+        w.sent(Some("example.com"), None, "ann", "pw2", 0.5);
         assert_eq!(
             w.recheck(stamp, 1.7),
             Settle::Nothing,
@@ -260,9 +281,9 @@ mod tests {
     #[test]
     fn stale_and_hostless() {
         let mut w = SignInWatch::default();
-        w.sent(None, "ann", "pw", 0.0);
+        w.sent(None, None, "ann", "pw", 0.0);
         assert!(w.held().is_none());
-        w.sent(Some("example.com"), "ann", "pw", 0.0);
+        w.sent(Some("example.com"), None, "ann", "pw", 0.0);
         assert_eq!(w.settle(true, 45.0), Settle::Nothing);
         assert!(w.held().is_none());
     }
@@ -271,6 +292,7 @@ mod tests {
     fn decisions() {
         let sent = Sent {
             host: "accounts.example.com".into(),
+            origin: None,
             user: "ann".into(),
             password: "pw".into(),
             at: 0.0,

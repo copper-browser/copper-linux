@@ -57,6 +57,48 @@ async fn crud(s: &SecretStore) -> Res {
     ensure(s.all().await.map_err(e)?.len() == 4, || {
         "update duplicated".into()
     })?;
+    // Where it was saved from: kept with the item, kept by a save that
+    // doesn't say, replaced by one that does.
+    let bob_origin = || async {
+        let here = s.logins_for("example.com").await.map_err(e)?;
+        Ok::<_, String>(
+            here.into_iter()
+                .find(|l| l.user == "bob")
+                .and_then(|l| l.origin),
+        )
+    };
+    ensure(bob_origin().await?.is_none(), || {
+        "origin out of nowhere".into()
+    })?;
+    s.save_from(
+        "example.com",
+        "bob",
+        "pw-b2",
+        None,
+        Some("http://example.com:8080/x"),
+    )
+    .await
+    .map_err(e)?;
+    s.save("example.com", "bob", "pw-b2", None)
+        .await
+        .map_err(e)?;
+    let got = bob_origin().await?;
+    ensure(got.as_deref() == Some("http://example.com:8080"), || {
+        format!("origin not kept: {got:?}")
+    })?;
+    s.save_from(
+        "example.com",
+        "bob",
+        "pw-b2",
+        None,
+        Some("https://example.com"),
+    )
+    .await
+    .map_err(e)?;
+    let got = bob_origin().await?;
+    ensure(got.as_deref() == Some("https://example.com"), || {
+        format!("origin not replaced: {got:?}")
+    })?;
     s.touch("example.com", "ann", 300.0).await.map_err(e)?;
     let first = s.logins_matching("example.com").await.map_err(e)?;
     ensure(

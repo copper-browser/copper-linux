@@ -87,6 +87,11 @@ async fn bitwarden_end_to_end() {
     let dev = b.credentials_for("localhost");
     assert_eq!(dev.len(), 1);
     assert_eq!(dev[0].agent_hint, AgentHint::Deny);
+    // Any item's hint by its id: a login's, and none for a card outside Agents.
+    assert_eq!(b.agent_hint("i-agent"), Some(AgentHint::Allow));
+    assert_eq!(b.agent_hint("i-local"), Some(AgentHint::Deny));
+    assert_eq!(b.agent_hint("i-card"), Some(AgentHint::None));
+    assert_eq!(b.agent_hint("nope"), None);
 
     // Secrets from the in-memory cache, TOTP computed locally (RFC seed).
     assert_eq!(b.password("i-example").await.unwrap(), "example-pw");
@@ -110,9 +115,29 @@ async fn bitwarden_end_to_end() {
     // Save: update and create go through `bw encode` + stdin.
     b.update("i-example", "example-pw-2").await.unwrap();
     assert_eq!(b.password("i-example").await.unwrap(), "example-pw-2");
-    let id = b.create("new.example", "zoe", "zoe-pw").await.unwrap();
+    let id = b
+        .create("new.example", "zoe", "zoe-pw", None)
+        .await
+        .unwrap();
     assert_eq!(b.password(&id).await.unwrap(), "zoe-pw");
     assert_eq!(b.credentials_for("new.example")[0].user, "zoe");
+    assert_eq!(
+        b.credentials_for("new.example")[0].sites,
+        ["https://new.example"]
+    );
+    // Saved from a page: its scheme and port are the item's address.
+    b.create(
+        "dev.example",
+        "yan",
+        "yan-pw",
+        Some("http://dev.example:8080"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        b.credentials_for("dev.example")[0].sites,
+        ["http://dev.example:8080"]
+    );
 
     // Merge with other sources.
     let merged = combine(vec![], b.credentials_for("example.com"), vec![]);
@@ -273,7 +298,10 @@ async fn onepassword_password_mode() {
         "true"
     );
     assert_eq!(o.password(&alice_id).await.unwrap(), "alice-new-pw");
-    let made = o.create("new.example", "zed", "zed-pw").await.unwrap();
+    let made = o
+        .create("new.example", "zed", "zed-pw", None)
+        .await
+        .unwrap();
     assert_eq!(
         mock(&dir, &["mock", "check", "new.example", "zed", "zed-pw"]),
         "true"
@@ -343,7 +371,7 @@ async fn onepassword_app_and_service() {
     let rows = o.credentials_for("localhost");
     assert_eq!(rows.len(), 1, "only the Shared vault: {rows:?}");
     assert!(o.save_vault().is_none());
-    assert!(o.create("x.example", "u", "p").await.is_err());
+    assert!(o.create("x.example", "u", "p", None).await.is_err());
     let CredentialId::OnePassword(bob) = rows[0].id.clone() else {
         panic!()
     };

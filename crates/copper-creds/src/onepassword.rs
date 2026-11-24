@@ -1910,8 +1910,15 @@ impl OnePassword {
         Ok(())
     }
 
-    /// A new Login in the save vault; returns its id.
-    pub async fn create(&mut self, host: &str, user: &str, password: &str) -> Result<String> {
+    /// A new Login in the save vault; returns its id. `origin` is the page
+    /// it was saved from (its scheme and port), else the host's usual scheme.
+    pub async fn create(
+        &mut self,
+        host: &str,
+        user: &str,
+        password: &str,
+        origin: Option<&str>,
+    ) -> Result<String> {
         if !self.is_unlocked() {
             return Err(OpError::new(Problem::NotSignedIn, "1Password is locked"));
         }
@@ -1926,7 +1933,7 @@ impl OnePassword {
                 {"id": "username", "type": "STRING", "purpose": "USERNAME", "label": "username", "value": user},
                 {"id": "password", "type": "CONCEALED", "purpose": "PASSWORD", "label": "password", "value": password},
             ],
-            "urls": [{"label": "website", "primary": true, "href": format!("{}://{host}", scheme_for(host))}],
+            "urls": [{"label": "website", "primary": true, "href": origin.map_or_else(|| format!("{}://{host}", scheme_for(host)), str::to_string)}],
         });
         let body = serde_json::to_vec(&template).unwrap_or_default();
         let data = self
@@ -1978,6 +1985,18 @@ impl OnePassword {
             .filter(|i| i.is_login())
             .map(credential)
             .collect()
+    }
+
+    /// Any item's agent hint — a card's or identity's as well as a login's
+    /// — by its id (bare, without `op:`); `None` while locked or unknown.
+    pub fn agent_hint(&self, id: &str) -> Option<AgentHint> {
+        if !self.is_unlocked() {
+            return None;
+        }
+        self.items
+            .iter()
+            .find(|i| i.id == id)
+            .map(|i| credential(i).agent_hint)
     }
 }
 

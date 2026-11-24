@@ -164,6 +164,7 @@ Two deliberate Linux changes to the helper, both marked `// Linux:` in
 | `forms/fill_name.js` | `FormsFillName` | `Tab.swift:698` `Tab.fill` (its name step; Copper-linux only) | call | page |  |
 | `forms/submit.js` | `FormsSubmit` | `Tab.swift:574` `Tab.submitSignIn` | call | page |  |
 | `forms/fill_otp.js` | `FormsFillOtp` | `Tab.swift:582` `Tab.fillOTP` | call | page |  |
+| `forms/submit_otp.js` | `FormsSubmitOtp` | `Tab.swift:878` `Tab.submitOTP` | call | page |  |
 | `forms/fill_values.js` | `FormsFillValues` | `Tab.swift:599` `Tab.fillValues` | call | page |  |
 | `forms/fill_focused.js` | `FormsFillFocused` | `Tab.swift:613` `Tab.fillFocused` | call | page |  |
 | `forms/fill_field.js` | `FormsFillField` | `Tab.swift:627` `Tab.fillField` | call | page |  |

@@ -513,7 +513,7 @@ fn build_add(ui: &Rc<Ui>) {
             ui.add.set_expanded(false);
             let said = format!("Kept for {host}");
             act_saying(&ui, Some(said), move |v| async move {
-                v.save(Source::Keychain, &host, &who, &pw).await
+                v.save(Source::Keychain, &host, &who, &pw, None).await
             });
         }
     };

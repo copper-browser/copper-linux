@@ -66,7 +66,7 @@ unset V11
 # — Bitwarden: the mock CLI —
 export COPPER_BW_PATH="$REPO/crates/copper-creds/tests/fixtures/bw-mock/bw"
 export BW_MOCK_STATE="$W/mock/state.json"
-python3 "$E2E/bw_state.py" "$COPPER_BW_PATH" "$BW_MOCK_STATE"
+python3 "$E2E/bw_state.py" "$COPPER_BW_PATH" "$BW_MOCK_STATE" "$PORT"
 # No 1Password CLI on this box: the page shows how to get one.
 export COPPER_OP_PATH=/nonexistent
 

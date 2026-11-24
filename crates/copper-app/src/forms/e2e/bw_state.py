@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """The Bitwarden mock's state for the creds-ui run: its seed, with the
 localhost item carrying a TOTP key and a PIN field (and no agent deny), so the
-one-time-code and field fills can be exercised on the login fixture.
+one-time-code and field fills can be exercised on the login fixture —
+saved for the address the fixture is served from (an agent fills a login
+only on the exact address it was saved for).
 
-    bw_state.py <bw-mock script> <state.json>
+    bw_state.py <bw-mock script> <state.json> [port]
 """
 import importlib.machinery
 import importlib.util
@@ -19,5 +21,7 @@ for item in st["items"]:
     if item["id"] == "i-local":
         item["login"]["totp"] = "otpauth://totp/dev?secret=JBSWY3DPEHPK3PXP"
         item["fields"] = [{"name": "PIN", "value": "9876", "type": 1}]
+        if len(sys.argv) > 3:
+            item["login"]["uris"] = [{"uri": "http://localhost:%s/" % sys.argv[3], "match": None}]
 with open(sys.argv[2], "w") as f:
     json.dump(st, f, indent=1)

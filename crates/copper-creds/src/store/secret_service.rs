@@ -1,5 +1,6 @@
 //! The Linux backend: the Secret Service through `oo7`. Items carry
-//! `app`, `origin`, `username`, `xdg:schema` and (when known) `used`.
+//! `app`, `origin`, `username`, `xdg:schema` and (when known) `used`,
+//! `protocol` and `port`.
 
 use std::collections::HashMap;
 
@@ -73,7 +74,17 @@ impl Store {
         let host = attrs.get("origin")?.clone();
         let user = attrs.get("username").cloned().unwrap_or_default();
         let used = attrs.get("used").and_then(|u| u.parse::<f64>().ok());
-        Some(Login { host, user, used })
+        let origin = crate::origin::placed(
+            attrs.get("protocol").map(String::as_str),
+            attrs.get("port").map(String::as_str),
+            &host,
+        );
+        Some(Login {
+            host,
+            user,
+            used,
+            origin,
+        })
     }
 
     /// Logins for `origin`, or every login of this tag.
@@ -117,25 +128,31 @@ impl Store {
         user: &str,
         password: &str,
         used: Option<f64>,
+        place: &[(&str, String)],
     ) -> Result<(), StoreError> {
+        let existing = self.one(host, user).await?;
+        // What isn't said anew (when it was used, where it was saved from)
+        // is kept from the item being replaced.
+        let old = match &existing {
+            Some(item) => item.attributes().await.map_err(service)?,
+            None => HashMap::new(),
+        };
         let used_attr = used.map(used_text);
         let mut pairs = vec![("origin", host), ("username", user), ("xdg:schema", SCHEMA)];
-        if let Some(u) = &used_attr {
-            pairs.push(("used", u.as_str()));
+        if let Some(u) = used_attr.as_deref().or(old.get("used").map(String::as_str)) {
+            pairs.push(("used", u));
         }
-        let attrs = self.attrs(&pairs);
-        if let Some(item) = self.one(host, user).await? {
-            if used_attr.is_none() {
-                // Keep the old `used` when nothing new is said.
-                if let Some(old) = Self::login(&item).await.and_then(|l| l.used) {
-                    let old = used_text(old);
-                    let mut keep = attrs.clone();
-                    keep.insert("used", old.as_str());
-                    item.set_attributes(&keep).await.map_err(service)?;
-                    item.set_secret(password).await.map_err(service)?;
-                    return Ok(());
+        if place.is_empty() {
+            for key in ["protocol", "port"] {
+                if let Some(v) = old.get(key) {
+                    pairs.push((key, v.as_str()));
                 }
             }
+        } else {
+            pairs.extend(place.iter().map(|(k, v)| (*k, v.as_str())));
+        }
+        let attrs = self.attrs(&pairs);
+        if let Some(item) = existing {
             item.set_attributes(&attrs).await.map_err(service)?;
             item.set_secret(password).await.map_err(service)?;
             return Ok(());
