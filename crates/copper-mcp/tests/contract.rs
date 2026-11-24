@@ -1327,7 +1327,7 @@ async fn jev_run_takes_a_strategy_a_model_and_answers_json() {
             assert!(error);
             assert_eq!(
                 refused,
-                "strategy: classic, fast, literal, burst, lean, paste, watch, turbo, llm, llm=<model>"
+                "strategy: classic, fast, literal, burst, lean, paste, watch, near, reach, calm, deep, turbo, verify, submit, llm, llm=<model>"
             );
 
             let (text, error) = tool(

@@ -25,6 +25,8 @@ base64 = "0.22"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 uuid = { version = "1", features = ["v4"] }
 regex = "1"
+# Accents off for goal terms and citations (already in the lock via `url`).
+icu_normalizer = { version = "2", default-features = false, features = ["compiled_data"] }
 png = "0.17"
 jpeg-encoder = "0.6"
 
