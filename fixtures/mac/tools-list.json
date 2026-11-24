@@ -1250,15 +1250,15 @@
         "name": "cloud_history_delete"
       },
       {
-        "description": "Structured read of the current page: say what you want and get one JSON object back, drawn from the visible text and controls (optionally shaped by a JSON schema). Cheaper than reading a snapshot yourself when you need values, not a tree.",
+        "description": "Say what values you want from the page; get one JSON object (optionally matching a schema).",
         "inputSchema": {
           "properties": {
             "full": {
-              "description": "Read the whole page's text, not just what is on screen; default false",
+              "description": "Whole page, not just the screen",
               "type": "boolean"
             },
             "instruction": {
-              "description": "What to pull out, e.g. \"the flight options with airline, departure time, duration and price\"",
+              "description": "What to pull out, e.g. \"each flight's airline, times and price\"",
               "type": "string"
             },
             "schema": {
@@ -1266,7 +1266,6 @@
               "type": "object"
             },
             "tab": {
-              "description": "Tab id (or index) from browser_tabs list",
               "type": "string"
             }
           },
@@ -1278,19 +1277,18 @@
         "name": "jev_extract"
       },
       {
-        "description": "The fast indexed read of the current page: [n] role label · value for every visible control, plus the visible text — what Jev sees. Cheaper than browser_snapshot when you only need to know what's actionable.",
+        "description": "Fast indexed read of the page's visible controls and text (what Jev sees); cheaper than a snapshot.",
         "inputSchema": {
           "properties": {
             "limit": {
-              "description": "Cap on elements listed; default 80",
+              "description": "Default 80",
               "type": "number"
             },
             "tab": {
-              "description": "Tab id (or index) from browser_tabs list",
               "type": "string"
             },
             "text": {
-              "description": "Include the page's visible text; default true",
+              "description": "Visible text; default true",
               "type": "boolean"
             }
           },
@@ -1299,47 +1297,50 @@
         "name": "jev_observe"
       },
       {
-        "description": "FAST PATH. Give one plain-English goal and Copper drives the tab itself — yours if you opened or selected one, else the user's current tab —  with browser-use's jev-ultrafast loop: TypeSafe Jev picks an operation and an indexed element each cycle (~200 ms), a small LLM writes any text, until DONE or BLOCKED. Seconds instead of a snapshot/click round-trip per step. Returns the trace, the page, and the indexed element table. Verify DONE yourself.",
+        "description": "FAST PATH. One plain-English goal; Copper drives your tab (else the user's) until DONE or BLOCKED. Returns the trace, page and elements. Verify DONE yourself.",
         "inputSchema": {
           "properties": {
             "elements": {
-              "description": "Append the indexed element table of the final page; default true",
+              "description": "Default true",
               "type": "boolean"
             },
             "focus": {
-              "description": "With newTab: also show the new tab to the user. Default false",
+              "description": "With newTab: show it",
               "type": "boolean"
             },
             "goal": {
-              "description": "Everything the run must achieve, with concrete values: places, dates, names, filters, and when to stop (\"stop when results are visible\").",
+              "description": "Everything to achieve, with concrete values and when to stop",
               "type": "string"
             },
             "json": {
-              "description": "Return the run as one JSON object (status, timings, steps, page) instead of the text report; default false",
+              "description": "JSON, not the text report",
               "type": "boolean"
             },
             "maxSteps": {
-              "description": "Cap on actions; default 60",
+              "description": "Default 60",
               "type": "number"
             },
             "model": {
-              "description": "The Jev to ask for this run (jev-latest, jev-preview, jev-1.14.0); default is the configured one. Box needs jev-1.14.0 or jev-preview.",
+              "description": "jev-latest, jev-preview, jev-1.14.0",
               "type": "string"
             },
             "newTab": {
-              "description": "Open url in a new tab of your own, in the background — the user's tab does not change, and your later calls land on it",
+              "description": "url in a background tab of yours",
+              "type": "boolean"
+            },
+            "private": {
+              "description": "With newTab: private, nothing kept",
               "type": "boolean"
             },
             "strategy": {
-              "description": "Speed-ups, comma-separated; default is this Mac's Fast mode (turbo, with the pointer glide only when the tab is on screen), classic is the original loop: fast (no pointer glide), literal (Jev matches the goal's quoted values to fields; no text model), burst (literal, and fills every matched field at once), lean (trimmed state), paste (set a field's value in one go), watch (WAIT ends when the page changes), turbo (all of those), llm or llm=<model> (an LLM decides instead of Jev). Default classic.",
+              "description": "Comma-separated: classic, fast, literal, burst, lean, paste, watch, turbo, verify, submit, llm[=model]; default this Mac's Fast mode",
               "type": "string"
             },
             "tab": {
-              "description": "Tab id (or index) from browser_tabs list, to run in that tab",
               "type": "string"
             },
             "url": {
-              "description": "Open this address first (in your tab, or a new one when newTab is true)",
+              "description": "Open this first",
               "type": "string"
             }
           },
@@ -1351,23 +1352,20 @@
         "name": "jev_run"
       },
       {
-        "description": "One jev-ultrafast decision and action on your tab (else the user's current tab), for supervising a run a step at a time. The first call with a goal starts a session; later calls with the same goal continue it. Returns what Jev chose, what happened, and the fresh element table.",
+        "description": "One jev-ultrafast step on your tab; the same goal again continues the session. Returns the choice, what happened and the element table.",
         "inputSchema": {
           "properties": {
             "goal": {
-              "description": "The goal; same text as before to continue the session",
+              "description": "Same text to continue",
               "type": "string"
             },
             "model": {
-              "description": "The Jev to ask (jev-latest, jev-preview, jev-1.14.0); read when the session starts",
               "type": "string"
             },
             "strategy": {
-              "description": "fast, literal, burst, lean, turbo, llm — see jev_run; read when the session starts",
               "type": "string"
             },
             "tab": {
-              "description": "Tab id (or index) from browser_tabs list",
               "type": "string"
             }
           },

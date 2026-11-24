@@ -126,6 +126,19 @@ impl<P: Platform> Host for AppHost<P> {
         )
     }
 
+    fn open_private_tab(&self, url: &str) -> TabId {
+        let Some(shell) = self.shell() else {
+            return TabId::new();
+        };
+        shell.open(
+            url,
+            crate::shell::OpenTab {
+                private: true,
+                ..Default::default()
+            },
+        )
+    }
+
     fn show_tab(&self, id: &TabId) {
         if let Some(shell) = self.shell() {
             shell.select(id);

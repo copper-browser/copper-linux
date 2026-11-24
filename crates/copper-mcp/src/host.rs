@@ -158,6 +158,10 @@ pub trait Host: 'static {
     /// opens it behind the user's tab — their view does not change.
     fn open_tab(&self, url: &str, foreground: bool) -> TabId;
 
+    /// Open `url` in a private tab (nothing kept: no cookies, no history),
+    /// behind the user's tab (`jev_run` `newTab` + `private`).
+    fn open_private_tab(&self, url: &str) -> TabId;
+
     /// Put a tab in front of the user, on purpose (`AgentTabs.show`).
     fn show_tab(&self, id: &TabId);
 

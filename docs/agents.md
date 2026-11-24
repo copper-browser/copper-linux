@@ -234,7 +234,7 @@ the server's instructions tell the agent to reach for them first:
 
 | tool | does |
 |---|---|
-| `jev_run` | Takes a `goal` (+ `url`, `newTab`, `focus`, `tab`, `maxSteps`, `elements`, `strategy`, `model`, `json`). Runs the [jev-ultrafast](https://github.com/browser-use/jev-ultrafast) loop in the caller's tab until DONE, BLOCKED, or the budget runs out. Answers with the trace, the page and the indexed element table. |
+| `jev_run` | Takes a `goal` (+ `url`, `newTab`, `focus`, `private`, `tab`, `maxSteps`, `elements`, `strategy`, `model`, `json`). Runs the [jev-ultrafast](https://github.com/browser-use/jev-ultrafast) loop in the caller's tab until DONE, BLOCKED, or the budget runs out. Answers with the trace, the page and the indexed element table. `newTab` + `private` opens a private tab behind the user's (nothing kept). |
 | `jev_step` | One decision and its action; calling again with the same `goal` continues the session (`strategy` and `model` are read when it starts). |
 | `jev_observe` | What Jev sees: every visible control as `[3] combobox  Where to? · London`, plus the visible text. |
 | `jev_extract` | Takes an `instruction` (+ `schema`, `full`) and returns one JSON object drawn from the page. |
@@ -261,31 +261,57 @@ DONE is the model's own claim, so check the page.
 ### Faster runs (`strategy`)
 
 *Fast mode* is on by default (`jevFast` in `intelligence.json`; set it to
-`false` for the original loop): a run takes `turbo`, with the pointer glide
-kept for a tab that is on the user's screen. `jev_run` / `jev_step` take
-`strategy`, comma-separated speed-ups, to choose for one run
+`false` for the original loop): a run takes `turbo` and `submit`, with the
+pointer glide kept for a tab that is on the user's screen. `jev_run` /
+`jev_step` take `strategy`, comma-separated speed-ups, to choose for one run
 (`copper run --strategy …`):
 
 | word | what changes |
 |---|---|
 | `fast` | no cosmetic pointer glide before a click; the trail still draws |
-| `literal` | each value the goal quotes (`"maya@northwind.test"`, email addresses) becomes one Jev question in the same request — *which field holds this?* — and a TYPE_TEXT types the value Jev matched. No text-model call; a field no quoted value fits still asks the text model |
-| `burst` | `literal`, and every other value Jev matched surely (≥ 60%) is typed in the same breath, before the next read: a sign-in form is one decision, not three |
-| `lean` | the state Jev reads is trimmed (page text to 1,200 characters, five recent actions) |
-| `paste` | a field's value is set in one go (native setter, input and change events) instead of a key event per character |
-| `watch` | WAIT ends when the page changes (capped at 1.5 s) instead of after 100 ms |
+| `literal` | each value the goal names — what it quotes (`"maya@northwind.test"`, “…”, „…“, «…», '…'), and the places, names, airport codes and dates it says outright, in any case and in seven languages (*from zurich to london on january 20, 2027*, *ZRH → LHR on 2027-01-20*, *von Zürich nach London am 20. Januar 2027*) — becomes one Jev question in the same request — *which field holds this?* — and a TYPE_TEXT types the value Jev matched. No text-model call; a field no named value fits still asks the text model |
+| `burst` | `literal`, and every other value Jev matched surely (≥ 60%) is typed in the same breath, before the next read: a sign-in form is one decision, not three. Never into or after a combobox or search box: its list of suggestions is the next read |
+| `lean` | the state Jev reads is trimmed (page text to 1,200 characters, five recent actions; a date picker shows only the goal's months) |
+| `paste` | a field's value goes in as one trusted edit (select all, insert text — the page hears it as typing, so an autocomplete opens) and is read back, instead of a key event per character |
+| `watch` | WAIT ends when the page has answered: the data calls the last action started are back and quiet for 400 ms, or what Jev reads changed (at least 300 ms, 1.2 s at most); a click the page has not answered yet gets up to a second to show something before Jev is asked again; the same control again after it changed nothing waits 1 s, then 2 s, first |
+| `near` | the settle after an input ends on the first frame with nothing changing and no animation running on screen, 400 ms at most. Fewer decisions are thrown away as stale: the run's first read and the read after a stale decision wait for the page to stand still, typing checks its field the way a click does, a scroll only that the page hasn't moved, and a WAIT the page already answered counts as done |
+| `reach` | the links the goal names that sit above or below the viewport are offered like any other link (ranked by the goal's rarer words, at most 12; `jev_observe`'s table marks them *below the viewport*) and a click scrolls them in first; after four scrolls in a row that showed nothing new the goal names, scrolling is not offered until something else is done |
 | `turbo` | all of the above |
-| `watched` | like `fast`, but the glide stays when the tab is on the user's screen (Fast mode is `turbo` + `watched`) |
+| `calm` | an attribute written with the value it already had is no change, and a `style` or `class` write counts only when its element had none in the 200 ms before, so a page that restyles every frame goes quiet in the settle |
+| `deep` | the read covers open shadow roots and same-origin frames too (40 roots at most): their controls and text are offered, a frame's controls at their place on the top page, and a click or typing lands there. Cross-origin frames stay unread |
+| `verify` | not part of Fast mode: beside each decision Jev also says how likely something is visibly left undone; a DONE the page contradicts (≥ 50%) is refused, twice at most (`done_check`, `done_refused` in the JSON trace) |
+| `submit` | Return after typing into a search box that is its form's only field and shows no suggestions: the search is made, not just written |
+| `watched` | like `fast`, but the glide stays when the tab is on the user's screen (Fast mode is `turbo` + `submit` + `calm` + `deep` + `watched`) |
 | `classic` | none of them: the original loop |
-| `llm`, `llm=<model>` | a small LLM (the text model, else Haiku) decides instead of Jev: one chat call returns the operation, the target and any text |
+| `llm`, `llm=<model>` | a small LLM (the text model, else Haiku) decides instead of Jev: one chat call returns the operation, the target, any text and how sure it is; an answer that names nothing on offer is asked once more |
+
+Some things hold whatever the strategy. A DONE or BLOCKED under 80% gets one
+second look after the page settles in full; a DONE still under it ends
+**unsure**, as does one whose value typed from the goal the page doesn't show.
+A goal that asks something (*what is…*, *tell me…*) ends DONE when the answer
+read off the page is found on it, and `jev_run json: true` returns that
+`answer` with the page's words around it (`snippet`). A payment, post or
+order goes once: a send the page took without a word is not sent again, and
+Jev is asked DONE or BLOCKED instead; a search, a retry or a Reload may go
+again. The same control clicked twice on an unchanged page becomes a WAIT,
+then the run ends unsure. A control with something drawn over it is left out
+and Jev uses what is on top. A control that asks for a human check — *I am
+human*, a CAPTCHA, *press and hold* — is never clicked or typed into: the run
+ends BLOCKED and says to hand the page to the user. What a page asks its
+server is heard in the page (its `fetch` and `XMLHttpRequest` calls); the
+Mac hears it from WebKit itself.
 
 `model` asks another Jev for the run (`jev-preview`, `jev-1.14.0`).
 `json: true` (`copper run --json-run`) returns the run as one object —
-`status`, `elapsed_ms`, `totals` (`strategy`, Jev's ms and tokens, stale
-reads, bursts) and one entry per step with where its time went
-(`observe_ms`, `decide_ms`, `jev_ms`, `text_ms`, `act_ms`, `settle_ms`;
+`status`, `elapsed_ms`, `totals` and one entry per step with where its time
+went (`observe_ms`, `decide_ms`, `jev_ms`, `text_ms`, `act_ms`, `settle_ms`,
+`settle_capped` and `settle_why`; `net`, `in_flight`, `sent`, `form_sent`;
 `burst: true` for a field typed without a decision of its own) — for a
-harness.
+harness. `totals` count every decision asked, including a DONE, a BLOCKED, a
+refused DONE and one the page went stale under (`stale`, `stale_ops`), with
+`text_calls`, `text_reused`, `text_model`, `settles`, `settles_capped`,
+`doubts` and `resends_stopped`. Jev's typing asks a fast gateway model
+(`llama`) first when Settings names no text model, with Haiku behind it.
 
 Jev can also choose **SIGN_IN** on a page with a password field when an
 account for the site is shared with agents, and **AUTOFILL_CARD** /

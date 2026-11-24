@@ -28,6 +28,8 @@ pub enum PhaseKind {
     Write,
     Act,
     Settle,
+    /// A pause before trying the same control again.
+    Wait,
 }
 
 /// How a run ended.
@@ -40,6 +42,8 @@ pub enum Status {
     Error,
     Stopped,
     Ended,
+    /// Jev did not show the goal met (a doubted DONE, a guard that ended the run).
+    Unsure,
 }
 
 impl Status {
@@ -51,6 +55,7 @@ impl Status {
             "budget" => Status::Budget,
             "stopped" => Status::Stopped,
             "ended" => Status::Ended,
+            "unsure" => Status::Unsure,
             _ => Status::Error,
         }
     }

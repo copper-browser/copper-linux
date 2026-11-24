@@ -684,12 +684,15 @@ pub async fn jev_ask(
 }
 
 /// The router's reply.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Reply {
     pub json: Map<String, Value>,
     pub text: String,
     pub latency_ms: f64,
     pub model: String,
+    /// What the gateway billed, when it says (`usage`).
+    pub input_tokens: i64,
+    pub output_tokens: i64,
 }
 
 /// The first JSON object in a reply, fences and chatter ignored.
@@ -708,7 +711,15 @@ pub fn json_in(text: &str) -> Map<String, Value> {
 
 /// A chat-completions body (`Router.body`), with prompt-cache marks on the
 /// system message for a Claude model (`PromptCache.chat`, `.prefix`).
-pub fn router_body(model: &str, max_tokens: u32, system: &str, user: &str, marks: bool) -> Value {
+/// `json`: JSON mode (`response_format`), which small models answer faster with.
+pub fn router_body(
+    model: &str,
+    max_tokens: u32,
+    system: &str,
+    user: &str,
+    marks: bool,
+    json: bool,
+) -> Value {
     let system_message = if marks && family(model).is_some() && !system.is_empty() {
         json!({ "role": "system", "content": [
             { "type": "text", "text": system, "cache_control": { "type": "ephemeral" } }
@@ -716,11 +727,15 @@ pub fn router_body(model: &str, max_tokens: u32, system: &str, user: &str, marks
     } else {
         json!({ "role": "system", "content": system })
     };
-    json!({
+    let mut body = json!({
         "model": model,
         "max_tokens": max_tokens,
         "messages": [system_message, { "role": "user", "content": user }],
-    })
+    });
+    if json {
+        body["response_format"] = json!({ "type": "json_object" });
+    }
+    body
 }
 
 fn cache_refused(data: &[u8]) -> bool {
@@ -737,6 +752,7 @@ pub async fn router_ask(
     user: &str,
     timeout: Duration,
     max_tokens: u32,
+    json: bool,
 ) -> Result<Reply, String> {
     if keys.router_key.is_empty() {
         return Err("No router key — Settings › Intelligence".into());
@@ -750,7 +766,7 @@ pub async fn router_ask(
     );
     let started = Instant::now();
     let send = |marks: bool| {
-        let body = serde_json::to_vec(&router_body(model, max_tokens, system, user, marks))
+        let body = serde_json::to_vec(&router_body(model, max_tokens, system, user, marks, json))
             .unwrap_or_default();
         net.post(url.clone(), keys.router_key.clone(), body, timeout)
     };
@@ -784,6 +800,8 @@ pub async fn router_ask(
         text,
         latency_ms,
         model: payload["model"].as_str().unwrap_or(model).to_string(),
+        input_tokens: payload["usage"]["prompt_tokens"].as_i64().unwrap_or(0),
+        output_tokens: payload["usage"]["completion_tokens"].as_i64().unwrap_or(0),
     })
 }
 
@@ -1231,12 +1249,16 @@ mod tests {
     fn json_in_text() {
         assert_eq!(json_in("Sure: ```{\"text\": \"x\"}```")["text"], "x");
         assert!(json_in("nothing").is_empty());
-        let body = router_body("sonnet", 10, "sys", "u", true);
+        let body = router_body("sonnet", 10, "sys", "u", true, false);
         assert_eq!(
             body["messages"][0]["content"][0]["cache_control"]["type"],
             "ephemeral"
         );
-        let body = router_body("gpt-4o", 10, "sys", "u", true);
+        let body = router_body("gpt-4o", 10, "sys", "u", true, false);
         assert_eq!(body["messages"][0]["content"], "sys");
+        // JSON mode only when asked (Intelligence.swift's checks).
+        assert!(body.get("response_format").is_none());
+        let body = router_body("llama", 1, "", "", true, true);
+        assert_eq!(body["response_format"], json!({ "type": "json_object" }));
     }
 }

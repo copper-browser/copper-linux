@@ -469,7 +469,7 @@ pub fn make_request(command: &str, args: &[String]) -> Result<Spec, Early> {
                             Some(v) => arguments.insert("strategy".into(), json!(v)),
                             None => {
                                 return bad(
-                                    "run --strategy takes classic, fast, literal, burst, lean, paste, watch, turbo, llm or llm=<model>, comma-separated",
+                                    "run --strategy takes classic, fast, literal, burst, lean, paste, watch, near, reach, calm, deep, turbo, llm or llm=<model>, comma-separated",
                                 );
                             }
                         };

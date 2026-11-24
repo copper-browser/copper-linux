@@ -150,6 +150,7 @@ pub async fn run(net: &Net, eff: &Effective, claude: Option<&Arc<Account>>) -> C
             "{\"ping\": true} → reply {\"pong\": true}",
             Duration::from_secs(15),
             20,
+            false,
         )
         .await;
         match reply {

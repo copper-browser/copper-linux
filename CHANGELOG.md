@@ -5,6 +5,49 @@ release dates.
 
 ## Unreleased
 
+### Added
+
+- **Jev finishes what it starts, faster.** A field's text goes in as one
+  real edit, so a site's suggestions open; places, names, airport codes and
+  dates the goal says outright (*from Zurich to London on January 20, 2027*,
+  in seven languages) are typed without asking a model, and when one is
+  needed a fast small one is asked first and its answer is kept for the run;
+  after typing into a lone search box Jev presses Return; the page is read as
+  soon as it stands still, a new page as soon as it is parsed; and a checkbox
+  drawn by its label can be clicked. `jev_run` takes `private: true` for a
+  tab that keeps nothing. As on the Mac (copper-browser/Copper#181).
+- **Jev waits for a page's answer, and never sends a payment twice.** What a
+  page asks its server (`fetch`, `XMLHttpRequest`) is now heard in the page:
+  a WAIT or a click waits for those calls to come back before Jev decides
+  again, and a click the page has not answered gets a second first. A form
+  or a POST the page took without a word is never sent again — Jev is asked
+  whether the goal is met and the run ends "submitted, no confirmation
+  shown" — while a search, a retry or a Reload may go again; the same button
+  clicked twice on an unchanged page becomes a WAIT, then the run stops.
+  Each step's trace says what it sent and which calls it made. The Mac hears
+  the calls from WebKit itself. As on the Mac (copper-browser/Copper#181).
+- **Jev says Done only when sure.** A DONE or BLOCKED under 80% gets a
+  second look once the page has settled in full; still doubtful, the run
+  ends "unsure" ("Not sure it worked" in the chat), as does a DONE whose
+  value typed from the goal the page doesn't show. A page asking "I am
+  human" ends the run and is handed back, sponsored links are left out, and
+  the LLM decider's retry says what was wrong. As on the Mac
+  (copper-browser/Copper#181).
+- **Jev reaches further and sees more of the page.** A link the goal names
+  above or below the screen is offered and scrolled to on the click, four
+  scrolls that find nothing new end the scrolling, a date picker shows only
+  the goal's months, and Jev's read covers open shadow roots and same-origin
+  frames, so it can click and type in them. The settle no longer counts a
+  page writing the same value again or restyling an element every frame. As
+  on the Mac (copper-browser/Copper#181).
+- **Jev answers questions and gets past search panels.** A goal that asks
+  something ("what is…", "tell me…") ends DONE when the answer Jev read is
+  found on the page, and `jev_run json: true` returns that `answer` with the
+  page's words around it (`snippet`). A control with something drawn over it
+  (arXiv's search panel) is left out and Jev uses what is on top instead of
+  calling the page one that "kept changing". As on the Mac
+  (copper-browser/Copper#182).
+
 ## 0.6.4 — 2026-11-17
 
 Agents never see a secret Copper filled.

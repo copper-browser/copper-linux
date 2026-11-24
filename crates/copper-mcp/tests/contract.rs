@@ -33,6 +33,8 @@ struct World {
     inputs: Vec<(String, InputEvent)>,
     announced: Vec<String>,
     opened_foreground: Vec<bool>,
+    /// Tabs opened private (`jev_run` `private`).
+    opened_private: Vec<TabId>,
     released: Vec<TabId>,
     /// The fake page's state for Jev: clicked once → marker m2.
     clicked: bool,
@@ -318,6 +320,12 @@ impl Host for FakeHost {
         if foreground {
             w.active = Some(id.clone());
         }
+        id
+    }
+
+    fn open_private_tab(&self, url: &str) -> TabId {
+        let id = self.open_tab(url, false);
+        self.0.borrow_mut().opened_private.push(id.clone());
         id
     }
 

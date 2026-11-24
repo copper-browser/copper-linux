@@ -149,6 +149,8 @@ pub(crate) struct State {
     pub calls: u64,
     pub last_tool: String,
     pub jev_note: String,
+    /// Text models that failed this launch ("no such model"): not asked again.
+    pub refused_text_models: std::collections::BTreeSet<String>,
 }
 
 /// The MCP server and its tools, bound to one [`Host`]. Lives on the host's

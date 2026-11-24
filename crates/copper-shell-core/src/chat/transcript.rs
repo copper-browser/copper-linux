@@ -155,6 +155,7 @@ impl Run {
             Status::Running => format!("Thinking · {count}"),
             Status::Done => said("Done"),
             Status::Blocked => said("Blocked"),
+            Status::Unsure => said("Not sure it worked"),
             Status::Budget => said("Out of steps"),
             Status::Error => said("Error"),
             Status::Ended => said("Let go"),
