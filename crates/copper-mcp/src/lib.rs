@@ -29,6 +29,7 @@ pub mod client;
 pub mod cloud_cli;
 pub mod config;
 pub mod dialogs;
+pub mod downloads;
 pub mod drive;
 pub mod host;
 pub mod input;
@@ -38,6 +39,7 @@ pub mod screenshot;
 pub mod secrets;
 pub mod server;
 pub mod shot;
+pub mod state_tools;
 pub mod tools;
 pub mod transport;
 pub mod ultrafast;
@@ -48,7 +50,10 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::time::Instant;
 
-pub use host::{Content, EnginePage, GroupInfo, Host, IntelligenceSource, Page, TabId, TabInfo};
+pub use host::{
+    Content, EnginePage, GroupInfo, HandoffAnswer, Host, IntelligenceSource, Page, SpaceInfo,
+    TabId, TabInfo,
+};
 pub use who::Who;
 
 /// A tool's failure: the text the agent reads (`isError: true`).
@@ -159,6 +164,8 @@ pub(crate) struct State {
     pub jev_note: String,
     /// Text models that failed this launch ("no such model"): not asked again.
     pub refused_text_models: std::collections::BTreeSet<String>,
+    /// Callers (`Who::key`) that have had `catalogue::OPS_GUIDE`.
+    pub guided: HashSet<String>,
     /// Questions and file choosers on agents' tabs (`dialogs`).
     pub dialogs: dialogs::Book,
 }

@@ -308,10 +308,15 @@ pub fn words(tool: &str, args: &Map<String, Value>) -> (String, Option<String>) 
         .map(str::to_string)
         .or_else(|| reference.map(|r| format!("'{r}'")))
         .unwrap_or_default();
-    let detail = arg_str(args, "reason")
+    let reason = arg_str(args, "reason")
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
+    // A handoff's row says what the person is asked to do.
+    let detail = match arg_str(args, "message") {
+        Some(m) if tool == "browser_handoff" => Some(m.to_string()),
+        _ => reason,
+    };
     let host = arg_str(args, "url").map(host_of).unwrap_or_default();
     let sentence = |verb: &str| {
         if named.is_empty() {
@@ -396,6 +401,7 @@ pub fn words(tool: &str, args: &Map<String, Value>) -> (String, Option<String>) 
             }
         }
         "browser_evaluate" => "Running a script in the page".into(),
+        "browser_handoff" => "Waiting for you to finish a step".into(),
         "browser_wait_for" => {
             if let Some(text) = arg_str(args, "text").filter(|t| !t.is_empty()) {
                 format!("Waiting for “{}”", prefix(text, 40))
@@ -461,6 +467,8 @@ pub fn words(tool: &str, args: &Map<String, Value>) -> (String, Option<String>) 
             "Filling a saved {}",
             arg_str(args, "kind").unwrap_or("item")
         ),
+        "browser_vault_save" => "Saving a login to the vault".into(),
+        "browser_vault_note" => "Saving a secure note to the vault".into(),
         "browser_perf_probe" => "Sampling the page's performance".into(),
         "browser_crashes" => "Reading Copper's crash history".into(),
         "jev_observe" => "Reading the page (Jev)".into(),
@@ -547,6 +555,7 @@ pub fn operation(tool: &str, args: &Map<String, Value>) -> String {
         "browser_close" => "TABS",
         "browser_sign_in" => "SIGN_IN",
         "browser_autofill" => "AUTOFILL",
+        "browser_vault_save" | "browser_vault_note" => "VAULT",
         "browser_perf_probe" => "PROBE",
         "canvas_read" | "canvas_list" => "READ",
         t if t.starts_with("canvas_") => "CANVAS",
@@ -574,6 +583,8 @@ pub fn may_change(tool: &str) -> bool {
             | "browser_wait_for"
             | "browser_crashes"
             | "cloud_history_delete"
+            | "browser_vault_save"
+            | "browser_vault_note"
     ) && !tool.starts_with("canvas_")
 }
 
@@ -600,6 +611,8 @@ pub fn target(tool: &str, args: &Map<String, Value>) -> String {
             .unwrap_or("")
             .to_string(),
         "browser_sign_in" => s("account"),
+        "browser_vault_save" => arg_str(args, "url").map(host_of).unwrap_or_default(),
+        "browser_vault_note" => s("name"),
         _ => arg_str(args, "ref")
             .or_else(|| arg_str(args, "selector"))
             .unwrap_or("")
@@ -653,6 +666,20 @@ mod tests {
         );
         assert_eq!(
             words(
+                "browser_handoff",
+                &m(json!({"message": "Solve the check", "reason": "captcha"}))
+            ),
+            (
+                "Waiting for you to finish a step".to_string(),
+                Some("Solve the check".to_string())
+            )
+        );
+        assert_eq!(
+            words("browser_handoff", &m(json!({"reason": "captcha"}))).1,
+            Some("captcha".to_string())
+        );
+        assert_eq!(
+            words(
                 "browser_take_screenshot",
                 &m(json!({"selector": "#box-b", "scale": 2}))
             )
@@ -686,6 +713,33 @@ mod tests {
             ),
             Some("•••".into())
         );
+    }
+
+    #[test]
+    fn vault_saves_show_no_value() {
+        let save = m(json!({"url": "https://www.x.com/a?t=1", "username": "me",
+                            "password": "pw-123", "totp": "JBSWY3DP", "notes": "n-456"}));
+        let note = m(json!({"name": "Codes", "text": "1111 2222"}));
+        for (tool, args) in [("browser_vault_save", &save), ("browser_vault_note", &note)] {
+            let (title, detail) = words(tool, args);
+            let shown = format!(
+                "{title} {detail:?} {} {:?} {}",
+                target(tool, args),
+                typed(tool, args),
+                operation(tool, args)
+            );
+            for secret in ["pw-123", "JBSWY3DP", "n-456", "1111"] {
+                assert!(!shown.contains(secret), "{shown}");
+            }
+            assert!(!may_change(tool));
+        }
+        assert_eq!(
+            words("browser_vault_save", &save).0,
+            "Saving a login to the vault"
+        );
+        assert_eq!(target("browser_vault_save", &save), "www.x.com");
+        assert_eq!(target("browser_vault_note", &note), "Codes");
+        assert_eq!(operation("browser_vault_note", &note), "VAULT");
     }
 
     #[test]

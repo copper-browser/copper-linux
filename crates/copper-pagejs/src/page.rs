@@ -165,6 +165,16 @@ pub fn click(target: &Locator, double: bool, button: &str) -> Call<String> {
     )
 }
 
+/// What is at viewport point (`x`, `y`) CSS px: `tag#id "label"`, `""` off the viewport.
+pub fn element_at(x: f64, y: f64) -> Call<String> {
+    Call::new(Script::ElementAt, json!({ "x": x, "y": y }))
+}
+
+/// A DOM click at viewport point (`x`, `y`) CSS px; false when nothing is there.
+pub fn click_at(x: f64, y: f64) -> Call<bool> {
+    Call::new(Script::ClickAt, json!({ "x": x, "y": y }))
+}
+
 pub fn hover(target: &Locator) -> Call<String> {
     Call::new(Script::Hover, json!({ "target": target.script() }))
 }

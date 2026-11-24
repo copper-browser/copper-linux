@@ -811,7 +811,12 @@ impl<H: ChatHost> Inner<H> {
                     step.running = false;
                     step.ok = !failed;
                     step.ms = millis_since(step.at, now);
-                    step.text = words::summary(&args, &out.text);
+                    // Secret redaction: a vault save's values never reach the transcript.
+                    step.text = if name.starts_with("browser_vault_") {
+                        words::summary(&Map::new(), &out.text)
+                    } else {
+                        words::summary(&args, &out.text)
+                    };
                     if let Some(line) = out.line.as_deref().filter(|l| !l.is_empty()) {
                         step.title = line.to_string();
                     }

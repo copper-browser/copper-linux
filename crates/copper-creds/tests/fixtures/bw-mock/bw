@@ -6,13 +6,14 @@ shapes, from a JSON state file ($BW_MOCK_STATE):
 
     --version | status | config server URL | login --apikey | login EMAIL --passwordenv V
     unlock --passwordenv V --raw | lock | logout | sync | list items | list folders
-    get password|totp|item ID | get template item | encode | create item | edit item ID
+    get password|totp|item ID | get template item | encode | create item|folder | edit item ID
     generate
 
 The master password is "correct horse"; API key client_id "user.mock",
 secret "mock-secret". Sessions are random tokens; a command that needs the
 vault checks BW_SESSION. Every call is appended to calls.log beside the state:
 argv and the *names* of BW_* variables, never their values or stdin.
+An item named "mock-refuse" fails with an error quoting its login and notes.
 """
 import base64
 import json
@@ -200,7 +201,13 @@ def main(argv):
             fail("the mock refuses encoded items on argv")
         raw = sys.stdin.read().strip()
         obj = json.loads(base64.b64decode(raw))
-        if cmd == "create":
+        if obj.get("name") == "mock-refuse":
+            # Like a bw error that quotes what it was sent.
+            fail("Invalid item: " + json.dumps(obj.get("login")) + " " + json.dumps(obj.get("notes")))
+        if rest[0] == "folder":
+            obj["id"] = "f-" + secrets.token_hex(4)
+            st["folders"].append(obj)
+        elif cmd == "create":
             obj["id"] = "i-" + secrets.token_hex(4)
             st["items"].append(obj)
         else:

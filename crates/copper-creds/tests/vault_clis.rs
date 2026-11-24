@@ -180,6 +180,231 @@ async fn bitwarden_end_to_end() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `copper bitwarden save -|note -` / browser_vault_* against the mock
+/// (BitwardenSave.swift): create, update in place only when shared, the
+/// Agents folder made in folder mode, notes, a locked vault, and errors
+/// with every value cut out.
+#[tokio::test]
+async fn bitwarden_vault_write() {
+    use serde_json::{Value, json};
+    let dir = scratch("bw-save");
+    let mut b = bw(&dir, false);
+    b.start().await;
+    b.login("ann@example.com", "correct horse", None, None)
+        .await
+        .unwrap();
+    let args = |v: Value| v.as_object().cloned().unwrap();
+    let none: &[String] = &[];
+    let state = || -> Value {
+        serde_json::from_str(&std::fs::read_to_string(dir.join("mock/state.json")).unwrap())
+            .unwrap()
+    };
+    let item = |id: &str| -> Value {
+        state()["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["id"] == id)
+            .cloned()
+            .unwrap()
+    };
+
+    // Folder mode, no Agents folder yet: it is made and the login lands there.
+    let mut st = state();
+    st["folders"] = json!([{"id": "f-work", "name": "Work"}]);
+    std::fs::write(dir.join("mock/state.json"), st.to_string()).unwrap();
+    let made = b
+        .vault_write(
+            "save",
+            &args(
+                json!({"url": "https://www.pubadhub.com/login?token=abc", "username": "me@x.com",
+                         "password": "s3cret-pw", "totp": "jbsw y3dp ehpk 3pxp"}),
+            ),
+            false,
+            none,
+        )
+        .await;
+    assert_eq!(made["ok"], true, "{made}");
+    assert_eq!(made["created"], true);
+    assert_eq!(made["updated"], false);
+    assert_eq!(made["name"], "pubadhub.com");
+    assert_eq!(made["folder"], "Agents");
+    let id = made["id"].as_str().unwrap().to_string();
+    let saved = item(&id);
+    assert_eq!(saved["login"]["password"], "s3cret-pw");
+    assert_eq!(saved["login"]["totp"], "JBSWY3DPEHPK3PXP");
+    assert_eq!(saved["login"]["uris"][0]["uri"], "https://www.pubadhub.com");
+    assert_eq!(
+        saved["notes"],
+        Value::Null,
+        "the template's sample notes are dropped"
+    );
+    let agents = state()["folders"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["name"] == "Agents")
+        .cloned()
+        .expect("Agents folder made");
+    assert_eq!(saved["folderId"], agents["id"]);
+    assert!(!made.to_string().contains("s3cret-pw"));
+    // Usable at once: the cache knows it, an Agents-folder login.
+    assert_eq!(b.password(&id).await.unwrap(), "s3cret-pw");
+
+    // The same site and user (any case): updated in place, it is shared.
+    let again = b
+        .vault_write(
+            "save",
+            &args(
+                json!({"host": "pubadhub.com", "username": "ME@x.com", "password": "n3w-pw",
+                         "notes": "recovery: ask Ann"}),
+            ),
+            false,
+            none,
+        )
+        .await;
+    assert_eq!(
+        again,
+        json!({"ok": true, "id": id, "created": false, "updated": true,
+               "name": "pubadhub.com", "folder": "Agents"})
+    );
+    let saved = item(&id);
+    assert_eq!(saved["login"]["password"], "n3w-pw");
+    assert_eq!(saved["login"]["totp"], "JBSWY3DPEHPK3PXP", "kept");
+    assert_eq!(saved["notes"], "recovery: ask Ann");
+
+    // A login the user kept back is refused, unless shared.
+    let ask =
+        args(json!({"url": "example.com", "username": "ann@example.com", "password": "hijack-pw"}));
+    let refused = b.vault_write("save", &ask, false, none).await;
+    assert_eq!(refused["ok"], false);
+    assert_eq!(
+        refused["error"],
+        "a login for ann@example.com on example.com is already saved and not shared with agents — share it in Settings › Passwords › Agent access, or ask the user to change it"
+    );
+    assert_eq!(item("i-example")["login"]["password"], "example-pw");
+    let shared = b
+        .vault_write("save", &ask, false, &["bw:i-example".to_string()])
+        .await;
+    assert_eq!(shared["updated"], true, "{shared}");
+    assert_eq!(shared["folder"], Value::Null);
+    assert_eq!(item("i-example")["login"]["password"], "hijack-pw");
+    // `copper-agent: deny` wins even over share-all.
+    let denied = b
+        .vault_write(
+            "save",
+            &args(json!({"url": "http://localhost:8765", "username": "dev", "password": "x-pw"})),
+            true,
+            none,
+        )
+        .await;
+    assert_eq!(denied["ok"], false, "{denied}");
+
+    // Share-all: a new item goes where asked (here: nowhere), no folder made.
+    let free = b
+        .vault_write(
+            "save",
+            &args(json!({"url": "new.example.org", "username": "zed", "password": "zed-pw"})),
+            true,
+            none,
+        )
+        .await;
+    assert_eq!(free["folder"], Value::Null, "{free}");
+    let work = b
+        .vault_write(
+            "save",
+            &args(json!({"url": "w.example.org", "username": "w", "password": "w-pw", "folder": "work"})),
+            true,
+            none,
+        )
+        .await;
+    assert_eq!(work["folder"], "Work", "any case finds the folder");
+
+    // Notes: created in Agents, then replaced by name; the user's is refused.
+    let note = args(json!({"name": "Google backup codes", "text": "1111 2222\n3333 4444\n"}));
+    let made = b.vault_write("note", &note, false, none).await;
+    assert_eq!(made["created"], true, "{made}");
+    assert_eq!(made["folder"], "Agents");
+    let nid = made["id"].as_str().unwrap().to_string();
+    assert_eq!(item(&nid)["type"], 2);
+    assert_eq!(item(&nid)["secureNote"]["type"], 0);
+    assert_eq!(b.notes(&nid).as_deref(), Some("1111 2222\n3333 4444\n"));
+    let replaced = b
+        .vault_write(
+            "note",
+            &args(json!({"name": "Google backup codes", "text": "5555 6666"})),
+            false,
+            none,
+        )
+        .await;
+    assert_eq!(
+        replaced,
+        json!({"ok": true, "id": nid, "created": false, "updated": true,
+               "name": "Google backup codes", "folder": "Agents"})
+    );
+    assert_eq!(item(&nid)["notes"], "5555 6666");
+    let wifi = b
+        .vault_write(
+            "note",
+            &args(json!({"name": "Wifi", "text": "open"})),
+            false,
+            none,
+        )
+        .await;
+    assert!(
+        wifi["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("a note named Wifi is already saved and not shared")
+    );
+
+    // A bw error quoting what it was sent comes back with every value cut.
+    let quoted = b
+        .vault_write(
+            "save",
+            &args(
+                json!({"url": "q.example.org", "username": "q", "password": "leak-me-pw",
+                         "notes": "line one secret\nline two secret", "name": "mock-refuse"}),
+            ),
+            true,
+            none,
+        )
+        .await;
+    let said = quoted["error"].as_str().unwrap();
+    assert!(said.starts_with("Invalid item:"), "{said}");
+    for secret in ["leak-me-pw", "line one secret", "line two secret"] {
+        assert!(!said.contains(secret), "{said}");
+    }
+
+    // Bad input and a locked vault: plain errors, never the values.
+    let bad = b
+        .vault_write(
+            "save",
+            &args(json!({"url": "x.com", "username": "u"})),
+            false,
+            none,
+        )
+        .await;
+    assert_eq!(bad, json!({"ok": false, "error": "password is required"}));
+    b.lock().await;
+    let locked = b.vault_write("note", &note, false, none).await;
+    assert_eq!(locked, json!({"ok": false, "error": "Bitwarden is locked"}));
+
+    // No value ever on argv.
+    let log = calls(&dir.join("mock"));
+    for secret in [
+        "s3cret-pw",
+        "n3w-pw",
+        "JBSWY3DP",
+        "1111 2222",
+        "hijack-pw",
+        "leak-me-pw",
+    ] {
+        assert!(!log.contains(secret), "{secret} reached argv");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[tokio::test]
 async fn bitwarden_missing() {
     let dir = scratch("bw-missing");

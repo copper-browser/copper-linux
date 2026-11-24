@@ -5,6 +5,10 @@
 //!   the focused widget, whether the window is active, plus what agents
 //!   hold and touch. An agent working in its own tab must not change the
 //!   first three.
+//! * `COPPER_AGENTS_HANDOFF=<file>` — the e2e's hand on the handoff bar
+//!   (Mac `bench agent handoff`): every 200 ms, if `<file>` exists, run
+//!   its lines and delete it — `done` / `not-now` answer the oldest ask,
+//!   `dark` / `light` set the look, `shot <path>` saves the window as a PNG.
 //! * `COPPER_SELFTEST=agents` (out dir `COPPER_SELFTEST_OUT`, default
 //!   `/tmp/copper-agents-selftest`) — Settings › Agents (light, dark, a busy
 //!   port), Add key opening Settings › Intelligence (Check, the Jev key
@@ -21,6 +25,11 @@ pub fn start(shell: &Shell) {
             && !path.trim().is_empty()
         {
             debug::watch(shell, std::path::PathBuf::from(path));
+        }
+        if let Ok(path) = std::env::var("COPPER_AGENTS_HANDOFF")
+            && !path.trim().is_empty()
+        {
+            debug::handoff(shell, std::path::PathBuf::from(path));
         }
         if std::env::var("COPPER_SELFTEST").as_deref() == Ok("agents") {
             let out = std::env::var("COPPER_SELFTEST_OUT")
@@ -95,6 +104,10 @@ mod debug {
                 "pillOnActive": pill,
                 "backstage": mode,
                 "hosted": status.hosted,
+                "handoff": agents()
+                    .map(|a| a.handoff().asks().iter().map(|k| json!([k.tab.0, k.agent, k.message])).collect::<Vec<_>>())
+                    .unwrap_or_default(),
+                "handoffBar": super::super::handoff::shown_text(),
             });
             let line = state.to_string();
             if *last.borrow() != line {
@@ -107,6 +120,45 @@ mod debug {
                     .open(&path)
                 {
                     let _ = writeln!(f, "{row}");
+                }
+            }
+            glib::ControlFlow::Continue
+        });
+    }
+
+    pub fn handoff(shell: &Shell, path: PathBuf) {
+        let weak = shell.downgrade();
+        glib::timeout_add_local(Duration::from_millis(200), move || {
+            let Some(s) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            let Ok(said) = std::fs::read_to_string(&path) else {
+                return glib::ControlFlow::Continue;
+            };
+            let _ = std::fs::remove_file(&path);
+            for line in said.lines().map(str::trim) {
+                let answer = match line {
+                    "done" => Some(copper_mcp::HandoffAnswer::Done),
+                    "not-now" => Some(copper_mcp::HandoffAnswer::NotNow),
+                    _ => None,
+                };
+                if let (Some(answer), Some(a)) = (answer, agents()) {
+                    let h = a.handoff();
+                    if let Some(first) = h.asks().first() {
+                        h.answer(first.id, answer);
+                    }
+                }
+                match line {
+                    "dark" => s.set_look(Look::Dark),
+                    "light" => s.set_look(Look::Light),
+                    _ => {}
+                }
+                if let Some(to) = line.strip_prefix("shot ") {
+                    let saved = crate::screenshot::save(
+                        s.window().upcast_ref(),
+                        std::path::Path::new(to.trim()),
+                    );
+                    println!("handoff qa shot {to}: {saved:?}");
                 }
             }
             glib::ControlFlow::Continue

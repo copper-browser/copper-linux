@@ -537,7 +537,10 @@ impl<P: Platform> Shell<P> {
                         | copper_engine::DownloadState::Failed { .. }
                 );
                 if going {
-                    slot.downloads.borrow_mut().insert(d.id);
+                    if slot.downloads.borrow_mut().insert(d.id) {
+                        let tabs = std::iter::once(id.clone()).chain(self.opener_of(id));
+                        self.downloads().attribute(d.id, tabs.collect());
+                    }
                 } else {
                     slot.downloads.borrow_mut().remove(&d.id);
                 }

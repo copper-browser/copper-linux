@@ -29,9 +29,44 @@ use crate::{CallCtx, Failure, Mcp};
 /// How long a page stays staged after the agent's last call on it.
 pub const LINGER: Duration = Duration::from_secs(5 * 60);
 
-/// A digit string at least this long that starts some tab's id names that
-/// tab, not an index (no row holds a thousand tabs).
-const ID_DIGITS: usize = 4;
+/// What a `tab` string names (`AgentTabs.Reading`): a place in the row, the
+/// one tab whose id it begins (its place in the ids), no tab, or several.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reading {
+    Index(i64),
+    Id(usize),
+    Nothing,
+    Several,
+}
+
+/// How a `tab` string is read (`AgentTabs.reading`). Short ids are the first
+/// eight hex digits of a UUID, so about one in fifty is all digits
+/// (`12345678`, `00000012`). No row has ten million tabs and nobody writes an
+/// index with a leading zero, so those are always ids; a shorter number is a
+/// place in the row, unless the row has no such place and it begins exactly
+/// one tab's id. Anything else is an id or the start of one. `row` is how
+/// many tabs the row has; `ids` every tab's id, lowercased.
+pub fn reading(raw: &str, row: usize, ids: &[String]) -> Reading {
+    let hits: Vec<usize> = (0..ids.len())
+        .filter(|&i| ids[i].starts_with(raw))
+        .collect();
+    let named = match hits[..] {
+        [] => Reading::Nothing,
+        [one] => Reading::Id(one),
+        _ => Reading::Several,
+    };
+    let digits = !raw.is_empty() && raw.bytes().all(|b| b.is_ascii_digit());
+    if !digits || raw.len() >= 8 || (raw.starts_with('0') && raw != "0") {
+        return named;
+    }
+    let Ok(i) = raw.parse::<i64>() else {
+        return named;
+    };
+    if i >= row as i64 && matches!(named, Reading::Id(_)) {
+        return named;
+    }
+    Reading::Index(i)
+}
 
 /// Calls that only read their page. With its own tab gone, an agent may
 /// still read the tab on screen; anything else is refused. `jev_extract` is
@@ -102,14 +137,8 @@ pub fn short(id: &TabId) -> String {
 
 impl<H: Host> Mcp<H> {
     /// A `tab` argument: an id (short or whole) or an index in the agent
-    /// window's row. `Ok(None)` when nothing usable was named.
-    ///
-    /// A JSON number is always an index. A string of digits is ambiguous —
-    /// about one short id in fifty is all digits (`72135451`) — so it is an
-    /// id when it is long enough to be one ([`ID_DIGITS`]) and some id starts
-    /// with it, or when no tab has that index; otherwise an index. The Mac
-    /// (`AgentTabs.resolve`) reads every digit string as an index, which
-    /// leaves those tabs unreachable.
+    /// window's row. `Ok(None)` when nothing usable was named. A JSON number
+    /// is an index; a string is read by [`reading`].
     pub(crate) fn resolve(
         &self,
         reference: Option<&Value>,
@@ -132,22 +161,13 @@ impl<H: Host> Mcp<H> {
             return Ok(None);
         }
         let tabs = self.host.tabs();
-        let hits: Vec<TabInfo> = tabs
-            .iter()
-            .filter(|t| t.id.0.to_lowercase().starts_with(&raw))
-            .cloned()
-            .collect();
-        if let Ok(i) = raw.parse::<i64>() {
-            let indexed = i >= 0 && tabs.iter().any(|t| t.index == Some(i as usize));
-            let id_like = raw.len() >= ID_DIGITS && !hits.is_empty();
-            if !id_like && (indexed || hits.is_empty()) {
-                return self.tab_at(i, ctx).map(Some);
-            }
-        }
-        match hits.len() {
-            1 => Ok(hits.into_iter().next()),
-            0 => Err(Failure(format!("no tab {raw} — {}", self.tab_list(ctx)))),
-            _ => Err(Failure(format!(
+        let row = tabs.iter().filter(|t| t.index.is_some()).count();
+        let ids: Vec<String> = tabs.iter().map(|t| t.id.0.to_lowercase()).collect();
+        match reading(&raw, row, &ids) {
+            Reading::Index(i) => self.tab_at(i, ctx).map(Some),
+            Reading::Id(k) => Ok(tabs.into_iter().nth(k)),
+            Reading::Nothing => Err(Failure(format!("no tab {raw} — {}", self.tab_list(ctx)))),
+            Reading::Several => Err(Failure(format!(
                 "{raw} names more than one tab; give more of its id"
             ))),
         }
@@ -486,7 +506,81 @@ impl<H: Host> Mcp<H> {
 
 #[cfg(test)]
 mod tests {
+    // AgentTabRefTests.swift: how a `tab` string is read. About one short id
+    // in fifty is all digits; those must stay ids.
     use super::*;
+
+    fn ids() -> Vec<String> {
+        [
+            "12345678-aaaa-4bbb-8ccc-000000000001",
+            "00000012-aaaa-4bbb-8ccc-000000000002",
+            "4071b2c9-aaaa-4bbb-8ccc-000000000003",
+            "abcdef01-aaaa-4bbb-8ccc-000000000004",
+            "abcdef02-aaaa-4bbb-8ccc-000000000005",
+            "98765aa1-aaaa-4bbb-8ccc-000000000006",
+        ]
+        .map(String::from)
+        .to_vec()
+    }
+
+    #[test]
+    fn a_small_number_is_a_place_in_the_row() {
+        let ids = ids();
+        assert_eq!(reading("3", 6, &ids), Reading::Index(3));
+        assert_eq!(reading("0", 6, &ids), Reading::Index(0));
+        // Within the row the place wins, even when an id begins with the digit.
+        assert_eq!(reading("4", 6, &ids), Reading::Index(4));
+        // Past the end and no id begins with it: still an index (its error says so).
+        assert_eq!(reading("50", 6, &ids), Reading::Index(50));
+    }
+
+    #[test]
+    fn an_all_digit_short_id_is_an_id() {
+        let ids = ids();
+        assert_eq!(reading("12345678", 6, &ids), Reading::Id(0));
+        // One that names no tab is no tab, never index twelve million.
+        assert_eq!(reading("87654321", 6, &ids), Reading::Nothing);
+    }
+
+    #[test]
+    fn a_leading_zero_makes_it_an_id_not_an_index() {
+        let ids = ids();
+        assert_eq!(reading("00000012", 20, &ids), Reading::Id(1));
+        assert_eq!(reading("0000", 20, &ids), Reading::Id(1));
+        assert_eq!(reading("012", 20, &ids), Reading::Nothing);
+    }
+
+    #[test]
+    fn a_short_number_past_the_row_that_begins_one_id_is_that_id() {
+        let ids = ids();
+        assert_eq!(reading("98765", 6, &ids), Reading::Id(5));
+        assert_eq!(reading("12", 6, &ids), Reading::Id(0));
+        // Begins two ids: no one tab, so it stays an index (and gets its error).
+        let mut more = ids.clone();
+        more.push("98765bb2-aaaa-4bbb-8ccc-000000000007".into());
+        assert_eq!(reading("98765", 6, &more), Reading::Index(98765));
+    }
+
+    #[test]
+    fn anything_else_is_an_id_prefix_as_before() {
+        let ids = ids();
+        assert_eq!(reading("4071b2c9", 6, &ids), Reading::Id(2));
+        assert_eq!(reading("abcdef01", 6, &ids), Reading::Id(3));
+        assert_eq!(
+            reading("12345678-aaaa-4bbb-8ccc-000000000001", 6, &ids),
+            Reading::Id(0)
+        );
+        assert_eq!(reading("ffff", 6, &ids), Reading::Nothing);
+        // Not ASCII digits: not a number.
+        assert_eq!(reading("٣", 6, &ids), Reading::Nothing);
+    }
+
+    #[test]
+    fn a_prefix_of_several_ids_is_still_ambiguous() {
+        let ids = ids();
+        assert_eq!(reading("abcdef", 6, &ids), Reading::Several);
+        assert_eq!(reading("abc", 6, &ids), Reading::Several);
+    }
 
     #[test]
     fn a_pages_words_in_an_answer_are_one_quoted_cut_line() {

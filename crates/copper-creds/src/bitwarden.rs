@@ -25,6 +25,8 @@ use crate::process::{self, RunError};
 use crate::site::{Uri, matches, uri_host};
 use crate::totp;
 
+pub mod save;
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{0}")]
 pub struct BwError(pub String);
@@ -736,45 +738,19 @@ impl Bitwarden {
         Ok(value)
     }
 
-    /// The account exists with another password: change it there.
-    pub async fn update(&mut self, id: &str, password: &str) -> Result<()> {
+    /// The whole item as `bw` keeps it, so an edit keeps every other field.
+    pub async fn raw_item(&mut self, id: &str) -> Result<Map<String, Value>> {
         self.require_unlocked()?;
-        let current = self
+        let data = self
             .run(&["get", "item", id], &[], None, Duration::from_secs(15))
             .await?;
-        let mut object: Map<String, Value> = serde_json::from_slice(&current)
-            .map_err(|_| fail("Bitwarden returned an invalid item"))?;
-        let mut login = object
-            .get("login")
-            .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
-        login.insert("password".into(), Value::String(password.into()));
-        object.insert("login".into(), Value::Object(login));
-        let value = self.encode(&object).await?;
-        self.run(
-            &["edit", "item", id],
-            &[],
-            Some(value.as_bytes()),
-            Duration::from_secs(30),
-        )
-        .await?;
-        self.refresh_cache_if_possible().await;
-        Ok(())
+        serde_json::from_slice(&data).map_err(|_| fail("Bitwarden returned an invalid item"))
     }
 
-    /// A new login for `host`; returns its id.
-    /// A new login item; `origin` is the page it was saved from (its scheme
-    /// and port), else `https://<host>`.
-    pub async fn create(
-        &mut self,
-        host: &str,
-        user: &str,
-        password: &str,
-        origin: Option<&str>,
-    ) -> Result<String> {
+    /// `bw get template item`, without its sample notes.
+    pub async fn item_template(&mut self) -> Result<Map<String, Value>> {
         self.require_unlocked()?;
-        let template = self
+        let data = self
             .run(
                 &["get", "template", "item"],
                 &[],
@@ -782,8 +758,65 @@ impl Bitwarden {
                 Duration::from_secs(15),
             )
             .await?;
-        let mut object: Map<String, Value> = serde_json::from_slice(&template)
+        let mut object: Map<String, Value> = serde_json::from_slice(&data)
             .map_err(|_| fail("Bitwarden returned an invalid item template"))?;
+        object.insert("notes".into(), Value::Null);
+        Ok(object)
+    }
+
+    /// Create (`id` None) or replace a whole item or folder (`kind`);
+    /// returns its id. The encoded JSON goes to `bw` on stdin.
+    pub async fn write(
+        &mut self,
+        object: &Map<String, Value>,
+        id: Option<&str>,
+        kind: &str,
+    ) -> Result<String> {
+        self.require_unlocked()?;
+        let value = self.encode(object).await?;
+        let args = match id {
+            Some(id) => vec!["edit", kind, id],
+            None => vec!["create", kind],
+        };
+        let out = self
+            .run(&args, &[], Some(value.as_bytes()), Duration::from_secs(30))
+            .await?;
+        serde_json::from_slice::<Value>(&out)
+            .ok()
+            .and_then(|v| {
+                v.get("id")?
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+            })
+            .ok_or_else(|| fail(format!("Bitwarden did not return the {kind} id")))
+    }
+
+    /// The account exists with another password: change it there.
+    pub async fn update(&mut self, id: &str, password: &str) -> Result<()> {
+        let mut object = self.raw_item(id).await?;
+        let mut login = object
+            .get("login")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        login.insert("password".into(), Value::String(password.into()));
+        object.insert("login".into(), Value::Object(login));
+        self.write(&object, Some(id), "item").await?;
+        self.refresh_cache_if_possible().await;
+        Ok(())
+    }
+
+    /// A new login item; `origin` is the page it was saved from (its scheme
+    /// and port), else `https://<host>`; returns its id.
+    pub async fn create(
+        &mut self,
+        host: &str,
+        user: &str,
+        password: &str,
+        origin: Option<&str>,
+    ) -> Result<String> {
+        let mut object = self.item_template().await?;
         object.insert("type".into(), 1.into());
         object.insert("name".into(), host.into());
         object.insert(
@@ -795,23 +828,7 @@ impl Bitwarden {
                 "uris": [{"uri": origin.map_or_else(|| format!("https://{host}"), str::to_string), "match": null}],
             }),
         );
-        let value = self.encode(&object).await?;
-        let created = self
-            .run(
-                &["create", "item"],
-                &[],
-                Some(value.as_bytes()),
-                Duration::from_secs(30),
-            )
-            .await?;
-        let made: Value = serde_json::from_slice(&created)
-            .map_err(|_| fail("Bitwarden did not return the new item id"))?;
-        let id = made
-            .get("id")
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| fail("Bitwarden did not return the new item id"))?
-            .to_string();
+        let id = self.write(&object, None, "item").await?;
         self.refresh_cache_if_possible().await;
         Ok(id)
     }

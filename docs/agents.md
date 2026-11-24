@@ -86,7 +86,11 @@ The tool names and argument shapes are Playwright MCP's. `ref`s come from
 **Which tab.** Each page tool works on the caller's own tab: the one it
 opened with `browser_tabs new`, or chose with `browser_tabs select`. Without
 one, it works on the tab you are looking at. Any call can name another tab
-with `tab`, either an id from `browser_tabs list` or an index.
+with `tab`, either an id from `browser_tabs list` or an index. A JSON number
+is an index; so is a string of digits, unless it can only be an id: eight
+digits or more, a leading zero (about one short id in fifty is all digits,
+`00000012` among them), or a number past the end of the row that begins
+exactly one tab's id.
 
 An agent's tab that you aren't looking at is still worked on properly: it is
 kept off screen, where pages still paint, `requestAnimationFrame` runs,
@@ -101,6 +105,7 @@ tab again, and may sleep.
 | `browser_navigate`, `browser_navigate_back`, `browser_navigate_forward` | Moves the caller's tab, then waits for the load to settle. |
 | `browser_snapshot` | Accessibility tree with `[ref=e12]` on interactive nodes. `interactive: true` gives a smaller tree; `selector` gives a subtree. |
 | `browser_click` | Clicks by `ref` or `selector`, at the element's centre, as a real input event. Takes `doubleClick`, `button` and `modifiers`. |
+| `browser_mouse_click_xy` | Clicks a point, `x` and `y` in CSS pixels from the viewport's top-left (as in a screenshot), with `button` and `doubleClick`: for canvases and maps. The answer names the element there (`canvas#c "Drawing board"`); a point off the viewport is an error. |
 | `browser_type` | Types `text`; `submit` presses Enter after, `slowly` types key by key. The value is set through the native setter, so React and Vue notice. |
 | `browser_fill_form` | `[{ref, type, value}]` for textbox, checkbox, radio, combobox and slider. |
 | `browser_press_key` | `Enter`, `Escape`, `ArrowDown`, `Control+a`, `a` and so on, as real key events. |
@@ -119,9 +124,15 @@ tab again, and may sleep.
 | `browser_groups` | Copper's tab groups: `list`, `assign {group}`, `remove`. |
 | `browser_perf_probe` | Samples the tab for frame loops, DOM churn, animations, filters, canvases, timers, long tasks and slow resources. |
 | `browser_crashes` | Copper's own crash history on this computer, newest first. |
+| `browser_history` | Searches your history on this computer, newest first: `query`, `limit` (20, at most 200). Not for linked apps. |
+| `browser_bookmarks` | `list` (with the folders each is in), `search {query}`, `add {url, title}` (default the caller's tab's page). |
+| `browser_spaces` | `list` (which is on screen, which holds the caller's tab), or `move {space}` the caller's own tab into another space: not a pinned tab, not one on your screen; its calls still land on it. |
+| `browser_downloads` | What the caller's tab (or a popup it opened) downloaded this session: name, state, bytes and where the file is; `wait` (seconds, at most 60) for running ones. `copper downloads [--wait SECONDS]`. |
+| `browser_handoff` | `message`, `timeout` (seconds, default 15, at most 600): a bar at the bottom of the window that holds the agent's tab, "<agent> needs you on <tab>: <message>", with Show, Done and Not now. Nothing moves until you click Show. Done answers the call, Not now is an error, and the timeout answers "no answer yet" with the bar still up, so calling again keeps waiting. |
 | `browser_sign_in`, `browser_autofill` | Fill a saved sign-in, card, identity or custom field without the secret ever leaving Copper (below). |
+| `browser_vault_save`, `browser_vault_note` | Keep a login or a secure note (backup codes) in the open Bitwarden vault; values never come back ([Saving to the vault](#saving-to-the-vault)). |
 | `cloud_history_delete` | Deletes your history on Copper Cloud ([cloud.md](cloud.md)). History on this computer stays. Loopback clients only. |
-| `canvas_*` | Read and draw on your canvases: `canvas_list` (with the `invitations` waiting for your answer, `{canvas, from}`, when signed in to Copper Cloud), `canvas_open`, `canvas_read`, `canvas_apply`, `canvas_select`, `canvas_focus`, `canvas_create`, `canvas_invite`, `canvas_share_link`, `canvas_join`, `canvas_screenshot`, `canvas_chat`. A big canvas reads in pages: `canvas_read` with `overview` first, then `frame` or `region`, or follow `next` as `cursor`; `ids`, `types` and `query` narrow any read. A canvas that is closed, asleep or still loading is opened behind your tab and waited for (up to a minute for a huge one). |
+| `canvas_*` | Until you have a canvas, the tool list offers only `canvas_create` and `canvas_join` (every canvas tool still answers by name); `canvas_apply`'s op shapes come with your first `canvas_read`. Read and draw on your canvases: `canvas_list` (with the `invitations` waiting for your answer, `{canvas, from}`, when signed in to Copper Cloud), `canvas_open`, `canvas_read`, `canvas_apply`, `canvas_select`, `canvas_focus`, `canvas_create`, `canvas_invite`, `canvas_share_link`, `canvas_join`, `canvas_screenshot`, `canvas_chat`. A big canvas reads in pages: `canvas_read` with `overview` first, then `frame` or `region`, or follow `next` as `cursor`; `ids`, `types` and `query` narrow any read. A canvas that is closed, asleep or still loading is opened behind your tab and waited for (up to a minute for a huge one). |
 
 ### Files and browser state
 
@@ -240,6 +251,28 @@ Items in a Bitwarden folder or 1Password vault named `Agents` (or tagged
 identities alike. A custom
 field `copper-agent: deny` means never, even when sharing everything. Private
 tabs are always refused. Agents can't change any of this.
+
+### Saving to the vault
+
+An agent that was given a login (a password from a text message, a two-step
+seed) or backup codes keeps them in the Bitwarden vault Copper has open:
+
+```sh
+echo '{"url":"https://example.com","username":"me@x.com","password":"…","totp":"otpauth://…"}' | copper bitwarden save -
+echo '{"name":"Google backup codes (me@x.com)","text":"1234 5678\n…"}' | copper bitwarden note -
+```
+
+`save` takes `{url | host, username, password, totp?, notes?, name?, folder?}`;
+the same site and username already saved changes that login's password (and
+`totp`/`notes` when given) instead of adding a twin. `note` takes `{name, text,
+folder?}` and makes a Secure Note, or replaces the text of the note with exactly
+that name. MCP: `browser_vault_save` and `browser_vault_note`, same arguments.
+Both answer `{ok, id, created, updated, name, folder}` and never a value; an
+error line has every value sent cut out. Values come only in the JSON (stdin
+for the CLI), never as arguments. The vault must be unlocked. While sharing
+everything is off, new items go to the `Agents` folder (made if missing), so
+`copper signin` uses a new login at once; an existing item changes only when
+it is shared with agents.
 
 ### BotPass
 
@@ -445,8 +478,9 @@ These Mac features aren't in the Linux build:
   the element table only, and `jev_run` does not offer `vision`. No Fast
   mode switch in Settings yet either; it is `jevFast` in `intelligence.json`
   (`copper intelligence set --jev-fast` / `--jev-vision` are refused)
-- the CLI's `setup`, `session`, `claude`, `bitwarden`, `crashes`, `listen`
-  and `transcript` commands
+- the CLI's `setup`, `session`, `claude`, `crashes`, `listen` and
+  `transcript` commands, and `bitwarden` beyond `save -` and `note -` (sign
+  in and unlock in Settings › Passwords)
 
 ## What it is not
 

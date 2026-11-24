@@ -58,6 +58,20 @@ impl TabInfo {
     }
 }
 
+/// A space, as `browser_spaces` lists it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SpaceInfo {
+    /// UUID, as the session keeps it.
+    pub id: String,
+    pub name: String,
+    /// Its cookie jar, when it has one of its own.
+    pub profile: Option<String>,
+    /// Loose tabs in its row.
+    pub tabs: usize,
+    /// The space the window shows.
+    pub on_screen: bool,
+}
+
 /// A tab group and the titles of its tabs, in order.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct GroupInfo {
@@ -89,6 +103,13 @@ impl Content {
             }),
         }
     }
+}
+
+/// What the person said to a `browser_handoff` bar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HandoffAnswer {
+    Done,
+    NotNow,
 }
 
 /// Model keys as this machine has them, and what Copper Cloud provides.
@@ -313,6 +334,57 @@ pub trait Host: 'static {
         async { Extras::default() }
     }
 
+    // -- browser state (tools-state) ----------------------------------------------
+
+    /// The user's history, newest first (`browser_history`): `query` as the
+    /// History panel searches it (`History::search`), or the most recent
+    /// with none; at most `limit` rows.
+    fn history(&self, query: &str, limit: usize) -> Vec<copper_core::history::Trace> {
+        let _ = (query, limit);
+        Vec::new()
+    }
+
+    /// The bookmarks tree (`browser_bookmarks`).
+    fn bookmarks(&self) -> Vec<copper_core::Bookmark> {
+        Vec::new()
+    }
+
+    /// Keep `url` at the end of the bookmarks; `false` when it is kept already.
+    fn add_bookmark(&self, url: &str, title: &str) -> bool {
+        let _ = (url, title);
+        false
+    }
+
+    /// Every space, in order (`browser_spaces`).
+    fn spaces(&self) -> Vec<SpaceInfo> {
+        Vec::new()
+    }
+
+    /// The id of the space a tab is in; `None` for a pin or no such tab.
+    fn space_of(&self, tab: &TabId) -> Option<String> {
+        let _ = tab;
+        None
+    }
+
+    /// Move a loose tab to the end of another space's row.
+    fn move_to_space(&self, tab: &TabId, space: &str) -> bool {
+        let _ = (tab, space);
+        false
+    }
+
+    // -- vault save (tools-state) --
+
+    /// `browser_vault_save` / `browser_vault_note` and the CLI's
+    /// `bitwarden save -|note -`: `op` save | note. Answers
+    /// `{ok, id, created, updated, name, folder}` or `{ok:false, error}`,
+    /// never a value it was given (`Bitwarden.vaultWrite`).
+    fn vault_write(&self, op: &str, args: &Map<String, Value>) -> impl Future<Output = Value> {
+        let _ = (op, args);
+        async {
+            serde_json::json!({ "ok": false, "error": "passwords are not available in this build" })
+        }
+    }
+
     // -- canvases, cloud, crashes, controls ---------------------------------------
 
     /// Every `canvas_*` tool (`CanvasTools.call`).
@@ -323,6 +395,13 @@ pub trait Host: 'static {
     ) -> impl Future<Output = Result<Vec<Content>, String>> {
         let _ = (tool, args);
         async { Err("Canvases are not available in this build yet".to_string()) }
+    }
+
+    /// A canvas is in use (`CanvasTools.inUse`): one made by or shared with
+    /// the user, or a board kept on this device. Until then tools/list offers
+    /// only `catalogue::CANVAS_DOORS`.
+    fn canvas_in_use(&self) -> bool {
+        true
     }
 
     /// `cloud_history_delete` (`CloudHistoryTool.call`).
@@ -375,6 +454,33 @@ pub trait Host: 'static {
     /// Whether the Claude account is signed in (the `claude` lane's readiness).
     fn claude_ready(&self) -> bool {
         false
+    }
+
+    // -- downloads (tools-state) ---------------------------------------------------
+
+    /// `browser_downloads`: this session's downloads tab `tab` started (or
+    /// a popup it opened), newest first, and the downloads folder.
+    fn tab_downloads(&self, tab: &TabId) -> crate::downloads::TabDownloads {
+        let _ = tab;
+        crate::downloads::TabDownloads::default()
+    }
+
+    // -- handoff (tools-state) ----------------------------------------------------
+
+    /// `browser_handoff` (`Handoff.ask` + `wait`): the bar in the window that
+    /// holds `tab` asks the person to do a step (one ask per tab: a second
+    /// call updates its message), and the call waits up to `timeout`.
+    /// `Ok(None)`: no answer in time, the bar stays up. The tab is not
+    /// touched; only the person's Show goes to it.
+    fn handoff(
+        &self,
+        tab: &TabId,
+        agent: &str,
+        message: &str,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<Option<HandoffAnswer>, String>> {
+        let _ = (tab, agent, message, timeout);
+        async { Err("Handing a step to the user is not available in this build yet".to_string()) }
     }
 
     // -- page tools (tools-page) ----------------------------------------------

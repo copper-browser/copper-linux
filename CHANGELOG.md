@@ -50,7 +50,54 @@ release dates.
   `copper pins sleep on|off`): a pin over 300 MB you haven't looked at for
   two hours sleeps, and stays asleep after a relaunch until you go to it.
   `copper pins` lists every pin's state. As on the Mac
+- **Tidy files your loose tabs into folders.** With three or more loose tabs
+  in a space, "Tidy" stands on the line above them (also Ctrl+K › Tidy
+  Tabs): one click files them into a few named folders in Saved, reusing a
+  folder the space already has when it fits, and Undo (or Ctrl+Z) on the
+  pill that follows puts every tab back where it was. With a model set up in
+  Settings › Intelligence, the model names the folders from the tabs' titles
+  and sites only, never their pages; without one, or if it takes over 8
+  seconds, tabs are filed by site, two or more to a folder. A tab that fits
+  nowhere stays loose, and private tabs are never filed. As on the Mac
+  (copper-browser/Copper#200).
+- **A morning page, once a day.** Settings › General › Morning page takes an
+  address; the first launch, return to Copper or wake after 3 AM opens it as
+  the active tab (or brings back the tab already showing it), and every other
+  launch that day restores as it always did. Empty, the default, is off. The
+  hour is `daily.hour` in `settings.json` (`"daily.hour": 4`); `daily.shown`
+  keeps it to once a day (copper-shell-core `daily`). Waking is logind's
+  `PrepareForSleep`, so the Flatpak may now talk to `org.freedesktop.login1`
+  on the system bus. As on the Mac (copper-browser/Copper#198).
+- **A light on pins with something new.** A pinned tab whose page title
+  starts with an unread count, like `(1) Paper`, `(3) Inbox` or Gmail's
+  `Inbox (3)`, wears a small copper dot on its square in the column and the
+  tab row until you go to it. A sleeping pin keeps its dot (copper-shell-core
+  `pinlight`). As on the Mac (copper-browser/Copper#199).
+- **Agents read and keep the browser's own state.** `browser_history`
+  searches your history on this computer, newest first (for agents you run
+  here, not linked apps). `browser_bookmarks` lists your bookmarks with the
+  folders they are in, searches them, or adds a page. `browser_spaces` lists
+  your spaces and moves an agent's own off-screen tab into another one,
+  never a pinned tab or the one on your screen. `browser_downloads` (and
+  `copper downloads [--wait SECONDS]`) lists what the agent's tab, or a
+  popup it opened, downloaded and where each file went. As on the Mac
   (copper-browser/Copper#181).
+- **Agents click a point, and hand a step back to you.**
+  `browser_mouse_click_xy` clicks a spot on a canvas or a map, in the CSS
+  pixels of a screenshot, and says what is there. `browser_handoff` shows a
+  bar at the bottom of the window that holds the agent's tab, "<agent>
+  needs you on <tab>: <message>", with Show, Done and Not now, and the
+  agent waits for your answer; nothing moves until you click Show. As on the
+  Mac (copper-browser/Copper#181).
+- **Agents save logins and backup codes to Bitwarden.**
+  `browser_vault_save` and `browser_vault_note`, and `copper bitwarden
+  save -` / `note -` (the values come on stdin, never as arguments), keep a
+  login an agent was given (with its two-step seed) or a secure note in the
+  vault Copper has open. A new item goes to the Agents folder unless every
+  item is shared with agents, so `copper signin` can use it at once; a saved
+  item changes only when it is shared with agents. The answer is the item's
+  id, name and folder, never a value, and an error has every value cut out.
+  As on the Mac (copper-browser/Copper#136).
 - **Jev finishes what it starts, faster.** A field's text goes in as one
   real edit, so a site's suggestions open; places, names, airport codes and
   dates the goal says outright (*from Zurich to London on January 20, 2027*,
@@ -100,6 +147,26 @@ release dates.
 
 ### Changed
 
+- **The tool list an agent reads at the start of every session is a third
+  smaller** (about 24 KB with eight more tools, was 36 KB; 19 KB before you
+  have a canvas): one-line descriptions as on the Mac, `reason` and `tab`
+  explained once, the canvas tools other than `canvas_create` and
+  `canvas_join` listed only once you have a canvas, and `canvas_apply`'s op
+  shapes handed over with the first `canvas_read`. As on the Mac
+  (copper-browser/Copper#181).
+- **Tabs and pins always show the site's own icon.** The "Tabs show: Site
+  icons / Letters" choice is gone from Settings › Tabs; a site whose icon
+  hasn't arrived yet shows a plain globe, never a letter, in tabs, pins,
+  Ctrl+K and History. An old `letters` setting is simply not read, and the
+  choice no longer syncs. As on the Mac (copper-browser/Copper#181).
+- **A page that can't load says so plainly.** "Can't connect to <site>",
+  why in one line (no site at that address, the site refused the
+  connection, took too long, the connection isn't secure, no connection),
+  a Try Again button with its key (Ctrl+R) and the engine's own words under
+  Details. As on the Mac (copper-browser/Copper#181).
+- **http pages say "Not secure" under the pointer.** Rest the pointer on
+  the address of a page over plain http and it says so. As on the Mac
+  (copper-browser/Copper#181).
 - **Tabs and pins always show the site's own icon.** The "Tabs show: Site
   icons / Letters" choice is gone from Settings › Tabs; a site whose icon
   hasn't arrived yet shows a plain globe, never a letter, in tabs, pins,
@@ -116,6 +183,16 @@ release dates.
 
 ### Fixed
 
+- **A page that keeps closing as it loads stops.** The page on screen whose
+  process goes away is loaded again at once; the third time in half a
+  minute Copper stops and says “This page keeps closing as it loads.” with
+  Try Again, instead of reloading for ever. As on the Mac
+  (copper-browser/Copper#127).
+- **A tab id made only of digits names that tab.** About one short tab id in
+  fifty is all digits; eight digits or more, or a leading zero, is always an
+  id, and a short number past the end of the row that begins exactly one
+  tab's id is that tab. Small numbers and JSON numbers are still places in
+  the row. As on the Mac (copper-browser/Copper#125).
 - **An agent fills a login only on the exact address it was saved for.**
   Scheme, host and port must match: `www.example.com` and `example.com` are
   two sites unless the saved item lists both, a login saved from an `http://`

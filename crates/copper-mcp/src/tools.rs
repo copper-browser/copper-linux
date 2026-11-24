@@ -17,10 +17,10 @@ use futures_util::future::{Either, select};
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
-use crate::agent_tabs::{fence, short};
+use crate::agent_tabs::{fence, page_words, short};
 use crate::catalogue;
 use crate::drive::{looks_secret, string_list};
-use crate::host::{Content, Host, Page, TabId, TabInfo};
+use crate::host::{Content, HandoffAnswer, Host, Page, TabId, TabInfo};
 use crate::input;
 use crate::screenshot::{self, Answer, Geometry, Saved, ShotArgs, Subject};
 use crate::shot;
@@ -249,6 +249,9 @@ impl<H: Host> Mcp<H> {
             "browser_resize",
             "browser_groups",
             "browser_crashes",
+            "browser_vault_save",
+            "browser_vault_note",
+            "browser_handoff",
             catalogue::CLOUD_HISTORY,
         ];
         // A named site's permissions read and write no page (`StateTools.tabless`).
@@ -257,6 +260,7 @@ impl<H: Host> Mcp<H> {
         if !unstaged.contains(&name)
             && !tabless
             && !catalogue::is_canvas(name)
+            && !crate::state_tools::tabless(name, args)
             && !(name == "jev_run" && arg_bool(args, "newTab") == Some(true))
         {
             self.ready(ctx).await;
@@ -292,7 +296,24 @@ impl<H: Host> Mcp<H> {
                 return self.jev_tool(name, args, ctx).await;
             }
             n if catalogue::is_canvas(n) => {
-                return self.host.canvas(n, args).await.map_err(Failure);
+                if n == "canvas_apply"
+                    && args
+                        .get("ops")
+                        .and_then(Value::as_array)
+                        .is_none_or(Vec::is_empty)
+                {
+                    return Err(Failure(format!(
+                        "ops (a non-empty array) required. {}",
+                        catalogue::OPS_GUIDE
+                    )));
+                }
+                let mut content = self.host.canvas(n, args).await.map_err(Failure)?;
+                // The op shapes once per caller, before its first write (`CanvasTools`).
+                if n == "canvas_read" && self.state.borrow_mut().guided.insert(ctx.who.key.clone())
+                {
+                    content.push(Content::text(catalogue::OPS_GUIDE));
+                }
+                return Ok(content);
             }
             "browser_crashes" => {
                 return Ok(vec![Content::Text(
@@ -302,6 +323,24 @@ impl<H: Host> Mcp<H> {
             catalogue::CLOUD_HISTORY => {
                 return self.host.cloud_history_delete(args).await.map_err(Failure);
             }
+            n if crate::state_tools::NAMES.contains(&n) => {
+                return self.state_tool(n, args, ctx).await;
+            }
+            // Needs no tab: it writes to the vault, never to a page (BitwardenSave.swift).
+            "browser_vault_save" | "browser_vault_note" => {
+                let op = if name == "browser_vault_note" {
+                    "note"
+                } else {
+                    "save"
+                };
+                let result = self.host.vault_write(op, args).await;
+                if result["ok"].as_bool() != Some(true) {
+                    let said = result["error"].as_str().unwrap_or("Bitwarden did not save");
+                    return Err(Failure(said.to_string()));
+                }
+                return Ok(vec![Content::Text(sorted_compact(&result))]);
+            }
+            "browser_handoff" => return self.handoff_tool(args, ctx).await,
             _ if tabless => return self.permissions(args, None),
             _ => {}
         }
@@ -420,6 +459,59 @@ impl<H: Host> Mcp<H> {
                 Ok(vec![Content::Text(format!(
                     "Clicked {}. {}",
                     element.map_or_else(|| target.script(), str::to_string),
+                    self.page_line(&id)
+                ))])
+            }
+            "browser_mouse_click_xy" => {
+                // Playwright's vision tool: a point, not an element — for canvases and maps.
+                let (Some(x), Some(y)) =
+                    (number(args, "x", 100_000.0)?, number(args, "y", 100_000.0)?)
+                else {
+                    return Err(Failure::new(
+                        "x and y required: CSS pixels from the viewport's top-left, as in browser_take_screenshot",
+                    ));
+                };
+                let hit = js(&page, &pj::element_at(x, y)).await?;
+                if hit.is_empty() {
+                    return Err(Failure(format!(
+                        "({}, {}) is outside the page's viewport. Use coordinates from browser_take_screenshot, or browser_scroll first.",
+                        x as i64, y as i64
+                    )));
+                }
+                let z = page.zoom().max(0.01);
+                let mark = Rect {
+                    x: x * z - 6.0,
+                    y: y * z - 6.0,
+                    width: 12.0,
+                    height: 12.0,
+                };
+                self.trail_target(&page, &mark, arg_str(args, "element"), "CLICK")
+                    .await;
+                self.glide(&page, x, y).await;
+                cosmetic(&page, &trail::click(x, y)).await;
+                if real {
+                    page.input(InputEvent::Click {
+                        x,
+                        y,
+                        button: button(arg_str(args, "button")),
+                        count: if arg_bool(args, "doubleClick") == Some(true) {
+                            2
+                        } else {
+                            1
+                        },
+                        modifiers: copper_engine::Modifiers::NONE,
+                    })
+                    .await
+                    .map_err(Failure)?;
+                } else {
+                    js(&page, &pj::click_at(x, y)).await?;
+                }
+                self.settle(&id, Duration::from_secs(3)).await;
+                Ok(vec![Content::Text(format!(
+                    "Clicked ({}, {}) on the page's {}. {}",
+                    x as i64,
+                    y as i64,
+                    page_words(&hit),
                     self.page_line(&id)
                 ))])
             }
@@ -683,6 +775,16 @@ impl<H: Host> Mcp<H> {
             "browser_console_messages" => {
                 let result = js_value(&page, &pj::console()).await?;
                 Ok(vec![Content::Text(fence(&render(Some(&result))))])
+            }
+            "browser_downloads" => {
+                let wait = arg_f64(args, "wait").unwrap_or(0.0).clamp(0.0, 60.0);
+                let deadline = Instant::now() + Duration::from_secs_f64(wait);
+                let mut mine = self.host.tab_downloads(&id);
+                while mine.running() && Instant::now() < deadline {
+                    self.host.sleep(Duration::from_millis(200)).await;
+                    mine = self.host.tab_downloads(&id);
+                }
+                Ok(vec![Content::Text(mine.answer())])
             }
             "browser_find" => {
                 let text = arg_str(args, "text").ok_or("text required")?;
@@ -987,6 +1089,48 @@ impl<H: Host> Mcp<H> {
                 ))])
             }
             _ => Err("action must be list, new, close or select".into()),
+        }
+    }
+
+    /// `browser_handoff` (`Handoff.call`): hand the tab to the person for a
+    /// step only they should do, and wait for Done, Not now or the timeout.
+    async fn handoff_tool(
+        &self,
+        args: &Map<String, Value>,
+        ctx: &CallCtx,
+    ) -> Result<Vec<Content>, Failure> {
+        // Not `current`: the tab is not staged or touched, only named in the bar.
+        let tab = self.target(ctx).ok_or("no active tab")?;
+        let said = ["message", "reason"]
+            .iter()
+            .filter_map(|k| arg_str(args, k).map(str::trim))
+            .find(|s| !s.is_empty())
+            .unwrap_or("Finish this step yourself");
+        let seconds = arg_f64(args, "timeout").unwrap_or(15.0);
+        if !(seconds.is_finite() && seconds > 0.0) {
+            return Err("timeout must be a number of seconds, more than 0 (at most 600)".into());
+        }
+        let seconds = seconds.min(600.0);
+        let agent = Some(ctx.who.agent.trim())
+            .filter(|a| !a.is_empty())
+            .unwrap_or("An agent");
+        let answer = self
+            .host
+            .handoff(&tab.id, agent, said, Duration::from_secs_f64(seconds))
+            .await
+            .map_err(Failure)?;
+        let page = self.page_line(&tab.id);
+        match answer {
+            Some(HandoffAnswer::Done) => Ok(vec![Content::Text(format!(
+                "The user says it is done. Take a fresh browser_snapshot before going on. {page}"
+            ))]),
+            Some(HandoffAnswer::NotNow) => Err(Failure(format!(
+                "The user said not now. Leave this step undone and tell them in your reply. {page}"
+            ))),
+            None => Ok(vec![Content::Text(format!(
+                "No answer yet after {} s; the bar is still up for the user. Call browser_handoff again to keep waiting (timeout up to 600), or go on without this step. {page}",
+                seconds as i64
+            ))]),
         }
     }
 
