@@ -63,9 +63,11 @@ struct PageInner {
 }
 
 impl Drop for PageInner {
-    /// The tab is gone: so is any file chooser it had open.
+    /// The tab is gone: so is any file chooser it had open, and any
+    /// question an agent held.
     fn drop(&mut self) {
         self.shared.cancel_file_chooser();
+        self.shared.agent.close_all();
     }
 }
 
@@ -159,6 +161,8 @@ pub(crate) struct Shared {
     menu: RefCell<Option<Rc<OpenMenu>>>,
     /// The file chooser this page has open, if any.
     chooser: RefCell<Option<Chooser>>,
+    /// What agents' page tools take and read (dialogs, choosers, requests).
+    pub(crate) agent: crate::agent::AgentHooks,
 }
 
 impl Shared {
@@ -327,6 +331,7 @@ impl WebKitPage {
             held: Cell::new(false),
             menu: RefCell::default(),
             chooser: RefCell::default(),
+            agent: Default::default(),
         });
         profile.register_page(&view, Rc::downgrade(&shared.sink));
         let page = WebKitPage {
@@ -440,6 +445,7 @@ impl WebKitPage {
                     // chooser are moot (dropping a request denies it).
                     sh.permissions.borrow_mut().clear();
                     sh.cancel_file_chooser();
+                    sh.agent.committed();
                     LoadState::Committed { url }
                 }
                 LoadEvent::Finished => LoadState::Finished { url },
@@ -478,6 +484,7 @@ impl WebKitPage {
         let sh2 = sh.clone();
         view.connect_web_process_terminated(move |_, reason| {
             sh2.cancel_file_chooser();
+            sh2.agent.close_all();
             let s = &sh2.sink;
             let reason = match reason {
                 WebProcessTerminationReason::ExceededMemoryLimit => {
@@ -510,6 +517,11 @@ impl WebKitPage {
         let sh2 = sh.clone();
         view.connect_permission_request(move |v, req| {
             let sh = &sh2;
+            // A site the user or an agent allowed: granted, nobody asked.
+            if sh.agent.grants(&permission_kind(req), v.uri().as_deref()) {
+                req.allow();
+                return true;
+            }
             // A prompt for a page nobody is looking at would land over the
             // user's window: held pages are refused without asking.
             if sh.backstaged(v) {
@@ -637,12 +649,29 @@ impl WebKitPage {
         // outlived its tab and stacked.
         let sh2 = sh.clone();
         view.connect_run_file_chooser(move |v, req| {
+            if sh2.agent.take_chooser(req) {
+                return true;
+            }
             if sh2.backstaged(v) {
                 req.cancel();
                 return sh2.blocked("file chooser");
             }
             sh2.choose_files(v, req);
             true
+        });
+        // alert / confirm / prompt / beforeunload: an agent's first (see
+        // `agent`); on a held page nobody sees, a closed dialog's answer at
+        // once (WebKit's own would wait inside the page for ever).
+        let sh2 = sh.clone();
+        view.connect_script_dialog(move |v, dialog| {
+            if sh2.agent.take_dialog(dialog) {
+                return true;
+            }
+            if !sh2.backstaged(v) {
+                return false;
+            }
+            crate::agent::decline(dialog);
+            sh2.blocked("script dialog")
         });
         let sh2 = sh.clone();
         view.connect_run_color_chooser(move |v, req| {
@@ -1172,6 +1201,42 @@ impl PageView for WebKitPage {
 
     fn cancel_file_chooser(&self) -> bool {
         self.inner.shared.cancel_file_chooser()
+    }
+
+    fn set_dialog_handler(&self, handler: Option<copper_engine::DialogHandler>) {
+        self.inner.shared.agent.set_dialog_handler(handler);
+    }
+
+    fn answer_dialog(&self, id: copper_engine::DialogId, accept: bool, text: Option<&str>) -> bool {
+        self.inner.shared.agent.answer_dialog(id, accept, text)
+    }
+
+    fn set_file_chooser_handler(&self, handler: Option<copper_engine::FileChooserHandler>) {
+        self.inner.shared.agent.set_chooser_handler(handler);
+    }
+
+    fn answer_file_chooser(&self, files: copper_engine::ChosenFiles) -> bool {
+        self.inner.shared.agent.answer_chooser(files)
+    }
+
+    fn watch_network(&self) {
+        self.inner.shared.agent.watch(&self.inner.view);
+    }
+
+    fn network(&self) -> Option<copper_engine::NetLog> {
+        self.inner.shared.agent.network()
+    }
+
+    fn print_pdf(&self, path: &std::path::Path) -> LocalFuture<Result<()>> {
+        crate::agent::print_pdf(&self.inner.view, path)
+    }
+
+    fn set_permission_handler(&self, handler: Option<copper_engine::PermissionHandler>) {
+        self.inner.shared.agent.set_permission_handler(handler);
+    }
+
+    fn set_geolocation(&self, position: Option<copper_engine::GeoPosition>) {
+        crate::agent::set_geolocation(&self.inner.view, position);
     }
 
     fn show_inspector(&self) {

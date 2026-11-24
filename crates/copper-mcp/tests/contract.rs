@@ -187,6 +187,15 @@ impl Page for FakePage {
             let Some((script, args)) = found else {
                 return Err("JavaScript: unknown script".to_string());
             };
+            // browser_evaluate: the agent's function rides after the arguments.
+            if script == Script::Element {
+                if body.contains("pt-boom-17") {
+                    return Err("JavaScript: Error: pt-boom-17".to_string());
+                }
+                if body.contains("pt-syntax") {
+                    return Err("JavaScript: SyntaxError: Unexpected token '{'".to_string());
+                }
+            }
             world
                 .borrow_mut()
                 .calls
@@ -195,9 +204,20 @@ impl Page for FakePage {
                 Script::Snapshot => {
                     json!("- button \"Search\" [ref=e1]\n- textbox \"Query\" [ref=e2]")
                 }
+                // A button under a cookie wall: in the way of a click, not of a picture.
+                Script::Rect if args["target"] == "ref:e5" && args["hit"] == true => json!({
+                    "error": "covered by div#consent \"Accept all\" (it is on top, and would get the click)",
+                    "blocked": true, "cover": "div#consent \"Accept all\"",
+                }),
+                Script::Rect if args["target"] == "ref:e7" && args["hit"] == true => {
+                    json!({"error": "not visible (display: none)", "blocked": true})
+                }
                 Script::Rect => match args["target"].as_str() {
                     Some("ref:e1") => json!({"x": 10, "y": 20, "width": 100, "height": 30}),
                     Some("ref:e2") => json!({"x": 0, "y": 100, "width": 200, "height": 20}),
+                    Some("ref:e5" | "ref:e6" | "ref:e7") => {
+                        json!({"x": 0, "y": 200, "width": 80, "height": 20})
+                    }
                     // grid.html's boxes, from the viewport scrolled to SCROLL_Y.
                     Some("css:#box-b") => {
                         json!({"x": 400, "y": 1500.0 - SCROLL_Y, "width": 240, "height": 120})
@@ -209,8 +229,20 @@ impl Page for FakePage {
                     _ => json!({"error": "not found"}),
                 },
                 Script::Metrics => json!({"x": 0, "y": SCROLL_Y, "width": 1280, "height": 3200}),
+                // e6 is a read-only date box.
+                Script::Focus | Script::SetValue if args["target"] == "ref:e6" => {
+                    json!("not editable: INPUT is read-only (a picker may open when you click it)")
+                }
                 Script::Focus | Script::SetValue | Script::Submit => json!("ok"),
-                Script::HasText => json!(true),
+                Script::Fill if args["target"] == "ref:e2" => json!("ok"),
+                Script::Fill => json!(format!(
+                    "no element for {}",
+                    args["target"].as_str().unwrap_or("")
+                )),
+                Script::Select => json!(format!("no option matched {}", args["values"])),
+                Script::Scroll => json!("ok"),
+                Script::Element => json!("Example Domain"),
+                Script::HasText => json!(args["text"] != "never-there"),
                 Script::Text => json!("Example Domain"),
                 Script::JevObserve | Script::JevObserveFor | Script::JevSettleRead => {
                     let w = world.borrow();
@@ -372,9 +404,14 @@ impl Host for FakeHost {
         self.set(id, url, "Example Domain");
     }
 
-    fn go_back(&self, _id: &TabId) {}
+    fn go_back(&self, _id: &TabId) -> bool {
+        // The fake tabs have no history.
+        false
+    }
 
-    fn go_forward(&self, _id: &TabId) {}
+    fn go_forward(&self, _id: &TabId) -> bool {
+        false
+    }
 
     fn resize_window(&self, _width: f64, _height: f64) -> Result<(), String> {
         Ok(())
@@ -616,13 +653,16 @@ async fn tools_list_is_the_mac_catalogue_minus_voice() {
             // kept at the options Linux implements; 37493 with their model,
             // strategy and json, 2026-10-30 — vision is still left out;
             // 38065 with browser_take_screenshot's selector, frame, region,
-            // padding and scale, 2026-11-17; 35980 with the Mac's one-line
-            // jev_* descriptions and jev_run's private, 2026-11-24).
+            // padding and scale, 2026-11-17; 41434 with the page tools
+            // browser_handle_dialog, _file_upload, _pdf_save,
+            // _network_requests, _cookies and _permissions, 2026-11-24;
+            // 39349 with the Mac's one-line jev_* descriptions and
+            // jev_run's private, 2026-11-24).
             let all: Vec<Value> = mac.values().cloned().collect();
             let wire = copper_pagejs::render::compact_json(
                 &json!({"jsonrpc": "2.0", "id": 2, "result": {"tools": all}}),
             );
-            assert_eq!(wire.len(), 35980);
+            assert_eq!(wire.len(), 39349);
         })
         .await;
 }
@@ -998,7 +1038,10 @@ async fn named_tabs_errors_and_groups() {
 
             let (text, error) = tool(port, "voice_status", json!({})).await;
             assert!(error);
-            assert_eq!(text, "Unknown tool voice_status");
+            assert_eq!(
+                text,
+                "Unknown tool voice_status. Call tools/list for the tools there are."
+            );
 
             let (text, _) = tool(
                 port,
@@ -1079,6 +1122,129 @@ async fn a_closed_tab_is_never_swapped_for_the_users() {
             let (text, error) = tool_as(port, "a", "browser_navigate", json!({"url": "https://x.test/"})).await;
             assert!(error && text.starts_with("your tab was closed"), "{text}");
             assert_eq!(urls(&r), before);
+        })
+        .await;
+}
+
+/// Mac #181 (PageToolsTests, docs/fixtures/page-tools-e2e.py): a page tool
+/// that didn't do what was asked says so, as an error naming the next step.
+#[tokio::test]
+async fn page_tools_say_what_really_happened() {
+    local()
+        .run_until(async {
+            let r = start(false);
+            let port = r.server.port;
+            let page = "### Page\n- URL: https://home.test/\n- Title (the page's own words): \"Home\"\n- Tab: 00000000";
+            let fails = async |name: &str, arguments: Value| -> String {
+                let (text, error) = tool(port, name, arguments.clone()).await;
+                assert!(error, "{name} {arguments}: {text}");
+                text
+            };
+
+            // A page error is its own message; one that doesn't parse says how to write it.
+            assert_eq!(fails("browser_evaluate", json!({"function": "() => { throw new Error('pt-boom-17') }"})).await, "JavaScript: Error: pt-boom-17");
+            assert_eq!(
+                fails("browser_evaluate", json!({"function": "pt-syntax"})).await,
+                "JavaScript: SyntaxError: Unexpected token '{'. The function did not parse: pass one arrow function such as () => document.title, or a plain expression."
+            );
+            let (text, error) = tool(port, "browser_evaluate", json!({"function": "document.title"})).await;
+            assert!(!error);
+            assert_eq!(text, "Example Domain");
+
+            // A click under a cookie wall names the wall, after three more looks, and clicks nothing.
+            let inputs = r.host.0.borrow().inputs.len();
+            let rects = |w: &World| w.calls.iter().filter(|c| c.1 == "page/rect.js").count();
+            let before = rects(&r.host.0.borrow());
+            assert_eq!(
+                fails("browser_click", json!({"ref": "e5"})).await,
+                "ref:e5: covered by div#consent \"Accept all\" (it is on top, and would get the click). Close or dismiss what covers it first (find its button with browser_snapshot), then try again."
+            );
+            assert_eq!(rects(&r.host.0.borrow()) - before, 4);
+            assert_eq!(r.host.0.borrow().inputs.len(), inputs, "the wall got no click");
+            assert_eq!(
+                fails("browser_click", json!({"ref": "e7"})).await,
+                "ref:e7: not visible (display: none). Open or scroll to whatever reveals it first, or pick another ref from a fresh browser_snapshot."
+            );
+            // A picture of it is no click: it is taken.
+            let (_, text, error) = picture(port, json!({"ref": "e5"})).await;
+            assert!(!error, "{text}");
+
+            // Typing into a read-only box, an option that isn't there, a form half filled.
+            assert_eq!(
+                fails("browser_type", json!({"ref": "e6", "text": "2026-11-24"})).await,
+                "not editable: INPUT is read-only (a picker may open when you click it). Take a fresh browser_snapshot and use a ref from it."
+            );
+            assert_eq!(
+                fails("browser_select_option", json!({"ref": "e2", "values": ["Purple"]})).await,
+                "no option matched [\"Purple\"]. Take a fresh browser_snapshot and use a ref from it."
+            );
+            let fields = json!([
+                {"name": "Query", "ref": "e2", "type": "textbox", "value": "copper"},
+                {"name": "Ghost", "ref": "e9", "type": "textbox", "value": "x"},
+                {"name": "Nameless", "type": "textbox", "value": "x"},
+            ]);
+            assert_eq!(
+                fails("browser_fill_form", json!({"fields": fields})).await,
+                "2 of 3 fields not filled. Take a fresh browser_snapshot and retry those.\nQuery: ok\nGhost: no element for ref:e9\nNameless: not filled — no ref (take one from browser_snapshot)"
+            );
+
+            // Keys, history, waits.
+            assert_eq!(
+                fails("browser_press_key", json!({"key": "NotAKey"})).await,
+                "Unknown key \"NotAKey\". Use a key name (Enter, Tab, Escape, Backspace, Delete, Space, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, PageDown, F1–F12), one character, or a combination such as Shift+Tab or Meta+a. To type text, use browser_type."
+            );
+            assert_eq!(
+                fails("browser_navigate_back", json!({})).await,
+                format!("No page to go back to: this tab's history starts here. Use browser_navigate with the address you want. {page}")
+            );
+            assert_eq!(
+                fails("browser_navigate_forward", json!({})).await,
+                format!("No page to go forward to: this is the newest page in the tab's history. Use browser_navigate with the address you want. {page}")
+            );
+            assert_eq!(
+                fails("browser_wait_for", json!({})).await,
+                "Nothing to wait for: pass text (to appear), textGone (to disappear) or time (seconds)."
+            );
+            assert_eq!(
+                fails("browser_wait_for", json!({"time": -1})).await,
+                "time must be a number of seconds, 0 or more (at most 30); got -1"
+            );
+            assert_eq!(
+                fails("browser_wait_for", json!({"text": "never-there"})).await,
+                format!("Timed out after 15 s: \"never-there\" never appeared. Take a browser_snapshot to see what the page shows instead, or call browser_wait_for again if it is still working. {page}")
+            );
+
+            // Absurd numbers are refused, not cast.
+            assert_eq!(
+                fails("browser_scroll", json!({"deltaY": 1e100})).await,
+                "deltaY must be a number from -1000000 to 1000000; got 1e+100"
+            );
+            assert_eq!(
+                fails("browser_scroll", json!({"deltaX": "far"})).await,
+                "deltaX must be a number from -1000000 to 1000000; got far"
+            );
+            assert_eq!(
+                fails("browser_resize", json!({"width": 1e100, "height": 700})).await,
+                "width must be a number from -20000 to 20000; got 1e+100"
+            );
+            assert_eq!(
+                fails("browser_resize", json!({"width": 50, "height": 700})).await,
+                "width and height required: points, 100 to 20000"
+            );
+
+            // A bad browser_groups call.
+            assert_eq!(
+                fails("browser_groups", json!({"action": "assign"})).await,
+                "group (a name) is required for assign; browser_groups list shows the ones there are"
+            );
+            assert_eq!(
+                fails("browser_groups", json!({"action": "remove"})).await,
+                "This tab is in no group. browser_groups list shows the groups"
+            );
+            assert_eq!(
+                fails("browser_groups", json!({"action": "sort"})).await,
+                "action must be list, assign or remove"
+            );
         })
         .await;
 }

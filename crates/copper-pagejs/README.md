@@ -141,12 +141,13 @@ from `performance.getEntriesByType('resource')`.
 | `page/key.js` | `Key` | `Fork/MCP/Tools.swift:370` `Tools.dispatch` | call | page | `page/helper.js` |
 | `page/select.js` | `Select` | `Fork/MCP/Tools.swift:377` `Tools.dispatch` | call | page | `page/helper.js` |
 | `page/drag.js` | `Drag` | `Fork/MCP/Tools.swift:390` `Tools.dispatch` | call | page | `page/helper.js` |
+| `page/drop.js` | `Drop` | `Fork/MCP/FileChooser.swift:131` `FileChooser.drop` | call | page | `page/helper.js` |
 | `page/has_text.js` | `HasText` | `Fork/MCP/Tools.swift:418` `Tools.dispatch` | call | page |  |
 | `page/scroll.js` | `Scroll` | `Fork/MCP/Tools.swift:439` `Tools.dispatch` | call | page | `page/helper.js` |
 | `page/text.js` | `Text` | `Fork/MCP/Tools.swift:444` `Tools.dispatch` | call | page | `page/helper.js` |
 | `page/console.js` | `Console` | `Fork/MCP/Tools.swift:447` `Tools.dispatch` | call | page | `page/helper.js` |
 | `page/find_text.js` | `FindText` | `Fork/MCP/Tools.swift:451` `Tools.dispatch` | call | page | `page/helper.js` |
-| `page/element.js` | `Element` | `Fork/MCP/Tools.swift:405` `Tools.dispatch` | call | page | `page/helper.js` |
+| `page/element.js` | `Element` | `Fork/MCP/Tools.swift:613` `Tools.dispatch` (`browser_evaluate`'s wrapper) | call | page | `page/helper.js` |
 | `page/console_early.js` | `ConsoleEarly` | `Fork/MCP/Page.swift:138` `Page.helper` (its console capture) + `Page.consoleShim`'s short timers | user script: start, main frame | page |  |
 | `page/due.js` | `Due` | `Fork/MCP/Tools.swift:1036` `Tools.late` | call | page |  |
 | `jev/fast.js` | `JevFast` | `Fork/MCP/Ultrafast.swift:634` `Ultrafast.script` | installer | page |  |

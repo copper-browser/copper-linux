@@ -171,7 +171,33 @@ function () {
     if (count >= limit) lines.push('… (truncated at ' + limit + ' nodes; pass a selector or interactive: true for less)');
     return lines.join('\n');
   }
-  function rect(spec) {
+  // The element at a point, through open shadow roots.
+  function deepAt(x, y) {
+    var hit = document.elementFromPoint(x, y);
+    while (hit && hit.shadowRoot) { var inner = hit.shadowRoot.elementFromPoint(x, y); if (!inner || inner === hit) break; hit = inner; }
+    return hit;
+  }
+  function inside(node, el) {
+    for (var n = node; n; n = n.parentNode || (n instanceof ShadowRoot ? n.host : null)) if (n === el) return true;
+    return false;
+  }
+  function describe(el) {
+    var s = el.tagName.toLowerCase() + (el.id ? '#' + el.id : '');
+    if (!el.id && typeof el.className === 'string' && el.className.trim()) s += '.' + el.className.trim().split(/\s+/).slice(0, 2).join('.');
+    var t = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+    return t ? s + ' ' + JSON.stringify(t.length > 60 ? t.slice(0, 57) + '…' : t) : s;
+  }
+  function hidden(el) {
+    var s = getComputedStyle(el);
+    if (s.display === 'none') return 'display: none';
+    if (s.visibility === 'hidden') return 'visibility: hidden';
+    if (s.opacity === '0') return 'opacity: 0';
+    var r = el.getBoundingClientRect();
+    return r.width === 0 && r.height === 0 ? 'no size' : '';
+  }
+  // With hitTest (anything about to be clicked or typed into), the point at
+  // its middle must be the element's own: what covers or hides it is an error.
+  function rect(spec, hitTest) {
     var el = find(spec);
     if (!el) return { error: 'no element for ' + spec };
     // Linux: behavior 'instant'. The default ('auto') follows CSS
@@ -181,12 +207,28 @@ function () {
     var r = el.getBoundingClientRect();
     // A tiny or offscreen box means a wrapper; the first sized child is the thing.
     if ((r.width < 2 || r.height < 2) && el.firstElementChild) r = el.firstElementChild.getBoundingClientRect();
-    return { x: r.left, y: r.top, width: r.width, height: r.height };
+    var out = { x: r.left, y: r.top, width: r.width, height: r.height };
+    if (!hitTest || el.tagName === 'OPTION') return out;
+    var x = r.left + r.width / 2, y = r.top + r.height / 2;
+    var hit = x >= 0 && y >= 0 && x < innerWidth && y < innerHeight ? deepAt(x, y) : null;
+    // Its own, or its label's (a styled checkbox is often only its label).
+    if (hit && (inside(hit, el) || Array.prototype.some.call(el.labels || [], function (l) { return inside(hit, l); }))) return out;
+    var why = hidden(el);
+    if (why) return { error: 'not visible (' + why + ')', blocked: true };
+    if (!hit) return { error: 'outside the visible page, at ' + Math.round(x) + ',' + Math.round(y), blocked: true };
+    return { error: 'covered by ' + describe(hit) + ' (it is on top, and would get the click)', blocked: true, cover: describe(hit) };
   }
   function fire(el, type, init) { el.dispatchEvent(new (type.indexOf('key') === 0 ? KeyboardEvent : type.indexOf('mouse') === 0 || type === 'click' || type === 'dblclick' || type === 'contextmenu' ? MouseEvent : Event)(type, Object.assign({ bubbles: true, cancelable: true, composed: true }, init || {}))); }
+  // A field the user can't change either: an error, never a quiet write.
+  function locked(el) {
+    if (el.disabled || el.getAttribute('aria-disabled') === 'true') return 'not editable: ' + el.tagName + ' is disabled';
+    if (el.readOnly && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return 'not editable: ' + el.tagName + ' is read-only (a picker may open when you click it)';
+    return '';
+  }
   function setValue(spec, value) {
     var el = find(spec);
     if (!el) return 'no element for ' + spec;
+    if (locked(el)) return locked(el);
     el.focus && el.focus();
     if (el.isContentEditable) {
       el.textContent = value;
@@ -220,6 +262,7 @@ function () {
     if (!el) return 'no element for ' + spec;
     if (el.tagName !== 'SELECT') { el = el.querySelector('select') || el; }
     if (el.tagName !== 'SELECT') return 'not a select';
+    if (locked(el)) return locked(el);
     var hit = 0;
     for (var i = 0; i < el.options.length; i++) {
       var o = el.options[i];
@@ -233,6 +276,7 @@ function () {
   function fill(spec, kind, value) {
     var el = find(spec);
     if (!el) return 'no element for ' + spec;
+    if (locked(el)) return locked(el);
     if (kind === 'checkbox' || kind === 'radio') {
       var want = value === 'true' || value === 'on' || value === '1' || value === 'checked';
       if (el.checked !== want) el.click();
@@ -255,7 +299,7 @@ function () {
     return 'ok';
   }
   function hover(spec) { var el = find(spec); if (!el) return 'no element for ' + spec; var r = el.getBoundingClientRect(); var init = { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 }; fire(el, 'pointerover', init); fire(el, 'mouseover', init); fire(el, 'mouseenter', init); fire(el, 'mousemove', init); return 'ok'; }
-  function focus(spec) { var el = find(spec); if (el && el.focus) el.focus(); return el ? 'ok' : 'no element'; }
+  function focus(spec) { var el = find(spec); if (!el) return 'no element for ' + spec; if (locked(el)) return locked(el); if (el.focus) el.focus(); return 'ok'; }
   function submit(spec) { var el = find(spec); if (!el) return 'no element'; var f = el.tagName === 'FORM' ? el : el.form || el.closest('form'); if (!f) { fire(el, 'keydown', { key: 'Enter', code: 'Enter', keyCode: 13 }); fire(el, 'keyup', { key: 'Enter', code: 'Enter', keyCode: 13 }); return 'enter'; } if (f.requestSubmit) f.requestSubmit(); else f.submit(); return 'ok'; }
   function key(k) { var el = document.activeElement || document.body; var init = { key: k, code: k.length === 1 ? 'Key' + k.toUpperCase() : k, keyCode: k === 'Enter' ? 13 : k === 'Escape' ? 27 : k === 'Tab' ? 9 : k.length === 1 ? k.charCodeAt(0) : 0 }; fire(el, 'keydown', init); if (k.length === 1 && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) { setValue('css:' + cssPath(el), el.value + k); } fire(el, 'keyup', init); if (k === 'Enter') submit('css:' + cssPath(el)); return 'ok'; }
   function drag(a, b) {
@@ -270,10 +314,43 @@ function () {
     from.dispatchEvent(new DragEvent('dragend', { bubbles: true, cancelable: true, dataTransfer: dt }));
     return 'ok';
   }
+  // Files dropped as from a file manager (browser_file_upload with ref): real
+  // File objects in one DataTransfer, dragenter → dragover → drop.
+  function drop(spec, files) {
+    var el = find(spec);
+    if (!el) return { error: 'no element for ' + spec };
+    if (el.scrollIntoView) el.scrollIntoView({ block: 'center', inline: 'center' });
+    var dt = new DataTransfer();
+    files.forEach(function (f) {
+      var bin = atob(f.data), bytes = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      dt.items.add(new File([bytes], f.name, { type: f.type }));
+    });
+    var r = el.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2;
+    var hit = document.elementFromPoint(x, y), over = hit && el.contains(hit) ? hit : el;
+    function send(type) {
+      var ev = new DragEvent(type, { bubbles: true, cancelable: type !== 'dragleave', composed: true, dataTransfer: dt, clientX: x, clientY: y });
+      over.dispatchEvent(ev);
+      return ev;
+    }
+    send('dragenter');
+    var accepted = send('dragover').defaultPrevented;
+    send(accepted ? 'drop' : 'dragleave');
+    return { accepted: accepted };
+  }
+  // The nearest box around el that scrolls the way asked; null for the page.
+  function scroller(el, dx, dy) {
+    for (var n = el; n && n !== document.body && n !== document.documentElement; n = n.parentElement || (n.getRootNode().host || null)) {
+      var s = getComputedStyle(n);
+      if (dy && /auto|scroll|overlay/.test(s.overflowY) && n.scrollHeight > n.clientHeight) return n;
+      if (dx && /auto|scroll|overlay/.test(s.overflowX) && n.scrollWidth > n.clientWidth) return n;
+    }
+    return null;
+  }
   function scroll(spec, dx, dy) {
     var el = spec ? find(spec) : null;
-    if (el) { el.scrollBy(dx, dy); return 'ok'; }
-    window.scrollBy(dx, dy);
+    if (spec && !el) return 'no element for ' + spec;
+    (el && scroller(el, dx, dy) || window).scrollBy({ left: dx, top: dy, behavior: 'instant' });
     return 'ok';
   }
   function text(spec) {
@@ -297,6 +374,6 @@ function () {
     }
     return out.length ? out.join('\n') : 'no visible text matches ' + JSON.stringify(needle);
   }
-  window.__copper = { snapshot: snapshot, find: find, rect: rect, setValue: setValue, select: select, fill: fill, click: click, hover: hover, focus: focus, submit: submit, key: key, drag: drag, scroll: scroll, text: text, findText: findText, console: function () { return logs; } };
+  window.__copper = { snapshot: snapshot, find: find, rect: rect, setValue: setValue, select: select, fill: fill, click: click, hover: hover, focus: focus, submit: submit, key: key, drag: drag, drop: drop, scroll: scroll, text: text, findText: findText, console: function () { return logs; } };
   return true;
 }

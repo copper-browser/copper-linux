@@ -232,6 +232,23 @@ pub fn agent_allowed<P: Platform>(shell: &Shell<P>, c: &Credential) -> bool {
         || string_list(shell, keys::ALLOWED).contains(&c.id.to_string())
 }
 
+/// Whether the user shared `url`'s site with agents — every account, or one
+/// saved for this site (`AgentAccess.shareAll || permitted(for:)`): the
+/// gate on its HttpOnly cookies, as on `browser_sign_in`.
+pub async fn site_shared<P: Platform>(shell: &Shell<P>, url: &str) -> bool {
+    if shell.settings().bool_or(keys::SHARE_ALL, false) {
+        return true;
+    }
+    let (Some(host), Some(vault)) = (site_host(url), vault()) else {
+        return false;
+    };
+    let origin = site_origin(url);
+    let all = rt::run(async move { vault.candidates(&host, origin.as_deref()).await })
+        .await
+        .unwrap_or_default();
+    all.iter().any(|c| agent_allowed(shell, c))
+}
+
 /// A card / identity / field id (`bw:<id>` / `op:<id>`) shared with agents.
 pub fn agent_allowed_id<P: Platform>(shell: &Shell<P>, stable: &str) -> bool {
     shell.settings().bool_or(keys::SHARE_ALL, false)

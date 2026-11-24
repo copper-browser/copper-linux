@@ -168,12 +168,14 @@ mod tests {
         let call = page::evaluate("() => document.title", None);
         assert!(
             call.function_body()
-                .ends_with("return (() => document.title)();")
+                .ends_with("})({\"target\":\"\"}, (\n() => document.title\n));")
         );
-        let call = page::evaluate("(el) => el.id", Some("e2"));
-        assert!(call.function_body().ends_with(
-            "return ((el) => el.id)((({ target }) => window.__copper.find(target))({\"target\":\"ref:e2\"}));"
-        ));
+        // A plain expression and a trailing comment stay well-formed.
+        let call = page::evaluate("document.title // the title", Some("e2"));
+        assert!(
+            call.function_body()
+                .ends_with("})({\"target\":\"ref:e2\"}, (\ndocument.title // the title\n));")
+        );
     }
 
     #[test]
@@ -200,7 +202,7 @@ mod tests {
 
     #[test]
     fn decoding() {
-        let rect = page::rect(&page::Locator::Ref("e1".into()));
+        let rect = page::rect(&page::Locator::Ref("e1".into()), true);
         let found = rect
             .decode(Some(r#"{"x":10,"y":20,"width":30,"height":40}"#))
             .unwrap();
@@ -215,6 +217,28 @@ mod tests {
                 .into_result(&page::Locator::Ref("e1".into()))
                 .unwrap_err(),
             "ref:e1: no element for ref:e1. Take a fresh browser_snapshot — refs change when the page does."
+        );
+        // In the way: what covers it and what to do (the Mac's Page.prepare words).
+        let covered = rect
+            .decode(Some(r#"{"error":"covered by div#wall \"Accept\" (it is on top, and would get the click)","blocked":true,"cover":"div#wall \"Accept\""}"#))
+            .unwrap();
+        assert!(covered.blocked());
+        assert_eq!(
+            covered
+                .into_result(&page::Locator::Ref("e1".into()))
+                .unwrap_err(),
+            "ref:e1: covered by div#wall \"Accept\" (it is on top, and would get the click). Close or dismiss what covers it first (find its button with browser_snapshot), then try again."
+        );
+        let hidden = rect
+            .decode(Some(
+                r#"{"error":"not visible (display: none)","blocked":true}"#,
+            ))
+            .unwrap();
+        assert_eq!(
+            hidden
+                .into_result(&page::Locator::Ref("e1".into()))
+                .unwrap_err(),
+            "ref:e1: not visible (display: none). Open or scroll to whatever reveals it first, or pick another ref from a fresh browser_snapshot."
         );
         assert!(forms::fill_login("a", "b").decode(None).unwrap().is_none());
         assert!(page::snapshot(None, false, 1).decode(Some("3")).is_err());

@@ -62,21 +62,55 @@ fn special(lower: &str) -> Option<(&'static str, Option<&'static str>)> {
     })
 }
 
+/// What `browser_press_key` names in its error.
+pub const KEY_NAMES: &str = "Enter, Tab, Escape, Backspace, Delete, Space, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, PageDown, F1–F12";
+
+/// "Control+Shift+K" → the key and the modifier names before it; "+" and
+/// "Control++" press the plus itself.
+fn split(named: &str) -> (String, Vec<String>) {
+    if !named.contains('+') || named.chars().count() == 1 {
+        return (named.to_string(), Vec::new());
+    }
+    let mut parts: Vec<String> = named.split('+').map(str::to_string).collect();
+    let mut name = parts.pop().unwrap_or_default();
+    if name.is_empty() {
+        if parts.last().is_some_and(String::is_empty) {
+            parts.pop();
+        }
+        name = "+".into();
+    }
+    (name, parts)
+}
+
+/// A key [`key`] can press: a name it knows or one character, after
+/// modifiers it knows (`Input.known`). Anything else used to be typed out as
+/// text ("NotAKey" went in as seven letters).
+pub fn known(named: &str) -> bool {
+    let (name, mods) = split(named);
+    (special(&name.to_lowercase()).is_some() || name.chars().count() == 1)
+        && mods.iter().all(|m| {
+            matches!(
+                m.to_lowercase().as_str(),
+                "alt"
+                    | "option"
+                    | "control"
+                    | "ctrl"
+                    | "meta"
+                    | "cmd"
+                    | "command"
+                    | "super"
+                    | "controlormeta"
+                    | "shift"
+            )
+        })
+}
+
 /// One key, named the way Playwright names them — `Enter`, `ArrowDown`,
 /// `a`, `Shift+Tab`, `Control+a`. An unknown multi-character name is typed
 /// as text, as on the Mac.
 pub fn key(named: &str, held: Modifiers) -> InputEvent {
-    let mut flags = held;
-    let mut name = named.to_string();
-    if name.contains('+') && name.chars().count() > 1 {
-        let mut parts: Vec<String> = name.split('+').map(str::to_string).collect();
-        name = parts.pop().unwrap_or_default();
-        flags = union(flags, modifiers(&parts));
-        if name.is_empty() {
-            // "Control++": the key is the plus itself.
-            name = "+".into();
-        }
-    }
+    let (name, parts) = split(named);
+    let mut flags = union(held, modifiers(&parts));
     let lower = name.to_lowercase();
     if let Some((key, text)) = special(&lower) {
         return InputEvent::Key {
@@ -143,5 +177,31 @@ mod tests {
         assert_eq!(k, "A");
         assert!(m.shift);
         assert!(modifiers(&["ControlOrMeta".into()]).ctrl);
+        assert!(
+            matches!(key("Control++", Modifiers::NONE), InputEvent::Key { key, modifiers, .. } if key == "+" && modifiers.ctrl)
+        );
+    }
+
+    /// PageToolsTests.pressKeyKnowsItsKeyNames.
+    #[test]
+    fn press_key_knows_its_key_names() {
+        for good in [
+            "Enter",
+            "tab",
+            "ArrowDown",
+            "F5",
+            "a",
+            "Z",
+            "+",
+            "Shift+Tab",
+            "Meta+a",
+            "Control+Shift+K",
+        ] {
+            assert!(known(good), "{good}");
+        }
+        // Typed out as text before: an error now, so the agent learns the name is wrong.
+        for bad in ["NotAKey", "Enterr", "Foo+a", "Shift+NotAKey", "ab"] {
+            assert!(!known(bad), "{bad}");
+        }
     }
 }

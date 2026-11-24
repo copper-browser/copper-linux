@@ -29,6 +29,7 @@
 //! [`EventStream`] per call; each sees every event emitted after it was
 //! created. Drop a stream to unsubscribe.
 
+mod agent;
 mod backstage;
 mod capabilities;
 mod error;
@@ -41,6 +42,11 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
+pub use agent::{
+    ChooserDecision, ChosenFiles, Decision, DialogDecision, DialogHandler, DialogId, DialogKind,
+    DialogRequest, FileChooserHandler, FileChooserInfo, GeoPosition, NetEntry, NetLog,
+    PermissionHandler,
+};
 pub use backstage::{Backstage, BackstageMode, BackstageStatus};
 pub use capabilities::{Capabilities, Capability};
 pub use error::{EngineError, Result};
@@ -348,6 +354,35 @@ pub trait PageView: Clone + 'static {
     fn has_file_chooser(&self) -> bool;
     /// Close the page's file chooser as if cancelled; `true` if one was open.
     fn cancel_file_chooser(&self) -> bool;
+
+    // -- agents' page tools (Mac `AgentDialogs`, `FileChooser`, `NetLog`) -------
+    /// Who decides a page's `alert` / `confirm` / `prompt` / `beforeunload`
+    /// first ([`DialogHandler`]); `None`: the engine alone. A question passed
+    /// on a page held backstage is answered at once as a closed dialog would
+    /// (OK, false, null; `beforeunload` leaves).
+    fn set_dialog_handler(&self, handler: Option<DialogHandler>);
+    /// Answer a taken question: `accept` is OK (a prompt's answer is `text`,
+    /// else its default), otherwise Cancel. `false` if it is not open.
+    fn answer_dialog(&self, id: DialogId, accept: bool, text: Option<&str>) -> bool;
+    /// Who decides a page's file chooser first ([`FileChooserHandler`]).
+    fn set_file_chooser_handler(&self, handler: Option<FileChooserHandler>);
+    /// Answer the taken file chooser with `files` (`None`: cancel; the input
+    /// fires `cancel`). `false` if none is waiting.
+    fn answer_file_chooser(&self, files: ChosenFiles) -> bool;
+    /// Start keeping this page's [`NetLog`] (from now on; idempotent).
+    fn watch_network(&self);
+    /// The page's requests since its document loaded, or `None` before
+    /// [`PageView::watch_network`].
+    fn network(&self) -> Option<NetLog>;
+    /// Print the page to a PDF file at `path`, in pages.
+    fn print_pdf(&self, path: &Path) -> LocalFuture<Result<()>>;
+    /// Who may grant the page's permission requests first
+    /// ([`PermissionHandler`]); `None`: the engine and the shell alone.
+    fn set_permission_handler(&self, handler: Option<PermissionHandler>);
+    /// The position this page is told when granted geolocation, from now on
+    /// (`None`: the engine's own, or "position unavailable"). WebKitGTK has
+    /// one position per web context, so there it is every page's.
+    fn set_geolocation(&self, position: Option<GeoPosition>);
 
     // -- tools -------------------------------------------------------------------
     /// Open the web inspector (needs `PageOptions::developer_extras`).

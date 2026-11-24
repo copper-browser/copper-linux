@@ -7,7 +7,7 @@ use crate::main_loop::MainLoop;
 use crate::shell::{Shell, WeakShell};
 use crate::{PageOf, Platform, ShellView};
 use copper_core::TabId;
-use copper_engine::{PageView, WeakPage};
+use copper_engine::{PageView, Profile as _, WeakPage};
 use copper_mcp::drive::DriveEvent;
 use copper_mcp::{Content, EnginePage, GroupInfo, Host, IntelligenceSource, TabInfo};
 use serde_json::{Map, Value};
@@ -36,6 +36,13 @@ impl<P: Platform> AppHost<P> {
 
     fn shell(&self) -> Option<Shell<P>> {
         self.shell.upgrade()
+    }
+
+    /// The tab's cookie jar (its profile).
+    fn jar(&self, id: &TabId) -> Result<crate::ProfileOf<P>, String> {
+        self.shell()
+            .and_then(|s| s.tab_profile(id))
+            .ok_or_else(|| "the tab has no page yet".to_string())
     }
 }
 
@@ -176,16 +183,22 @@ impl<P: Platform> Host for AppHost<P> {
         }
     }
 
-    fn go_back(&self, id: &TabId) {
-        if let Some(p) = self.shell().and_then(|s| s.page(id)) {
-            p.back();
-        }
+    fn go_back(&self, id: &TabId) -> bool {
+        let page = self.shell().and_then(|s| s.page(id));
+        let Some(p) = page.filter(|p| p.can_go_back()) else {
+            return false;
+        };
+        p.back();
+        true
     }
 
-    fn go_forward(&self, id: &TabId) {
-        if let Some(p) = self.shell().and_then(|s| s.page(id)) {
-            p.forward();
-        }
+    fn go_forward(&self, id: &TabId) -> bool {
+        let page = self.shell().and_then(|s| s.page(id));
+        let Some(p) = page.filter(|p| p.can_go_forward()) else {
+            return false;
+        };
+        p.forward();
+        true
     }
 
     fn is_loading(&self, id: &TabId) -> bool {
@@ -236,6 +249,77 @@ impl<P: Platform> Host for AppHost<P> {
 
     fn processes_line(&self, _id: &TabId) -> String {
         self.heat.line()
+    }
+
+    // -- page tools (tools-page) ----------------------------------------------
+
+    fn spawn(&self, task: std::pin::Pin<Box<dyn Future<Output = ()>>>) {
+        P::Loop::spawn_local(task);
+    }
+
+    fn downloads_folder(&self) -> std::path::PathBuf {
+        match self.shell() {
+            Some(shell) => shell.downloads().folder(&shell),
+            None => copper_core::platform::home_dir()
+                .unwrap_or_default()
+                .join("Downloads"),
+        }
+    }
+
+    fn cookie_jar(
+        &self,
+        id: &TabId,
+    ) -> impl Future<Output = Result<Vec<copper_engine::Cookie>, String>> {
+        let jar = self.jar(id);
+        async move { jar?.all_cookies().await.map_err(|e| e.to_string()) }
+    }
+
+    fn set_cookie(
+        &self,
+        id: &TabId,
+        cookie: copper_engine::Cookie,
+    ) -> impl Future<Output = Result<(), String>> {
+        let jar = self.jar(id);
+        async move { jar?.set_cookie(&cookie).await.map_err(|e| e.to_string()) }
+    }
+
+    fn delete_cookie(
+        &self,
+        id: &TabId,
+        cookie: copper_engine::Cookie,
+    ) -> impl Future<Output = Result<(), String>> {
+        let jar = self.jar(id);
+        async move { jar?.delete_cookie(&cookie).await.map_err(|e| e.to_string()) }
+    }
+
+    fn site_shared_with_agents(&self, url: &str) -> impl Future<Output = bool> {
+        let (shell, url) = (self.shell(), url.to_string());
+        async move {
+            match shell {
+                Some(shell) => crate::forms::site_shared(&shell, &url).await,
+                None => false,
+            }
+        }
+    }
+
+    fn site_permission(&self, site: &str, kind: &str) -> bool {
+        self.shell().is_some_and(|s| s.site_granted(kind, site))
+    }
+
+    fn set_site_permission(&self, site: &str, kind: &str, allowed: bool) {
+        if let Some(shell) = self.shell() {
+            shell.set_site_granted(kind, site, allowed);
+        }
+    }
+
+    fn geolocation(&self) -> Option<copper_engine::GeoPosition> {
+        self.shell().and_then(|s| s.position())
+    }
+
+    fn set_geolocation(&self, position: Option<copper_engine::GeoPosition>) {
+        if let Some(shell) = self.shell() {
+            shell.set_position(position);
+        }
     }
 
     fn sign_in(

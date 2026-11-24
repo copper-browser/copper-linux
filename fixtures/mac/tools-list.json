@@ -134,6 +134,64 @@
         "name": "browser_console_messages"
       },
       {
+        "description": "List, set or delete your tab's site's cookies (HttpOnly ones need the site shared with agents).",
+        "inputSchema": {
+          "properties": {
+            "action": {
+              "description": "Default list",
+              "enum": [
+                "list",
+                "set",
+                "delete"
+              ],
+              "type": "string"
+            },
+            "domain": {
+              "description": "Default the tab's host, or a parent domain",
+              "type": "string"
+            },
+            "expires": {
+              "description": "Unix seconds; none: session",
+              "type": "number"
+            },
+            "httpOnly": {
+              "type": "boolean"
+            },
+            "name": {
+              "description": "Required for set and delete",
+              "type": "string"
+            },
+            "path": {
+              "description": "Default /",
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "sameSite": {
+              "enum": [
+                "Strict",
+                "Lax",
+                "None"
+              ],
+              "type": "string"
+            },
+            "secure": {
+              "type": "boolean"
+            },
+            "tab": {
+              "type": "string"
+            },
+            "value": {
+              "description": "Value, for set",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "browser_cookies"
+      },
+      {
         "description": "Copper's own crash history on this Mac, newest first: time, version, exception and the first frame in Copper's code. index=N returns crash N in full — how it ended, the crashed thread's frames and the breadcrumbs (tool calls, page-process exits, memory) of that run before it. Read-only; nothing is sent anywhere.",
         "inputSchema": {
           "properties": {
@@ -219,6 +277,32 @@
           "type": "object"
         },
         "name": "browser_evaluate"
+      },
+      {
+        "description": "Choose files for your tab's file chooser. After a click opened one, answers it; before the click, arms the next one. Omit paths to cancel. With ref: drop them on that drop zone.",
+        "inputSchema": {
+          "properties": {
+            "paths": {
+              "description": "Absolute paths of the files to upload; omit to cancel the chooser",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "ref": {
+              "description": "A drop zone",
+              "type": "string"
+            },
+            "tab": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "browser_file_upload"
       },
       {
         "description": "Fill multiple form fields",
@@ -356,6 +440,32 @@
         "name": "browser_groups"
       },
       {
+        "description": "Answer the alert, confirm or prompt open on your tab (listed under ### Dialogs), or arm the answer for the next one.",
+        "inputSchema": {
+          "properties": {
+            "accept": {
+              "description": "OK (true) or Cancel",
+              "type": "boolean"
+            },
+            "promptText": {
+              "description": "A prompt's answer",
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "tab": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "accept"
+          ],
+          "type": "object"
+        },
+        "name": "browser_handle_dialog"
+      },
+      {
         "description": "Hover over element on page",
         "inputSchema": {
           "properties": {
@@ -446,6 +556,48 @@
         "name": "browser_navigate_forward"
       },
       {
+        "description": "Requests your tab's page made since it loaded (heard from the moment an agent first used the tab): method, URL, status, kind. Successful static assets are left out unless includeStatic.",
+        "inputSchema": {
+          "properties": {
+            "includeStatic": {
+              "description": "Also list images, scripts, styles and fonts that loaded fine",
+              "type": "boolean"
+            },
+            "limit": {
+              "description": "Newest N, default 100, at most 300",
+              "type": "number"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "tab": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "browser_network_requests"
+      },
+      {
+        "description": "Save your tab's page as a PDF (letter-proportioned pages). Into the downloads folder unless filename says where.",
+        "inputSchema": {
+          "properties": {
+            "filename": {
+              "description": "Absolute path or a name in Downloads; default the title",
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "tab": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "browser_pdf_save"
+      },
+      {
         "description": "Sample the current tab for requestAnimationFrame loops, DOM churn, animations, filters, canvases, timers, long tasks, and slow resources; returns WebKit-specific findings.",
         "inputSchema": {
           "properties": {
@@ -473,6 +625,60 @@
           "type": "object"
         },
         "name": "browser_perf_probe"
+      },
+      {
+        "description": "List, grant or revoke a site's permissions (geolocation, camera, microphone; notifications are always refused). No grant/revoke lists them.",
+        "inputSchema": {
+          "properties": {
+            "accuracy": {
+              "description": "Metres, default 50",
+              "type": "number"
+            },
+            "grant": {
+              "items": {
+                "enum": [
+                  "geolocation",
+                  "camera",
+                  "microphone",
+                  "notifications"
+                ],
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "latitude": {
+              "description": "Required with a geolocation grant: the position pages get",
+              "type": "number"
+            },
+            "longitude": {
+              "type": "number"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "revoke": {
+              "items": {
+                "enum": [
+                  "geolocation",
+                  "camera",
+                  "microphone",
+                  "notifications"
+                ],
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "site": {
+              "description": "host or host:port; default your tab's",
+              "type": "string"
+            },
+            "tab": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "browser_permissions"
       },
       {
         "description": "Press a key on the keyboard",

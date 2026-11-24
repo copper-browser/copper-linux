@@ -127,6 +127,37 @@ release dates.
   to an agent as one quoted line, and the text of a snapshot, a page read,
   a find or the console comes back fenced as untrusted page content, with a
   fence the page can't forge. As on the Mac (copper-browser/Copper#181).
+- **Agents answer a page's questions and file choosers, save PDFs, and
+  read its requests, cookies and permissions.** An alert, confirm or prompt
+  on an agent's tab no longer waits unseen or pops up over your window: it
+  is listed under `### Dialogs` in the agent's next answer and
+  `browser_handle_dialog` answers it (or arms the answer before the click);
+  moving on closes it as a closed dialog would. `browser_file_upload`
+  answers the file chooser a click opened, arms the next one, cancels, or
+  drops files on a drop zone (`ref`); paths are checked first.
+  `browser_pdf_save` prints the page to a paged PDF (the downloads folder
+  unless told where). `browser_network_requests` lists what the page
+  fetched since it loaded, with method, status and kind, heard from WebKit,
+  not from the page. `browser_cookies` lists, sets and deletes the tab's
+  site's cookies; HttpOnly values need the site shared with agents in
+  Settings › Passwords › Agent access. `browser_permissions` grants or
+  revokes geolocation, camera and microphone per site, and a granted page
+  gets the position the agent gives. New CLI verbs: `copper hover`,
+  `select`, `scroll`, `wait`, `back`, `forward`, `upload`, `dialog`, `pdf`.
+  (`copper-mcp` `dialogs.rs`, `page_tools.rs`; `PageView`'s agents' page
+  tools; WebKitGTK `agent.rs`; `docs/fixtures/agent-page-tools-e2e.py`.)
+  As on the Mac (copper-browser/Copper#181).
+- **Agents' page tools say what really happened.** `browser_evaluate` takes
+  a plain expression as well as a function and awaits a Promise (so does
+  `copper eval document.title`), and a page error shows its own message. A
+  click on something under a cookie wall, hidden or off the page is an
+  error naming what's in the way, not "Clicked". Typing into a read-only or
+  disabled field, an unmatched option, a form field that wasn't filled, an
+  unknown key, back or forward with no history, a `browser_wait_for` that
+  runs out or is negative, and a bad `browser_groups` call are errors that
+  name the next step. Absurd numbers (`deltaY: 1e100`) are refused, and
+  scrolling a row scrolls the list around it (`docs/fixtures/page-tools-e2e.py`).
+  As on the Mac (copper-browser/Copper#181).
 
 ## 0.6.4 — 2026-11-17
 

@@ -84,6 +84,14 @@ pub const USAGE: &str = "Usage: copper [--json] [--launch] [--tab ID] <command> 
   click REF | --selector CSS                click an element
   type REF TEXT [--submit]                  type into an element
   key KEY                                   press a key
+  hover REF | --selector CSS                hover over an element
+  select REF VALUE...                       choose options in a <select>
+  scroll [PIXELS] [--ref REF]               scroll the page (or within REF); --ref alone brings it into view
+  wait TEXT | --gone TEXT | --time SECONDS  wait for text to appear or go, or for a time
+  back | forward                            go back or forward in your tab
+  upload PATH... | --cancel                 answer the file chooser your click opened (or arm the next one)
+  dialog accept [TEXT] | dismiss            answer the page's alert, confirm or prompt
+  pdf [PATH]                                save the page as a PDF (default: the downloads folder)
   tools                                     list available tools
   health                                    check the agent server and Jev mode
   intelligence [status|sources|refresh|set|reload]  model access, keys, their source and readiness; never prints a key
@@ -618,6 +626,108 @@ pub fn make_request(command: &str, args: &[String]) -> Result<Spec, Early> {
             };
             Ok(call("browser_press_key", json!({ "key": key })))
         }
+        // The everyday page verbs, each one tool with its MCP arguments
+        // (`CLI.swift`); paths are made absolute here, where the shell's
+        // working folder is known.
+        "back" | "forward" => {
+            if !args.is_empty() {
+                return bad(format!("{command} takes no arguments"));
+            }
+            let tool = if command == "back" {
+                "browser_navigate_back"
+            } else {
+                "browser_navigate_forward"
+            };
+            Ok(call(tool, json!({})))
+        }
+        "hover" => {
+            if args.first().is_some_and(|a| a == "--selector") {
+                if args.len() != 2 {
+                    return bad("hover --selector needs CSS");
+                }
+                return Ok(call("browser_hover", json!({ "selector": args[1] })));
+            }
+            let [reference] = args else {
+                return bad("hover takes one REF or --selector CSS");
+            };
+            Ok(call("browser_hover", json!({ "ref": reference })))
+        }
+        "select" => {
+            if args.len() < 2 {
+                return bad("select needs REF VALUE...");
+            }
+            Ok(call(
+                "browser_select_option",
+                json!({ "ref": args[0], "values": args[1..] }),
+            ))
+        }
+        "scroll" => {
+            let mut arguments = Map::new();
+            let mut rest = args.iter();
+            while let Some(arg) = rest.next() {
+                if arg == "--ref" {
+                    match rest.next().filter(|v| !v.is_empty()) {
+                        Some(value) => arguments.insert("ref".into(), json!(value)),
+                        None => return bad("scroll --ref needs REF"),
+                    };
+                } else if let Ok(dy) = arg.parse::<f64>() {
+                    arguments.insert("deltaY".into(), json!(dy));
+                } else {
+                    return bad("scroll takes [PIXELS] [--ref REF]");
+                }
+            }
+            Ok(call("browser_scroll", Value::Object(arguments)))
+        }
+        "wait" => {
+            if args.first().is_some_and(|a| a == "--time") {
+                let seconds = match args {
+                    [_, s] => s.parse::<f64>().ok(),
+                    _ => None,
+                };
+                let Some(seconds) = seconds else {
+                    return bad("wait --time needs SECONDS");
+                };
+                return Ok(call("browser_wait_for", json!({ "time": seconds })));
+            }
+            let gone = args.first().is_some_and(|a| a == "--gone");
+            let text = args[usize::from(gone)..].join(" ");
+            if text.is_empty() {
+                return bad("wait needs TEXT, --gone TEXT or --time SECONDS");
+            }
+            let key = if gone { "textGone" } else { "text" };
+            Ok(call("browser_wait_for", json!({ key: text })))
+        }
+        "upload" => {
+            if args == ["--cancel"] {
+                return Ok(call("browser_file_upload", json!({})));
+            }
+            if args.is_empty() || args.iter().any(|a| a.starts_with('-')) {
+                return bad("upload needs PATH... or --cancel");
+            }
+            let paths: Vec<String> = args.iter().map(|p| absolute(p)).collect();
+            Ok(call("browser_file_upload", json!({ "paths": paths })))
+        }
+        "dialog" => {
+            let answer = args.first().map(String::as_str);
+            if !matches!(answer, Some("accept" | "dismiss")) {
+                return bad("dialog needs accept [TEXT] or dismiss");
+            }
+            let mut arguments = json!({ "accept": answer == Some("accept") });
+            if args.len() > 1 {
+                arguments["promptText"] = json!(args[1..].join(" "));
+            }
+            Ok(call("browser_handle_dialog", arguments))
+        }
+        "pdf" => {
+            if args.len() > 1 {
+                return bad("pdf takes one optional PATH");
+            }
+            let arguments = match args.first() {
+                Some(path) => json!({ "filename": absolute(path) }),
+                None => json!({}),
+            };
+            Ok(call("browser_pdf_save", arguments))
+        }
         "tools" => {
             if !args.is_empty() {
                 return bad("tools takes no arguments");
@@ -739,6 +849,16 @@ fn shot_path(path: &str) -> String {
         text.push(std::path::MAIN_SEPARATOR);
     }
     text
+}
+
+/// A path as the shell meant it: `~` expanded, made absolute against the
+/// working folder (`URL(fileURLWithPath:).standardizedFileURL.path`).
+fn absolute(path: &str) -> String {
+    let expanded = screenshot::expand(path);
+    std::path::absolute(&expanded)
+        .unwrap_or(expanded)
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// Where this command writes a screenshot itself, when Copper could not:
@@ -1454,6 +1574,91 @@ mod tests {
             };
             assert!(parse(&s(&extra), false).is_ok(), "{verb}");
         }
+    }
+
+    #[test]
+    fn page_verbs_map_onto_their_tools() {
+        let one = |v: &[&str]| {
+            let p = parse(&s(v), false).unwrap();
+            (
+                p.spec.request.as_ref().unwrap()["params"]["name"].clone(),
+                args_of(&p),
+            )
+        };
+        let usage = |v: &[&str]| match parse(&s(v), false) {
+            Err(Early::Usage(t)) => t,
+            _ => panic!("{v:?} parsed"),
+        };
+        assert_eq!(one(&["back"]), (json!("browser_navigate_back"), json!({})));
+        assert_eq!(one(&["forward"]).0, json!("browser_navigate_forward"));
+        assert_eq!(usage(&["back", "x"]), "back takes no arguments");
+        assert_eq!(one(&["hover", "e3"]).1, json!({"ref": "e3"}));
+        assert_eq!(
+            one(&["hover", "--selector", "a"]).1,
+            json!({"selector": "a"})
+        );
+        assert_eq!(usage(&["hover"]), "hover takes one REF or --selector CSS");
+        assert_eq!(
+            one(&["select", "e4", "Red", "Blue"]),
+            (
+                json!("browser_select_option"),
+                json!({"ref": "e4", "values": ["Red", "Blue"]})
+            )
+        );
+        assert_eq!(usage(&["select", "e4"]), "select needs REF VALUE...");
+        assert_eq!(
+            one(&["scroll", "600", "--ref", "e9"]).1,
+            json!({"deltaY": 600.0, "ref": "e9"})
+        );
+        assert_eq!(
+            usage(&["scroll", "down"]),
+            "scroll takes [PIXELS] [--ref REF]"
+        );
+        assert_eq!(
+            one(&["wait", "Order", "placed"]).1,
+            json!({"text": "Order placed"})
+        );
+        assert_eq!(
+            one(&["wait", "--gone", "Loading"]).1,
+            json!({"textGone": "Loading"})
+        );
+        assert_eq!(one(&["wait", "--time", "1.5"]).1, json!({"time": 1.5}));
+        assert_eq!(usage(&["wait", "--time"]), "wait --time needs SECONDS");
+        assert_eq!(
+            usage(&["wait"]),
+            "wait needs TEXT, --gone TEXT or --time SECONDS"
+        );
+        assert_eq!(
+            one(&["upload", "--cancel"]),
+            (json!("browser_file_upload"), json!({}))
+        );
+        let (_, a) = one(&["upload", "a.txt"]);
+        let path = a["paths"][0].as_str().unwrap();
+        assert!(
+            std::path::Path::new(path).is_absolute() && path.ends_with("a.txt"),
+            "{path}"
+        );
+        assert_eq!(usage(&["upload", "-x"]), "upload needs PATH... or --cancel");
+        assert_eq!(
+            one(&["dialog", "accept", "my", "name"]),
+            (
+                json!("browser_handle_dialog"),
+                json!({"accept": true, "promptText": "my name"})
+            )
+        );
+        assert_eq!(one(&["dialog", "dismiss"]).1, json!({"accept": false}));
+        assert_eq!(
+            usage(&["dialog", "ok"]),
+            "dialog needs accept [TEXT] or dismiss"
+        );
+        assert_eq!(one(&["pdf"]), (json!("browser_pdf_save"), json!({})));
+        assert!(
+            one(&["pdf", "out.pdf"]).1["filename"]
+                .as_str()
+                .unwrap()
+                .ends_with("out.pdf")
+        );
+        assert_eq!(usage(&["pdf", "a", "b"]), "pdf takes one optional PATH");
     }
 
     #[test]
