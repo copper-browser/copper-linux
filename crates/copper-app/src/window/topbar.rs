@@ -222,7 +222,7 @@ impl TopBar {
         let pills = self.pills.borrow();
         let Some(p) = pills.get(id) else { return };
         let Some(t) = shell.tab_view(id) else { return };
-        fill(p, &t, self.compact.get());
+        fill(shell, p, &t, self.compact.get());
     }
 }
 
@@ -301,7 +301,7 @@ fn pill(shell: &Shell, t: &TabView, compact: bool) -> Pill {
         title,
         pin: false,
     };
-    fill(&p, t, compact);
+    fill(shell, &p, t, compact);
     p
 }
 
@@ -313,7 +313,7 @@ fn pin(shell: &Shell, t: &TabView) -> Pill {
     mark.set_halign(gtk::Align::Center);
     mark.set_valign(gtk::Align::Center);
     mark.set_hexpand(true);
-    root.append(&tabs::with_pin_light(&mark, 3));
+    root.append(&mark);
     root.set_hexpand(false);
     root.set_tooltip_text(Some(&t.label));
     tabs::wire_activation(shell, root.upcast_ref(), &t.id);
@@ -324,16 +324,12 @@ fn pin(shell: &Shell, t: &TabView) -> Pill {
         title: gtk::Label::new(None),
         pin: true,
     };
-    fill(&p, t, true);
+    fill(shell, &p, t, true);
     p
 }
 
-fn fill(p: &Pill, t: &TabView, compact: bool) {
-    for (on, class) in [
-        (t.live, "live"),
-        (t.sleeping, "sleeping"),
-        (t.lit, "unread"),
-    ] {
+fn fill(shell: &Shell, p: &Pill, t: &TabView, compact: bool) {
+    for (on, class) in [(t.live, "live"), (t.sleeping, "sleeping")] {
         if on {
             p.root.add_css_class(class);
         } else {
@@ -343,14 +339,15 @@ fn fill(p: &Pill, t: &TabView, compact: bool) {
     while let Some(c) = p.mark.first_child() {
         p.mark.remove(&c);
     }
-    p.mark.append(&tabs::mark(t, 16));
+    let show_mark = p.pin || compact || tabs::shows_icons(shell);
+    if show_mark {
+        p.mark.append(&tabs::mark(shell, t, 16));
+    }
+    p.mark.set_visible(show_mark);
     p.title.set_text(&t.label);
     let mut name = t.label.clone();
     if p.pin {
         name.push_str(", pinned");
-    }
-    if t.lit && !t.live {
-        name.push_str(", new");
     }
     if t.sleeping {
         name.push_str(", asleep");

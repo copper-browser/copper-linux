@@ -21,10 +21,6 @@ pub struct Header {
     field: gtk::Box,
     core: Rc<FieldCore>,
     tag: gtk::Label,
-    /// "Not secure", shown while the pointer is on the address of an http
-    /// page (Mac `SideAddress.Host`).
-    insecure: gtk::Box,
-    hovering: Cell<bool>,
     /// The suggestions, laid over the window under the field (an overlay
     /// rather than a popover: one surface, so it is in every screenshot
     /// and never fights the compositor for focus).
@@ -46,15 +42,6 @@ impl Header {
         tag.set_valign(gtk::Align::Center);
         tag.set_visible(false);
         field.append(&tag);
-        let insecure = gtk::Box::new(gtk::Orientation::Horizontal, 3);
-        insecure.add_css_class("not-secure");
-        insecure.add_css_class("muted");
-        insecure.set_valign(gtk::Align::Center);
-        insecure.append(&gtk::Image::from_icon_name("channel-insecure-symbolic"));
-        insecure.append(&gtk::Label::new(Some(copper_core::address::NOT_SECURE)));
-        insecure.set_tooltip_text(Some(copper_core::address::NOT_SECURE_HELP));
-        insecure.set_visible(false);
-        field.append(&insecure);
         let core = FieldCore::new(shell);
         field.append(&core.text);
         let clamp = adw::Clamp::new();
@@ -87,8 +74,6 @@ impl Header {
             field,
             core,
             tag,
-            insecure,
-            hovering: Cell::new(false),
             dropdown,
             root: RefCell::default(),
             editing: Cell::new(false),
@@ -149,40 +134,7 @@ impl Header {
             });
         });
         me.core.text.add_controller(focus);
-
-        let motion = gtk::EventControllerMotion::new();
-        for enter in [true, false] {
-            let weak_me = Rc::downgrade(&me);
-            let weak = shell.downgrade();
-            let hover = move || {
-                if let (Some(me), Some(s)) = (weak_me.upgrade(), weak.upgrade()) {
-                    me.set_hovering(&s, enter);
-                }
-            };
-            if enter {
-                motion.connect_enter(move |_, _, _| hover());
-            } else {
-                motion.connect_leave(move |_| hover());
-            }
-        }
-        me.field.add_controller(motion);
         me
-    }
-
-    /// The pointer came onto (or left) the address.
-    pub fn set_hovering(&self, shell: &Shell, on: bool) {
-        self.hovering.set(on);
-        self.show_insecure(shell);
-    }
-
-    /// "Not secure" while the pointer is on an http page's address.
-    fn show_insecure(&self, shell: &Shell) {
-        let http = shell
-            .browser()
-            .active()
-            .is_some_and(|t| copper_core::address::is_not_secure(&t.url));
-        self.insecure
-            .set_visible(self.hovering.get() && !self.editing.get() && http);
     }
 
     /// The widget the dropdown is laid over (the window's overlay).
@@ -207,7 +159,6 @@ impl Header {
     /// Start editing the selected tab's address.
     pub fn edit(&self, shell: &Shell) {
         self.editing.set(true);
-        self.insecure.set_visible(false);
         self.field.add_css_class("focused");
         let url = shell
             .browser()
@@ -267,7 +218,6 @@ impl Header {
         if self.editing.get() {
             return;
         }
-        self.show_insecure(shell);
         self.field.set_visible(shell.active_id().is_some());
         let url = shell
             .browser()

@@ -24,6 +24,7 @@ mod convert;
 mod ghost;
 mod hands;
 mod page;
+mod process;
 mod profile;
 
 use std::cell::RefCell;

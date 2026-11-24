@@ -55,6 +55,7 @@ pub const VERBS: &[&str] = &[
     "session",
     "link",
     "claude",
+    "pins",
     "bitwarden",
     "crashes",
     "listen",

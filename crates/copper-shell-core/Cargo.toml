@@ -29,6 +29,8 @@ copper-pagejs.workspace = true
 # The ad blocker's list and per-page bookkeeping.
 copper-shield.workspace = true
 serde.workspace = true
+# Kept pictures are filed by hashes of their profile and address (`cover`).
+sha2 = "0.10"
 serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

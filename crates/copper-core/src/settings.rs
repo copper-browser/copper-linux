@@ -26,9 +26,8 @@ pub mod keys {
     pub const MANNER: &str = "manner";
     /// Column width in points.
     pub const SIDEBAR_WIDTH: &str = "sidebar.width";
-    /// Retired: tabs always wear the site's own icon (a globe until it
-    /// lands), as on the Mac (copper-browser/Copper#181). A stored value is
-    /// not read, but the key still marks an install older than `welcomed`.
+    /// `letters` | `icons`. Default `icons`: a site's own mark, its letter
+    /// only where it has none.
     pub const GLYPH: &str = "glyph";
     /// `row` | `recent`. Default `row`.
     pub const TABS_SWITCHING: &str = "tabs.switching";
@@ -41,6 +40,18 @@ pub mod keys {
     /// How many pages stay loaded however long they are left (0/absent:
     /// from the computer's memory). For measurements, as on the Mac.
     pub const SLEEP_KEEP: &str = "sleep.keep";
+    /// Megabytes over which a page left half an hour sleeps whatever the
+    /// budget says (0/absent: a thirty-second of memory, at least 500).
+    pub const SLEEP_HEAVY: &str = "sleep.heavy";
+    /// Megabytes the pages that may sleep keep between them (0/absent: a
+    /// sixteenth of memory, at least 1024).
+    pub const SLEEP_BUDGET: &str = "sleep.budget";
+    /// Let big pins sleep. Default true (Mac `PinsAwake.bigPinsSleep`).
+    pub const PINS_SLEEP: &str = "pins.sleep";
+    /// Seconds a big pin is left before it may sleep (0/absent = 7200).
+    pub const PINS_SLEEP_AFTER: &str = "pins.sleep.after";
+    /// Megabytes over which a pin is big (0/absent = 300).
+    pub const PINS_SLEEP_MB: &str = "pins.sleep.mb";
     /// Ad blocker on. Default true.
     pub const SHIELD: &str = "shield";
     /// Hosts the ad blocker is off for, sorted.
@@ -74,21 +85,15 @@ pub mod keys {
     pub const ZOOM_PREFIX: &str = "zoom.";
     /// Last open settings page.
     pub const SETTINGS_PAGE: &str = "settings.page";
-    /// The morning page's address (Mac `Fork/DailyPage.swift`); empty or
-    /// absent is off, the default.
-    pub const DAILY_URL: &str = "daily.url";
-    /// The hour (0–23, local) the morning page's day turns over. Default 3.
-    pub const DAILY_HOUR: &str = "daily.hour";
-    /// When the morning page last opened (Unix seconds).
-    pub const DAILY_SHOWN: &str = "daily.shown";
     /// Linux only: search engine id (see [`crate::address::ENGINES`]).
     pub const SEARCH_ENGINE: &str = "search.engine";
 }
 
 /// The keys the cloud `settings` document may carry (`CloudSettingsKeys.allowed`).
-pub const CLOUD_SETTINGS_KEYS: [&str; 8] = [
+pub const CLOUD_SETTINGS_KEYS: [&str; 9] = [
     keys::LOOK,
     keys::SIDEBAR,
+    keys::GLYPH,
     keys::TABS_SWITCHING,
     keys::TABS_SLEEP,
     keys::SPACES_SWIPE,
@@ -104,6 +109,14 @@ pub enum Look {
     Light,
     Dark,
     System,
+}
+
+/// What a tab wears beside its title.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Glyph {
+    Letters,
+    #[default]
+    Icons,
 }
 
 /// What Ctrl+Tab chooses.
@@ -149,6 +162,7 @@ macro_rules! string_enum {
     };
 }
 string_enum!(Look { Light = "light", Dark = "dark", System = "system" });
+string_enum!(Glyph { Letters = "letters", Icons = "icons" });
 string_enum!(TabSwitching { Row = "row", Recent = "recent" });
 string_enum!(ArchiveAfter { H12 = "h12", H24 = "h24", H48 = "h48", Never = "never" });
 
@@ -266,6 +280,15 @@ impl Settings {
         self.set(keys::SIDEBAR_WIDTH, w);
     }
 
+    pub fn glyph(&self) -> Glyph {
+        self.string(keys::GLYPH)
+            .and_then(Glyph::parse)
+            .unwrap_or_default()
+    }
+    pub fn set_glyph(&mut self, v: Glyph) {
+        self.set(keys::GLYPH, v.as_str());
+    }
+
     pub fn tab_switching(&self) -> TabSwitching {
         self.string(keys::TABS_SWITCHING)
             .and_then(TabSwitching::parse)
@@ -301,6 +324,39 @@ impl Settings {
         self.number(keys::SLEEP_KEEP)
             .filter(|n| *n >= 1.0)
             .map(|n| n as usize)
+    }
+
+    /// `sleep.heavy`, when set: megabytes that make a page heavy.
+    pub fn sleep_heavy_mb(&self) -> Option<u64> {
+        self.number(keys::SLEEP_HEAVY)
+            .filter(|n| *n >= 1.0)
+            .map(|n| n as u64)
+    }
+
+    /// `sleep.budget`, when set: megabytes the pages that may sleep keep.
+    pub fn sleep_budget_mb(&self) -> Option<u64> {
+        self.number(keys::SLEEP_BUDGET)
+            .filter(|n| *n >= 1.0)
+            .map(|n| n as u64)
+    }
+
+    /// Big pins may sleep (default true; off, pins never sleep).
+    pub fn big_pins_sleep(&self) -> bool {
+        self.bool_or(keys::PINS_SLEEP, true)
+    }
+
+    /// Seconds a big pin is left before it may sleep (default two hours).
+    pub fn pins_sleep_after_secs(&self) -> f64 {
+        self.number(keys::PINS_SLEEP_AFTER)
+            .filter(|s| *s > 0.0)
+            .unwrap_or(7200.0)
+    }
+
+    /// Megabytes over which a pin is big (default 300).
+    pub fn pins_sleep_mb(&self) -> u64 {
+        self.number(keys::PINS_SLEEP_MB)
+            .filter(|n| *n >= 1.0)
+            .map_or(300, |n| n as u64)
     }
 
     /// The ad blocker (default on).
@@ -393,26 +449,6 @@ impl Settings {
         }
     }
 
-    /// The morning page: an `http(s)` address with a host, else off
-    /// (`DailyPage.address`).
-    pub fn daily_url(&self) -> Option<url::Url> {
-        let typed = self.string(keys::DAILY_URL)?.trim();
-        let url = url::Url::parse(typed).ok()?;
-        (url.scheme().starts_with("http") && url.host_str().is_some_and(|h| !h.is_empty()))
-            .then_some(url)
-    }
-    /// The hour the morning page's day turns over: `daily.hour` when it is
-    /// a whole 0–23, else 3 (`DailyPage.hour`).
-    pub fn daily_hour(&self) -> u32 {
-        self.number(keys::DAILY_HOUR)
-            .filter(|h| h.fract() == 0.0 && (0.0..=23.0).contains(h))
-            .map_or(3, |h| h as u32)
-    }
-    /// When the morning page last opened (Unix seconds).
-    pub fn daily_shown(&self) -> Option<f64> {
-        self.number(keys::DAILY_SHOWN)
-    }
-
     /// The search engine (Linux addition; Google by default).
     pub fn search_engine(&self) -> &'static crate::address::SearchEngine {
         crate::address::SearchEngine::by_id(self.string(keys::SEARCH_ENGINE).unwrap_or("google"))
@@ -430,6 +466,7 @@ impl Settings {
             keys::SIDEBAR.into(),
             (self.tabs_position() == TabsPosition::Left).to_string(),
         );
+        out.insert(keys::GLYPH.into(), self.glyph().as_str().into());
         out.insert(
             keys::TABS_SWITCHING.into(),
             self.tab_switching().as_str().into(),
@@ -473,6 +510,7 @@ pub fn filter_cloud_values(values: &BTreeMap<String, String>) -> BTreeMap<String
             CLOUD_SETTINGS_KEYS.contains(&k.as_str())
                 && match k.as_str() {
                     keys::LOOK => ["light", "dark", "system"].contains(&v.as_str()),
+                    keys::GLYPH => ["letters", "icons"].contains(&v.as_str()),
                     keys::TABS_SWITCHING => ["row", "recent"].contains(&v.as_str()),
                     keys::SPACES_SWIPE => ["system", "natural", "inverted"].contains(&v.as_str()),
                     keys::SECTIONS_ARCHIVE => ["h12", "h24", "h48", "never"].contains(&v.as_str()),
@@ -529,71 +567,5 @@ mod tests {
         assert!(s.get("zoom.www.example.com").is_none());
         assert_eq!(ArchiveAfter::H48.hours(), Some(48.0));
         assert_eq!(ArchiveAfter::Never.hours(), None);
-    }
-
-    #[test]
-    fn morning_page_settings() {
-        let mut s = Settings::default();
-        assert_eq!(s.daily_url(), None, "off by default");
-        assert_eq!(s.daily_hour(), 3);
-        assert_eq!(s.daily_shown(), None);
-        for off in [
-            "",
-            "  ",
-            "example.com",
-            "ftp://example.com/",
-            "file:///tmp/x",
-        ] {
-            s.set(keys::DAILY_URL, off);
-            assert_eq!(s.daily_url(), None, "{off:?}");
-        }
-        s.set(keys::DAILY_URL, " https://paper.example/today ");
-        assert_eq!(
-            s.daily_url().map(String::from).as_deref(),
-            Some("https://paper.example/today")
-        );
-        for (stored, hour) in [
-            (4.0, 4),
-            (0.0, 0),
-            (23.0, 23),
-            (24.0, 3),
-            (-1.0, 3),
-            (4.5, 3),
-        ] {
-            s.set(keys::DAILY_HOUR, stored);
-            assert_eq!(s.daily_hour(), hour, "{stored}");
-        }
-        s.set(keys::DAILY_HOUR, "4");
-        assert_eq!(
-            s.daily_hour(),
-            3,
-            "a string is not an Int on the Mac either"
-        );
-        s.set(keys::DAILY_SHOWN, 1_763_700_000.0);
-        assert_eq!(s.daily_shown(), Some(1_763_700_000.0));
-        assert!(!s.cloud_values().contains_key(keys::DAILY_URL));
-    }
-
-    /// Mac `SiteIconsOnlyTests`: the Letters choice is gone and no longer
-    /// syncs; an old stored `letters` is read without error and ignored.
-    #[test]
-    fn the_letters_choice_no_longer_syncs() {
-        let m = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
-            pairs
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect()
-        };
-        assert_eq!(
-            filter_cloud_values(&m(&[("glyph", "letters"), ("look", "dark")])),
-            m(&[("look", "dark")])
-        );
-        assert!(!CLOUD_SETTINGS_KEYS.contains(&"glyph"));
-        let mut s = Settings::default();
-        s.set(keys::GLYPH, "letters");
-        assert!(s.welcomed(), "the old key still marks an older install");
-        assert!(!s.cloud_values().contains_key("glyph"));
-        s.apply_cloud_values(&m(&[("glyph", "icons")]));
-        assert_eq!(s.string(keys::GLYPH), Some("letters"));
     }
 }

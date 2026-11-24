@@ -4,13 +4,22 @@
 use crate::shell::GtkShell;
 use crate::shell::{Shell, TabView};
 use copper_core::TabId;
+use copper_core::settings::Glyph;
+use copper_core::settings::keys;
 use gtk4 as gtk;
 use gtk4::prelude::*;
 
-/// A tab's mark: the site's own icon, or a globe until it lands (never a
-/// letter; Mac `Mark`, copper-browser/Copper#181).
-pub fn mark(t: &TabView, size: i32) -> gtk::Widget {
-    if let Some(tex) = &t.favicon {
+/// Site icons beside titles (Linux default) or letters (Settings › Tabs).
+pub fn shows_icons(shell: &Shell) -> bool {
+    let s = shell.settings();
+    s.get(keys::GLYPH).is_none() || s.glyph() == Glyph::Icons
+}
+
+/// A tab's mark: its icon, or its letter on a chip.
+pub fn mark(shell: &Shell, t: &TabView, size: i32) -> gtk::Widget {
+    if shows_icons(shell)
+        && let Some(tex) = &t.favicon
+    {
         let p = icon_image(tex, size);
         if t.sleeping {
             p.set_opacity(0.7);
@@ -22,7 +31,17 @@ pub fn mark(t: &TabView, size: i32) -> gtk::Widget {
         i.set_pixel_size(size.min(16));
         return i.upcast();
     }
-    super::globe(size).upcast()
+    let letter = if t.pin.is_some() {
+        t.letter.clone()
+    } else {
+        t.host.clone()
+    };
+    let source = if letter.is_empty() {
+        t.label.clone()
+    } else {
+        letter
+    };
+    super::letter_chip(&source, size).upcast()
 }
 
 /// A site icon at exactly `size` pixels.
@@ -275,24 +294,6 @@ pub fn focusable_button(orientation: gtk::Orientation, spacing: i32) -> gtk::Box
     b.set_focusable(true);
     b.set_cursor_from_name(Some("default"));
     b
-}
-
-/// A pin's `mark` with the pin light in the square's top-right corner,
-/// `inset` from its edges (Mac `PinLightDot`): the style sheet shows it
-/// while the square is `unread` and not `live`.
-pub fn with_pin_light(mark: &gtk::Box, inset: i32) -> gtk::Overlay {
-    let square = gtk::Overlay::new();
-    square.set_child(Some(mark));
-    square.set_hexpand(true);
-    let dot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    dot.add_css_class("pin-light");
-    dot.set_halign(gtk::Align::End);
-    dot.set_valign(gtk::Align::Start);
-    dot.set_margin_top(inset);
-    dot.set_margin_end(inset);
-    dot.set_can_target(false);
-    square.add_overlay(&dot);
-    square
 }
 
 #[cfg(test)]

@@ -46,8 +46,11 @@ window.copper { background: transparent; }
 .copper-row.crashed .title { opacity: .6; }
 .copper-row:focus-visible { outline: 2px solid alpha(@accent_color, .6); outline-offset: -2px; }
 
-.globe { opacity: .6; }
-.not-secure { font-size: 12px; font-weight: 500; }
+.chip {
+  min-width: 16px; min-height: 16px; border-radius: 4px;
+  font-size: 9px; font-weight: 700;
+}
+.chip.big { min-width: 22px; min-height: 22px; border-radius: 6px; font-size: 12px; }
 
 .folder-head .title { font-weight: 600; }
 .folder-head .count { font-size: 11px; margin-right: 3px; opacity: 0; transition: opacity 100ms ease-out; }
@@ -72,9 +75,7 @@ window.copper { background: transparent; }
   transition: background-color 120ms ease-out, box-shadow 120ms ease-out;
 }
 .pin:focus-visible { outline: 2px solid alpha(@accent_color, .6); outline-offset: -2px; }
-/* the pin light (Mac `PinLightDot`): an unread count in a pin's title, hidden on the live tab */
-.pin-light { min-width: 6px; min-height: 6px; border-radius: 99px; opacity: 0; transition: opacity 120ms ease-out; }
-.unread:not(.live) .pin-light { opacity: 1; }
+.pin .letter { font-size: 13px; font-weight: 600; }
 
 .space-head {
   min-height: 30px; padding: 0 6px 0 4px; border-radius: 8px; margin: 2px 0 4px 0;
@@ -86,11 +87,6 @@ window.copper { background: transparent; }
 button.clear-seam {
   min-width: 12px; min-height: 12px; padding: 0; border-radius: 99px;
   box-shadow: none; transition: opacity 120ms ease-out;
-}
-button.tidy-seam {
-  min-height: 18px; padding: 0 6px; border-radius: 99px; background: transparent;
-  box-shadow: none; font-size: 11px; font-weight: 500;
-  transition: background-color 120ms ease-out, color 120ms ease-out;
 }
 
 .space-chip {
@@ -150,7 +146,6 @@ button.tidy-seam {
 }
 .copper-status { background-color: @copper_ground; }
 .copper-status .title { font-size: 20px; font-weight: 600; }
-.copper-status .icon { -gtk-icon-size: 36px; opacity: .45; margin-bottom: 0; }
 .copper-status .description { opacity: .7; }
 .copper-status button.pill { padding: 8px 22px; font-weight: 500; }
 .copper-empty .line { font-size: 14px; }
@@ -263,7 +258,6 @@ row.copper-suggestion:selected {{ background-color: {selected}; }}
 row.copper-suggestion .detail, row.copper-suggestion .hint, row.copper-suggestion .mark {{ color: {muted}; }}
 .suggestion-header {{ color: {muted}; }}
 .copper-dropdown {{ background-color: {card}; box-shadow: 0 0 0 1px {rim}, 0 8px 28px {deep}; }}
-.pin-light {{ background-color: {copper}; }}
 "#,
         ground = p.ground.hex(),
         ink = p.ink.hex(),
@@ -281,8 +275,6 @@ row.copper-suggestion .detail, row.copper-suggestion .hint, row.copper-suggestio
         pwash = private.ground().mixed(p.ground, if dark { 0.35 } else { 0.55 }).hex(),
         ptag = private.dot().css(if dark { 0.30 } else { 0.18 }),
         ptag_ink = if dark { private.dot().mixed(Rgb::WHITE, 0.5).hex() } else { private.dot().mixed(Rgb::BLACK, 0.35).hex() },
-        // The Mac's `Palette.accent`: Copper's one colour.
-        copper = if dark { "#e07a52" } else { "#a9461f" },
     ));
     css
 }
@@ -296,6 +288,7 @@ fn surface(scope: &str, t: &Tint) -> String {
 {scope} .muted {{ color: {muted}; }}
 {scope} .faint {{ color: {faint}; }}
 {scope} .hairline {{ background-color: {hair}; }}
+{scope} .chip {{ background-color: {chip}; color: {muted}; }}
 {scope} .nav button {{ color: {muted}; }}
 {scope} .nav button:hover, {scope} .foot-button:hover, {scope} .space-chip:hover, {scope} .space-head:hover, {scope} .top-space:hover, {scope} .overflow-count:hover {{ background-color: {hover}; color: {ink}; }}
 {scope} .nav button:active, {scope} .foot-button:active, {scope} .space-chip:active {{ background-color: {press}; }}
@@ -312,8 +305,6 @@ fn surface(scope: &str, t: &Tint) -> String {
 {scope} .pin:hover {{ background-color: {hover2}; }}
 {scope} .pin.live {{ background-color: {pill}; box-shadow: inset 0 0 0 1px {rim}, 0 1px 2px {lift}; }}
 {scope} button.clear-seam {{ background-color: {hover}; color: {muted}; }}
-{scope} button.tidy-seam {{ color: {muted}; }}
-{scope} button.tidy-seam:hover, {scope} button.tidy-seam:disabled {{ background-color: {hover}; color: {ink}; }}
 {scope} .new-tab-row {{ color: {faint}; }}
 {scope} .new-tab-row:hover {{ color: {muted}; background-color: {hover}; }}
 {scope} .drop-before {{ box-shadow: inset 0 2px {dot}; }}
@@ -328,6 +319,7 @@ fn surface(scope: &str, t: &Tint) -> String {
         muted = t.muted(),
         faint = t.faint(),
         hair = t.hairline(),
+        chip = t.chip(),
         hover = t.hover(),
         hover2 = t.press(),
         press = t.press(),

@@ -12,7 +12,7 @@ pub mod privacy;
 use crate::actions::{SettingsPage, register_settings_page};
 use crate::shell::GtkShell;
 use crate::shell::Shell;
-use copper_core::settings::{ArchiveAfter, TabSwitching, TabsPosition, keys};
+use copper_core::settings::{ArchiveAfter, Glyph, TabSwitching, TabsPosition, keys};
 use gtk4 as gtk;
 use gtk4::prelude::*;
 use libadwaita as adw;
@@ -232,6 +232,19 @@ fn tabs(shell: &Shell) -> adw::PreferencesPage {
         })
     }));
     layout.add(&position);
+    let icons = crate::window::tabs::shows_icons(shell);
+    layout.add(&combo(
+        shell,
+        "Tabs show",
+        "Beside the title, and on a pinned square",
+        &["Site icons", "Letters"],
+        if icons { 0 } else { 1 },
+        |s, i| {
+            let g = if i == 1 { Glyph::Letters } else { Glyph::Icons };
+            s.update_settings(|st| st.set_glyph(g));
+            s.ui().refresh(s, &crate::window::Refresh::all());
+        },
+    ));
     page.add(&layout);
 
     let switching = group(Some("Switching"));
@@ -261,9 +274,17 @@ fn tabs(shell: &Shell) -> adw::PreferencesPage {
     leave.add(&switch(
         shell,
         "Sleep tabs you aren’t using",
-        "After half an hour away they come back where you left them. Pinned tabs, sound, calls and anything typed stay awake.",
+        "When many pages are open, a page is heavy or memory runs short, the tabs you left longest sleep and come back where you were. Sound, calls and anything typed stay awake; pins follow the setting below.",
         shell.settings().sleeps_tabs(),
         |s, on| s.update_settings(|st| st.set(keys::TABS_SLEEP, on)),
+    ));
+    // Mac `BigPinsLine` (Fork/PinsAwake.swift); the rule is shell-core's `pins`.
+    leave.add(&switch(
+        shell,
+        "Let big pins sleep",
+        "A pinned page over 300 MB that you haven’t looked at for two hours sleeps, and loads again when you go back to it. Turn it off and pins never sleep.",
+        shell.settings().big_pins_sleep(),
+        |s, on| s.update_settings(|st| st.set(keys::PINS_SLEEP, on)),
     ));
     // Mac `ArchiveLine` (Fork/Sections.swift); the sweep is shell-core's.
     let archive = line(

@@ -389,4 +389,20 @@ pub trait PageView: Clone + 'static {
     fn show_inspector(&self);
     /// Kill the web process (emits `PageEvent::Crashed(TerminatedByApi)`).
     fn terminate_web_process(&self);
+    /// What the page weighs: the web process its document runs in and that
+    /// process's memory (Mac `Heat.weight(of:)`). `None` with no process,
+    /// or where the engine can't say which process is the page's. Two pages
+    /// may share a process: weigh each process once.
+    fn weight(&self) -> LocalFuture<Option<Weight>> {
+        Box::pin(std::future::ready(None))
+    }
+}
+
+/// A page's web process and what it holds ([`PageView::weight`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Weight {
+    /// The process, as the OS numbers it.
+    pub process: u32,
+    /// Its memory in bytes (Linux: proportional set size; Windows: working set).
+    pub bytes: u64,
 }

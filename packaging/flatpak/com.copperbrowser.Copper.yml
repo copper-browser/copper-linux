@@ -29,8 +29,6 @@ finish-args:
   - --device=dri
   - --socket=pulseaudio
   - --talk-name=org.freedesktop.secrets
-  # The morning page listens for the computer waking (logind's PrepareForSleep).
-  - --system-talk-name=org.freedesktop.login1
   - --filesystem=xdg-download
 
 build-options:

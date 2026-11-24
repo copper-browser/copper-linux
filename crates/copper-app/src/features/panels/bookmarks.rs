@@ -222,7 +222,7 @@ impl BookmarksPanel {
         depth: i32,
     ) -> gtk::ListBoxRow {
         let url = b.url.clone().unwrap_or_default();
-        let mark = site_mark(shell, &url);
+        let mark = site_mark(shell, &url, &crate::shell::host_of(&url));
         let r = ui::row(&mark, &b.title, detail);
         r.row.set_widget_name(&format!("site:{url}"));
         r.row.set_tooltip_text(Some(&url));
