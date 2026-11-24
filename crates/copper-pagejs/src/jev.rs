@@ -21,7 +21,7 @@ pub struct JevRect {
 /// One action the page offers: `click`, `fill`, `select` on a node, or the
 /// controls `scroll` / `wait`. Serialises back exactly as observed, for
 /// [`resolve`] and [`settle`].
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct JevAction {
     pub id: String,
     pub kind: String,
@@ -44,6 +44,24 @@ pub struct JevAction {
     pub expanded: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delta: Option<f64>,
+    /// Where a link goes, without its `#fragment` (two links there are one choice).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub href: Option<String>,
+    /// A submit button (or image) inside a form.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submits: Option<bool>,
+    /// In a search box: a role=search, or a form whose only text field is a query.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<bool>,
+    /// In a form that is not a search's.
+    #[serde(default, rename = "inForm", skip_serializing_if = "Option::is_none")]
+    pub in_form: Option<bool>,
+    /// A field's document and form (`timeOrigin|form`): what was typed is kept per field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    /// `above` / `below`: a link the goal names outside the viewport (`reach`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offscreen: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -68,6 +86,9 @@ pub struct Observation {
     pub guards: BTreeMap<String, Option<String>>,
     #[serde(default)]
     pub omitted_actions: u64,
+    /// Nodes (on screen or off) whose words the goal names (`reach`).
+    #[serde(default)]
+    pub relevant: Vec<u64>,
 }
 
 impl Observation {
@@ -343,6 +364,7 @@ mod tests {
             selected: None,
             expanded: None,
             delta: None,
+            ..Default::default()
         }
     }
 
@@ -362,6 +384,7 @@ mod tests {
             page_key: String::new(),
             guards: BTreeMap::new(),
             omitted_actions: 0,
+            relevant: Vec::new(),
         }
     }
 

@@ -84,8 +84,13 @@ pub struct Decision {
     /// literal/burst: every quoted value Jev matched to a field.
     pub assignments: Vec<Assignment>,
     pub input_tokens: i64,
+    /// The LLM decider's reply, as the router billed it (Jev bills input only).
+    pub output_tokens: i64,
+    pub cost_usd: f64,
     /// Who answered (`jev-1.14.0`, the LLM's name), when it says.
     pub model: String,
+    /// How likely something is visibly left undone (`UNMET_STATEMENT`).
+    pub unmet: Option<f64>,
 }
 
 /// One action taken.
@@ -114,30 +119,90 @@ pub struct Step {
     /// Typed in the same breath as the step before it (burst): no decision
     /// of its own.
     pub burst: bool,
+    /// Whether the settle after this step ran into its cap, and what was
+    /// still moving then.
+    pub settle_capped: Option<bool>,
+    pub settle_why: Option<String>,
+    /// The data calls (xhr/fetch) the action started, as `net::brief` says
+    /// them, and whether any was still out when the page was read (`watch`):
+    /// an answer not in yet is not "changed nothing".
+    pub net: Vec<String>,
+    pub in_flight: bool,
+    /// The action sent something: a form went in (`form_sent`, even one the
+    /// page took in place) or a non-GET request went out. That is a change,
+    /// though the page may show none.
+    pub sent: bool,
+    pub form_sent: bool,
+    /// What it sent changes something (`strategies::commit`): a search or a retry doesn't.
+    pub commit: bool,
+    /// The read after it showed no text line the read before didn't.
+    pub nothing_new: bool,
+    /// Time spent waiting before trying the same control again.
+    pub wait_ms: f64,
 }
 
 impl Step {
     /// One step of `jev_run json:true` (`Step.json`; no pictures here, so
     /// `shot_ms` is 0 and `box`/`box_hit` null).
     pub fn json(&self) -> Value {
-        json!({
+        let mut out = json!({
             "n": self.number, "operation": self.operation, "kind": self.kind, "label": self.label,
             "probability": self.probability, "confidence": self.confidence, "jev_ms": self.latency_ms,
             "text_ms": self.text_latency_ms, "shot_ms": 0.0, "input_tokens": self.input_tokens,
             "requests": self.requests, "url": self.url, "observe_ms": self.observe_ms,
             "decide_ms": self.decide_ms, "act_ms": self.act_ms, "settle_ms": self.settle_ms,
             "burst": self.burst, "text": self.text, "page_changed": self.page_changed,
-            "box_hit": null, "box": null,
-        })
+            "box_hit": null, "box": null, "settle_capped": self.settle_capped,
+        });
+        if let Some(why) = self.settle_why.as_ref().filter(|w| !w.is_empty()) {
+            out["settle_why"] = json!(why);
+        }
+        if !self.net.is_empty() {
+            out["net"] = json!(self.net);
+        }
+        for (key, on) in [
+            ("in_flight", self.in_flight),
+            ("sent", self.sent),
+            ("form_sent", self.form_sent),
+        ] {
+            if on {
+                out[key] = json!(true);
+            }
+        }
+        if self.wait_ms > 0.0 {
+            out["wait_ms"] = json!(self.wait_ms);
+        }
+        out
     }
 
-    fn recent(&self) -> Value {
-        json!({
-            "action": self.label,
+    /// Sent and nothing to show for it: what Jev reads, so it doesn't send
+    /// again. Any POST counts, not only a form: a Pay button that posts with
+    /// fetch is the same send. A click counts as quiet when it showed no new
+    /// line of text, though something else in the read moved.
+    pub fn quiet_send(&self) -> bool {
+        (self.form_sent || self.sent)
+            && self.commit
+            && (self.page_changed == Some(false) || (self.kind == "click" && self.nothing_new))
+    }
+
+    /// `page_changed` says what the page did; `sent` that a request went out
+    /// (Google reads with POSTs too, so it is not a change).
+    pub fn recent(&self) -> Value {
+        let action = if self.quiet_send() {
+            format!("{} (sent; the page shows no confirmation)", self.label)
+        } else {
+            self.label.clone()
+        };
+        let mut out = json!({
+            "action": action,
             "kind": self.kind,
             "text": self.text,
             "page_changed": self.page_changed,
-        })
+        });
+        if self.sent {
+            out["sent"] = json!(true);
+        }
+        out
     }
 
     /// `3. CLICK Search (92%, 210 ms) → page changed`.
@@ -154,10 +219,15 @@ impl Step {
         if self.text_latency_ms > 0.0 {
             s += &format!(" + {:.0} ms text", self.text_latency_ms);
         }
+        if self.input_tokens > 0 {
+            s += &format!(", {} tok", self.input_tokens);
+        }
         s += ")";
         if let Some(changed) = self.page_changed {
             s += if changed {
                 " → page changed"
+            } else if self.sent {
+                " → sent, no change shown"
             } else {
                 " → no change"
             };
