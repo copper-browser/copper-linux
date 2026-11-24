@@ -39,6 +39,7 @@ impl Store {
         _user: &str,
         _password: &str,
         _used: Option<f64>,
+        _place: &[(&str, String)],
     ) -> Result<(), StoreError> {
         Err(unavailable())
     }

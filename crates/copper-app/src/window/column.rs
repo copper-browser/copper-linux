@@ -601,7 +601,7 @@ impl Column {
         let rows = self.rows.borrow();
         let Some(row) = rows.get(id) else { return };
         let Some(t) = shell.tab_view(id) else { return };
-        fill(shell, row, &t);
+        fill(row, &t);
         drop(rows);
         // A blank tab that loaded a page can now be cleared.
         self.update_seam(shell);
@@ -832,7 +832,7 @@ fn tab_row(shell: &Shell, t: &TabView) -> Row {
         badge,
         pin: false,
     };
-    fill(shell, &row, t);
+    fill(&row, t);
     row
 }
 
@@ -875,11 +875,11 @@ fn pin_square(shell: &Shell, t: &TabView) -> Row {
         badge,
         pin: true,
     };
-    fill(shell, &row, t);
+    fill(&row, t);
     row
 }
 
-fn fill(shell: &Shell, row: &Row, t: &TabView) {
+fn fill(row: &Row, t: &TabView) {
     let set = |on: bool, class: &str| {
         if on {
             row.root.add_css_class(class);
@@ -896,15 +896,7 @@ fn fill(shell: &Shell, row: &Row, t: &TabView) {
         row.mark.remove(&c);
     }
     if row.pin {
-        let m = if tabs::shows_icons(shell) && t.favicon.is_some() {
-            tabs::mark(shell, t, 18)
-        } else {
-            let l = gtk::Label::new(Some(&pin_letter(t)));
-            l.add_css_class("letter");
-            l.add_css_class("muted");
-            l.upcast()
-        };
-        row.mark.append(&m);
+        row.mark.append(&tabs::mark(t, 18));
         // A Calendar pin's card says more than its name would.
         let tip = (!copper_shell_core::calendar::peeks(&t.url)).then_some(t.label.as_str());
         row.root.set_tooltip_text(tip);
@@ -916,7 +908,7 @@ fn fill(shell: &Shell, row: &Row, t: &TabView) {
             ))]);
         return;
     }
-    row.mark.append(&tabs::mark(shell, t, 16));
+    row.mark.append(&tabs::mark(t, 16));
     row.title.set_text(&t.label);
     let (badge, tip) = if t.audio {
         (Some("audio-volume-high-symbolic"), "Playing sound")
@@ -939,19 +931,6 @@ fn fill(shell: &Shell, row: &Row, t: &TabView) {
     }
     row.root
         .update_property(&[gtk::accessible::Property::Label(&name)]);
-}
-
-/// A pin's letter: its own, else the site's first letter.
-fn pin_letter(t: &TabView) -> String {
-    match &t.pin {
-        Some(p) if !p.trim().is_empty() => p.chars().take(2).collect(),
-        _ => t
-            .host
-            .chars()
-            .find(|c| c.is_alphanumeric())
-            .map(|c| c.to_uppercase().collect())
-            .unwrap_or_else(|| "·".into()),
-    }
 }
 
 /// "New Tab", between the kept rows and today's.

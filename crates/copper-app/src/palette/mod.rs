@@ -211,7 +211,7 @@ fn row_widget(shell: &Shell, r: &Row) -> gtk::ListBoxRow {
             };
             match live.or_else(|| shell.cached_icon(url)) {
                 Some(t) => crate::window::tabs::icon_image(&t, 16).upcast(),
-                None => crate::window::letter_chip(&crate::shell::host_of(url), 16).upcast(),
+                None => crate::window::globe(16).upcast(),
             }
         }
         _ => gtk::Image::from_icon_name("web-browser-symbolic").upcast(),

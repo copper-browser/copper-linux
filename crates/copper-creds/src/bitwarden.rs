@@ -764,7 +764,15 @@ impl Bitwarden {
     }
 
     /// A new login for `host`; returns its id.
-    pub async fn create(&mut self, host: &str, user: &str, password: &str) -> Result<String> {
+    /// A new login item; `origin` is the page it was saved from (its scheme
+    /// and port), else `https://<host>`.
+    pub async fn create(
+        &mut self,
+        host: &str,
+        user: &str,
+        password: &str,
+        origin: Option<&str>,
+    ) -> Result<String> {
         self.require_unlocked()?;
         let template = self
             .run(
@@ -784,7 +792,7 @@ impl Bitwarden {
                 "username": user,
                 "password": password,
                 "totp": null,
-                "uris": [{"uri": format!("https://{host}"), "match": null}],
+                "uris": [{"uri": origin.map_or_else(|| format!("https://{host}"), str::to_string), "match": null}],
             }),
         );
         let value = self.encode(&object).await?;
@@ -852,6 +860,23 @@ impl Bitwarden {
             .filter(|i| i.kind == 1)
             .map(|i| credential(i, &folders))
             .collect()
+    }
+
+    /// Any item's agent hint — a card's or identity's as well as a login's
+    /// — by its id; `None` while locked or when it isn't in the index.
+    pub fn agent_hint(&self, id: &str) -> Option<AgentHint> {
+        if !self.is_unlocked() {
+            return None;
+        }
+        let item = self.items.iter().find(|i| i.id == id)?;
+        let folders = self.folder_names();
+        Some(hint(
+            item,
+            item.folder_id
+                .as_ref()
+                .and_then(|f| folders.get(f))
+                .map(String::as_str),
+        ))
     }
 
     fn folder_names(&self) -> HashMap<String, String> {
@@ -1070,26 +1095,28 @@ fn parse_item(
     })
 }
 
+/// The Agents folder shares an item, a `copper-agent: deny` field keeps it back.
+fn hint(item: &BwItem, folder: Option<&str>) -> AgentHint {
+    let denied = item.fields.iter().any(|f| {
+        f.name.trim().eq_ignore_ascii_case("copper-agent")
+            && f.value.trim().eq_ignore_ascii_case("deny")
+    });
+    if denied {
+        AgentHint::Deny
+    } else if folder.is_some_and(|f| f.trim().eq_ignore_ascii_case("agents")) {
+        AgentHint::Allow
+    } else {
+        AgentHint::None
+    }
+}
+
 fn credential(item: &BwItem, folders: &HashMap<String, String>) -> Credential {
     let folder = item
         .folder_id
         .as_ref()
         .and_then(|f| folders.get(f))
         .cloned();
-    let denied = item.fields.iter().any(|f| {
-        f.name.trim().eq_ignore_ascii_case("copper-agent")
-            && f.value.trim().eq_ignore_ascii_case("deny")
-    });
-    let agent_hint = if denied {
-        AgentHint::Deny
-    } else if folder
-        .as_deref()
-        .is_some_and(|f| f.trim().eq_ignore_ascii_case("agents"))
-    {
-        AgentHint::Allow
-    } else {
-        AgentHint::None
-    };
+    let agent_hint = hint(item, folder.as_deref());
     let host = item
         .uris
         .first()
@@ -1100,7 +1127,13 @@ fn credential(item: &BwItem, folders: &HashMap<String, String>) -> Credential {
         source: Source::Bitwarden,
         host,
         user: item.username.clone(),
-        sites: item.uris.iter().map(|u| u.uri.clone()).collect(),
+        // An address marked "never" is no site of this login.
+        sites: item
+            .uris
+            .iter()
+            .filter(|u| u.match_ != Some(5))
+            .map(|u| u.uri.clone())
+            .collect(),
         name: item.name.clone(),
         has_totp: item.has_totp,
         used: None,
@@ -1112,6 +1145,30 @@ fn credential(item: &BwItem, folders: &HashMap<String, String>) -> Credential {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_address_marked_never_is_no_site_of_the_login() {
+        let item = BwItem {
+            id: "i".into(),
+            kind: 1,
+            name: "x".into(),
+            folder_id: None,
+            username: "ann".into(),
+            uris: vec![
+                Uri {
+                    uri: "https://a.test".into(),
+                    match_: Some(5),
+                },
+                Uri::new("https://b.test"),
+            ],
+            has_totp: false,
+            has_notes: false,
+            fields: Vec::new(),
+        };
+        let c = credential(&item, &HashMap::new());
+        assert_eq!(c.sites, ["https://b.test"]);
+        assert!(!crate::origin::owns(&c, "https://a.test"));
+    }
 
     #[cfg(unix)]
     #[test]

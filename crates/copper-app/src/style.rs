@@ -46,11 +46,8 @@ window.copper { background: transparent; }
 .copper-row.crashed .title { opacity: .6; }
 .copper-row:focus-visible { outline: 2px solid alpha(@accent_color, .6); outline-offset: -2px; }
 
-.chip {
-  min-width: 16px; min-height: 16px; border-radius: 4px;
-  font-size: 9px; font-weight: 700;
-}
-.chip.big { min-width: 22px; min-height: 22px; border-radius: 6px; font-size: 12px; }
+.globe { opacity: .6; }
+.not-secure { font-size: 12px; font-weight: 500; }
 
 .folder-head .title { font-weight: 600; }
 .folder-head .count { font-size: 11px; margin-right: 3px; opacity: 0; transition: opacity 100ms ease-out; }
@@ -75,7 +72,6 @@ window.copper { background: transparent; }
   transition: background-color 120ms ease-out, box-shadow 120ms ease-out;
 }
 .pin:focus-visible { outline: 2px solid alpha(@accent_color, .6); outline-offset: -2px; }
-.pin .letter { font-size: 13px; font-weight: 600; }
 /* the pin light (Mac `PinLightDot`): an unread count in a pin's title, hidden on the live tab */
 .pin-light { min-width: 6px; min-height: 6px; border-radius: 99px; opacity: 0; transition: opacity 120ms ease-out; }
 .unread:not(.live) .pin-light { opacity: 1; }
@@ -154,6 +150,7 @@ button.tidy-seam {
 }
 .copper-status { background-color: @copper_ground; }
 .copper-status .title { font-size: 20px; font-weight: 600; }
+.copper-status .icon { -gtk-icon-size: 36px; opacity: .45; margin-bottom: 0; }
 .copper-status .description { opacity: .7; }
 .copper-status button.pill { padding: 8px 22px; font-weight: 500; }
 .copper-empty .line { font-size: 14px; }
@@ -299,7 +296,6 @@ fn surface(scope: &str, t: &Tint) -> String {
 {scope} .muted {{ color: {muted}; }}
 {scope} .faint {{ color: {faint}; }}
 {scope} .hairline {{ background-color: {hair}; }}
-{scope} .chip {{ background-color: {chip}; color: {muted}; }}
 {scope} .nav button {{ color: {muted}; }}
 {scope} .nav button:hover, {scope} .foot-button:hover, {scope} .space-chip:hover, {scope} .space-head:hover, {scope} .top-space:hover, {scope} .overflow-count:hover {{ background-color: {hover}; color: {ink}; }}
 {scope} .nav button:active, {scope} .foot-button:active, {scope} .space-chip:active {{ background-color: {press}; }}
@@ -332,7 +328,6 @@ fn surface(scope: &str, t: &Tint) -> String {
         muted = t.muted(),
         faint = t.faint(),
         hair = t.hairline(),
-        chip = t.chip(),
         hover = t.hover(),
         hover2 = t.press(),
         press = t.press(),

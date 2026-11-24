@@ -12,11 +12,12 @@
 use copper_botpass::{BotPass, BpSnapshot};
 use copper_creds::bitwarden::{BwConfig, BwState};
 use copper_creds::credential::{
-    self, AutofillCard, AutofillIdentity, Credential, CredentialId, Source,
+    self, AgentHint, AutofillCard, AutofillIdentity, Credential, CredentialId, Source,
 };
 use copper_creds::onepassword::{Mode, OnePassword, OpConfig, OpState, Remembered};
 use copper_creds::store::{SecretStore, StoreError};
 use copper_creds::{Login, bitwarden::Bitwarden};
+use copper_import::ImportedLogin;
 use std::path::Path;
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::Mutex;
@@ -48,6 +49,19 @@ pub enum Keyring {
     /// No Secret Service (or it never answered): why, in one line.
     Unavailable(String),
     Locked,
+}
+
+/// A vault item's custom field an agent asked for by name. Holds its value:
+/// it goes into the page and nowhere else.
+pub struct FieldHit {
+    /// The item's autofill id as shared (`bw:<id>`, `op:<id>`).
+    pub id: String,
+    pub item: String,
+    pub name: String,
+    pub value: String,
+    /// The item is saved for the page's exact address.
+    pub owned: bool,
+    pub hint: AgentHint,
 }
 
 /// What the UI shows without waiting on anything.
@@ -485,6 +499,17 @@ impl Vault {
         }
     }
 
+    /// A card's, identity's or login's agent hint (its Agents folder or
+    /// vault, `copper-agent` tag or deny field) by its autofill id (`op:<id>`
+    /// or a bare Bitwarden id); none when no open vault has it.
+    pub async fn agent_hint(&self, id: &str) -> AgentHint {
+        match id.strip_prefix("op:") {
+            Some(raw) => self.op.lock().await.agent_hint(raw),
+            None => self.bw.lock().await.agent_hint(id),
+        }
+        .unwrap_or_default()
+    }
+
     pub async fn cards(&self) -> Vec<AutofillCard> {
         let mut v = self.bw.lock().await.cards().to_vec();
         let op = self.op.lock().await;
@@ -504,8 +529,8 @@ impl Vault {
     }
 
     /// Custom fields of the vault items for `host` whose name matches
-    /// `label`: `(stable item id, item name, field name, value)`.
-    pub async fn fields(&self, host: &str, label: &str) -> Vec<(String, String, String, String)> {
+    /// `label`, each saying whether its login is saved for `origin` exactly.
+    pub async fn fields(&self, host: &str, label: &str, origin: &str) -> Vec<FieldHit> {
         let norm = |s: &str| -> String {
             s.to_lowercase()
                 .chars()
@@ -527,12 +552,17 @@ impl Vault {
                 for f in &item.fields {
                     if !f.name.is_empty() && fits(&f.name) {
                         let value = bw.field_value(&item.id, &f.name).unwrap_or_default();
-                        out.push((
-                            format!("bw:{}", item.id),
-                            item.name.clone(),
-                            f.name.clone(),
+                        out.push(FieldHit {
+                            id: format!("bw:{}", item.id),
+                            item: item.name.clone(),
+                            name: f.name.clone(),
                             value,
-                        ));
+                            // Bitwarden's "never" on an address holds here too.
+                            owned: item.uris.iter().any(|u| {
+                                u.match_ != Some(5) && copper_creds::origin::saved(&u.uri, origin)
+                            }),
+                            hint: bw.agent_hint(&item.id).unwrap_or_default(),
+                        });
                     }
                 }
             }
@@ -545,12 +575,17 @@ impl Vault {
                         let value = op
                             .field_value(&item.id, &f.name)
                             .unwrap_or_else(|| f.value.clone());
-                        out.push((
-                            format!("op:{}", item.id),
-                            item.title.clone(),
-                            f.name.clone(),
+                        out.push(FieldHit {
+                            id: format!("op:{}", item.id),
+                            item: item.title.clone(),
+                            name: f.name.clone(),
                             value,
-                        ));
+                            owned: item
+                                .urls
+                                .iter()
+                                .any(|u| copper_creds::origin::saved(u, origin)),
+                            hint: op.agent_hint(&item.id).unwrap_or_default(),
+                        });
                     }
                 }
             }
@@ -648,17 +683,20 @@ impl Vault {
     }
 
     /// Keep a sign-in where `target` says; the same account is updated.
+    /// `origin`: the page's (`location.origin`) it was saved from, so an
+    /// agent fills it there and nowhere else ([`copper_creds::origin`]).
     pub async fn save(
         &self,
         target: Source,
         host: &str,
         user: &str,
         password: &str,
+        origin: Option<&str>,
     ) -> Result<(), String> {
         match target {
             Source::Keychain => {
                 let s = self.store().await.map_err(|e| e.to_string())?;
-                s.save(host, user, password, Some(now()))
+                s.save_from(host, user, password, Some(now()), origin)
                     .await
                     .map_err(|e| e.to_string())
             }
@@ -671,7 +709,7 @@ impl Vault {
                     .map(|i| i.id.clone());
                 let r = match id {
                     Some(id) => bw.update(&id, password).await,
-                    None => bw.create(host, user, password).await.map(|_| ()),
+                    None => bw.create(host, user, password, origin).await.map(|_| ()),
                 };
                 drop(bw);
                 self.refresh().await;
@@ -686,7 +724,7 @@ impl Vault {
                     .map(|i| i.id.clone());
                 let r = match id {
                     Some(id) => op.update(&id, password).await,
-                    None => op.create(host, user, password).await.map(|_| ()),
+                    None => op.create(host, user, password, origin).await.map(|_| ()),
                 };
                 drop(op);
                 self.refresh().await;
@@ -700,14 +738,12 @@ impl Vault {
     }
 
     /// Imported passwords, kept as they were last used.
-    pub async fn save_imported(
-        &self,
-        logins: Vec<(String, String, String, Option<f64>)>,
-    ) -> Result<usize, String> {
+    pub async fn save_imported(&self, logins: Vec<ImportedLogin>) -> Result<usize, String> {
         let s = self.store().await.map_err(|e| e.to_string())?;
         let mut n = 0;
-        for (host, user, password, used) in logins {
-            if s.save(&host, &user, &password, used).await.is_ok() {
+        for l in logins {
+            let saved = s.save_from(&l.host, &l.user, &l.password, l.used, l.origin.as_deref());
+            if saved.await.is_ok() {
                 n += 1;
             }
         }

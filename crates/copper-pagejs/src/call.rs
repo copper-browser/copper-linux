@@ -19,6 +19,8 @@ pub struct Call<T = Value> {
     args: Value,
     /// Only `browser_evaluate`: the agent's own function text.
     custom: Option<String>,
+    /// Runs only while the document is of this origin ([`Call::at`]).
+    origin: Option<String>,
     _result: PhantomData<fn() -> T>,
 }
 
@@ -28,6 +30,7 @@ impl<T> Clone for Call<T> {
             script: self.script,
             args: self.args.clone(),
             custom: self.custom.clone(),
+            origin: self.origin.clone(),
             _result: PhantomData,
         }
     }
@@ -39,6 +42,7 @@ impl<T> fmt::Debug for Call<T> {
             .field("script", &self.script)
             .field("args", &self.args)
             .field("custom", &self.custom)
+            .field("origin", &self.origin)
             .finish()
     }
 }
@@ -86,6 +90,7 @@ impl<T> Call<T> {
             script,
             args: to_value(args),
             custom: None,
+            origin: None,
             _result: PhantomData,
         }
     }
@@ -95,6 +100,21 @@ impl<T> Call<T> {
             custom: Some(function),
             ..Call::new(script, args)
         }
+    }
+
+    /// Run only while the document is still of `origin` (`location.origin`,
+    /// which no page can redefine); anywhere else the call does nothing and
+    /// answers `null`. A fill pinned to the form it was chosen for: a page
+    /// that navigated meanwhile gets nothing.
+    pub fn at(mut self, origin: &str) -> Self {
+        self.origin = Some(origin.to_string());
+        self
+    }
+
+    fn guard(&self) -> Option<String> {
+        self.origin
+            .as_ref()
+            .map(|o| format!("location.origin === {}", literal(&Value::from(o.as_str()))))
     }
 
     pub fn script(&self) -> Script {
@@ -134,18 +154,26 @@ impl<T> Call<T> {
     /// `callAsyncJavaScript` — the way to run every call: a returned promise
     /// is awaited. The required installer runs first, in the same turn.
     pub fn function_body(&self) -> String {
-        match self.installer() {
+        let body = match self.installer() {
             Some(installer) => format!("{installer};\nreturn {};", self.invocation()),
             None => format!("return {};", self.invocation()),
+        };
+        match self.guard() {
+            Some(guard) => format!("if (!({guard})) return null;\n{body}"),
+            None => body,
         }
     }
 
     /// One expression for `evaluate_javascript`. Fine for synchronous calls;
     /// an async call's value is a promise there, so prefer [`Call::function_body`].
     pub fn expression(&self) -> String {
-        match self.installer() {
+        let expr = match self.installer() {
             Some(installer) => format!("({installer}, {})", self.invocation()),
             None => self.invocation(),
+        };
+        match self.guard() {
+            Some(guard) => format!("(({guard}) ? {expr} : null)"),
+            None => expr,
         }
     }
 }

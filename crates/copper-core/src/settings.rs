@@ -26,8 +26,9 @@ pub mod keys {
     pub const MANNER: &str = "manner";
     /// Column width in points.
     pub const SIDEBAR_WIDTH: &str = "sidebar.width";
-    /// `letters` | `icons`. Default `icons`: a site's own mark, its letter
-    /// only where it has none.
+    /// Retired: tabs always wear the site's own icon (a globe until it
+    /// lands), as on the Mac (copper-browser/Copper#181). A stored value is
+    /// not read, but the key still marks an install older than `welcomed`.
     pub const GLYPH: &str = "glyph";
     /// `row` | `recent`. Default `row`.
     pub const TABS_SWITCHING: &str = "tabs.switching";
@@ -85,10 +86,9 @@ pub mod keys {
 }
 
 /// The keys the cloud `settings` document may carry (`CloudSettingsKeys.allowed`).
-pub const CLOUD_SETTINGS_KEYS: [&str; 9] = [
+pub const CLOUD_SETTINGS_KEYS: [&str; 8] = [
     keys::LOOK,
     keys::SIDEBAR,
-    keys::GLYPH,
     keys::TABS_SWITCHING,
     keys::TABS_SLEEP,
     keys::SPACES_SWIPE,
@@ -104,14 +104,6 @@ pub enum Look {
     Light,
     Dark,
     System,
-}
-
-/// What a tab wears beside its title.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Glyph {
-    Letters,
-    #[default]
-    Icons,
 }
 
 /// What Ctrl+Tab chooses.
@@ -157,7 +149,6 @@ macro_rules! string_enum {
     };
 }
 string_enum!(Look { Light = "light", Dark = "dark", System = "system" });
-string_enum!(Glyph { Letters = "letters", Icons = "icons" });
 string_enum!(TabSwitching { Row = "row", Recent = "recent" });
 string_enum!(ArchiveAfter { H12 = "h12", H24 = "h24", H48 = "h48", Never = "never" });
 
@@ -273,15 +264,6 @@ impl Settings {
     }
     pub fn set_sidebar_width(&mut self, w: f64) {
         self.set(keys::SIDEBAR_WIDTH, w);
-    }
-
-    pub fn glyph(&self) -> Glyph {
-        self.string(keys::GLYPH)
-            .and_then(Glyph::parse)
-            .unwrap_or_default()
-    }
-    pub fn set_glyph(&mut self, v: Glyph) {
-        self.set(keys::GLYPH, v.as_str());
     }
 
     pub fn tab_switching(&self) -> TabSwitching {
@@ -448,7 +430,6 @@ impl Settings {
             keys::SIDEBAR.into(),
             (self.tabs_position() == TabsPosition::Left).to_string(),
         );
-        out.insert(keys::GLYPH.into(), self.glyph().as_str().into());
         out.insert(
             keys::TABS_SWITCHING.into(),
             self.tab_switching().as_str().into(),
@@ -492,7 +473,6 @@ pub fn filter_cloud_values(values: &BTreeMap<String, String>) -> BTreeMap<String
             CLOUD_SETTINGS_KEYS.contains(&k.as_str())
                 && match k.as_str() {
                     keys::LOOK => ["light", "dark", "system"].contains(&v.as_str()),
-                    keys::GLYPH => ["letters", "icons"].contains(&v.as_str()),
                     keys::TABS_SWITCHING => ["row", "recent"].contains(&v.as_str()),
                     keys::SPACES_SWIPE => ["system", "natural", "inverted"].contains(&v.as_str()),
                     keys::SECTIONS_ARCHIVE => ["h12", "h24", "h48", "never"].contains(&v.as_str()),
@@ -592,5 +572,28 @@ mod tests {
         s.set(keys::DAILY_SHOWN, 1_763_700_000.0);
         assert_eq!(s.daily_shown(), Some(1_763_700_000.0));
         assert!(!s.cloud_values().contains_key(keys::DAILY_URL));
+    }
+
+    /// Mac `SiteIconsOnlyTests`: the Letters choice is gone and no longer
+    /// syncs; an old stored `letters` is read without error and ignored.
+    #[test]
+    fn the_letters_choice_no_longer_syncs() {
+        let m = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        assert_eq!(
+            filter_cloud_values(&m(&[("glyph", "letters"), ("look", "dark")])),
+            m(&[("look", "dark")])
+        );
+        assert!(!CLOUD_SETTINGS_KEYS.contains(&"glyph"));
+        let mut s = Settings::default();
+        s.set(keys::GLYPH, "letters");
+        assert!(s.welcomed(), "the old key still marks an older install");
+        assert!(!s.cloud_values().contains_key("glyph"));
+        s.apply_cloud_values(&m(&[("glyph", "icons")]));
+        assert_eq!(s.string(keys::GLYPH), Some("letters"));
     }
 }

@@ -42,7 +42,7 @@ pub mod ultrafast;
 pub mod who;
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::time::Instant;
 
@@ -113,6 +113,9 @@ pub struct CallCtx {
     pub summary: Option<String>,
     /// A loopback client (not an agent link).
     pub loopback: bool,
+    /// The call only reads its page ([`agent_tabs::READS`]): with its own
+    /// tab gone, an agent may still read the tab on screen.
+    pub reading: bool,
 }
 
 impl CallCtx {
@@ -138,6 +141,9 @@ pub(crate) struct State {
     pub drive: drive::Drive,
     /// Each agent session's own tab, by `Who::key`.
     pub bound: HashMap<String, TabId>,
+    /// Sessions whose own tab was closed: never moved onto the user's tab
+    /// for anything but a read, until they open or select another.
+    pub lost: HashSet<String>,
     /// Backstage holds: tab → the last time an agent asked for it.
     pub held: HashMap<TabId, Instant>,
     /// What each MCP session said at `initialize`.

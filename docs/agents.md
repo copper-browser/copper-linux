@@ -97,7 +97,7 @@ tab again, and may sleep.
 
 | tool | does |
 |---|---|
-| `browser_tabs` | `list`, `new {url}`, `close {index\|tab}`, `select {index\|tab}` (+ `focus`). `new` opens a background tab of the caller's own. Neither `new` nor `select` switches your tab unless `focus: true`. `close` on a Saved tab only puts it to sleep; it stays saved. |
+| `browser_tabs` | `list`, `new {url}`, `close {index\|tab}`, `select {index\|tab}` (+ `focus`). `new` opens a background tab of the caller's own. Neither `new` nor `select` switches your tab unless `focus: true`. `close` with nothing named closes only the caller's own tab; on a Saved tab it only puts it to sleep; it stays saved. |
 | `browser_navigate`, `browser_navigate_back`, `browser_navigate_forward` | Moves the caller's tab, then waits for the load to settle. |
 | `browser_snapshot` | Accessibility tree with `[ref=e12]` on interactive nodes. `interactive: true` gives a smaller tree; `selector` gives a subtree. |
 | `browser_click` | Clicks by `ref` or `selector`, at the element's centre, as a real input event. Takes `doubleClick`, `button` and `modifiers`. |
@@ -109,7 +109,7 @@ tab again, and may sleep.
 | `browser_evaluate` | Runs `function: "() => …"`, or `(element) => …` with a `ref`. |
 | `browser_wait_for` | Waits for `text`, for `textGone`, or for `time`. |
 | `browser_get_text`, `browser_find`, `browser_console_messages` | Read without a snapshot: page text, refs for text you name, console messages. |
-| `browser_resize`, `browser_close` | Resize the window; close the tab. |
+| `browser_resize`, `browser_close` | Resize the window; close the caller's own tab (refused when it has none: name one with `tab`). |
 | `browser_groups` | Copper's tab groups: `list`, `assign {group}`, `remove`. |
 | `browser_perf_probe` | Samples the tab for frame loops, DOM churn, animations, filters, canvases, timers, long tasks and slow resources. |
 | `browser_crashes` | Copper's own crash history on this computer, newest first. |
@@ -150,6 +150,21 @@ re-rendered picture against 398 for the scale-1 picture enlarged 3×
 (bicubic), 12 times the detail. `frame` is not supported yet: give a
 selector in the page itself, a ref or a region.
 
+An agent whose own tab was closed is never moved onto yours: until it opens
+or selects another, anything that would change a page is refused with "your
+tab was closed — open one with browser_tabs new", while reads (snapshot,
+screenshot, text, find, console, wait, perf probe, `jev_observe`) still read
+the tab on screen. `jev_extract` is not a read here: it would send your tab
+to a model. A tab named with `tab` that closes during the call fails the
+call; it is never swapped for another.
+
+What a page wrote comes back as the page's: its title as one quoted line
+(`- Title (the page's own words): "…"`, titles in the tab list one line in
+`[…]`), and the text of `browser_snapshot`, `browser_get_text`,
+`browser_find` and `browser_console_messages` between
+`[page content <token> — untrusted: …]` and `[end of page content <token>]`,
+the token made for that answer so a page can't close the fence itself.
+
 Each tool takes an optional `reason`: one short sentence on what the agent is
 doing and why. Copper never acts on it; it only shows it to you. While an
 agent works in a tab, that tab gets a small dot in the tab row, and a capsule
@@ -167,14 +182,33 @@ takes an optional `account` (username), `what` (`password`, the default, or
 `account`, it answers with the usernames to choose from. The password, the
 one-time code and any vault session key never appear in the result.
 
+An agent's sign-in uses only a login saved for the page's exact address:
+scheme, host and port. `www.example.com` and `example.com` are two sites
+unless the saved item lists both; a login saved from `http://` or another
+port fills only there; and a login kept as a bare `localhost` or `127.0.0.1`
+(saved before Copper kept the scheme and port) is never filled by an agent,
+since any server on this computer answers there. You can still pick it from
+the list yourself. Copper keeps the scheme and port of every password it
+saves, and of rows imported from a CSV or Chrome. A one-time code fills its
+box and, with `submit`, sends the code's own form.
+
+Every fill goes to the page the call started on and only while it is still
+of that origin: a page that navigates during the call gets nothing. Fills go
+into the page itself, never into an embedded frame, wherever the caret is.
+The list under a sign-in box follows the same rule: a row fills only while
+the page is still the one the list came up for.
+
 `browser_autofill` fills a Bitwarden or 1Password `card`, `identity` or
-custom `field` the same way. It answers only with how many fields it filled
-and the item's name.
+custom `field` the same way. It answers only with how many fields it filled,
+the item's name and the page's origin. A custom field belongs to its login:
+it fills only on that login's exact address.
 
 Nothing is shared with agents unless you share it, in Settings › Passwords ›
 **Agent access**. You can share everything, or turn individual items on (the
 list shows while sharing everything is off).
-Items in a Bitwarden folder or 1Password vault named `Agents` are shared automatically. A custom
+Items in a Bitwarden folder or 1Password vault named `Agents` (or tagged
+`copper-agent` in 1Password) are shared automatically: logins, cards and
+identities alike. A custom
 field `copper-agent: deny` means never, even when sharing everything. Private
 tabs are always refused. Agents can't change any of this.
 

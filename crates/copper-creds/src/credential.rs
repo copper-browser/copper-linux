@@ -133,6 +133,11 @@ pub struct Login {
     pub user: String,
     /// Last used for a sign-in, Unix seconds.
     pub used: Option<f64>,
+    /// The scheme, host and port it was saved from (`http://example.com`,
+    /// `https://example.com:8443`), when the save knew them
+    /// ([`crate::origin`]). `None`: saved before they were kept, or imported
+    /// without them.
+    pub origin: Option<String>,
 }
 
 impl Login {
@@ -145,7 +150,7 @@ impl Login {
             source: Source::Keychain,
             host: self.host.clone(),
             user: self.user.clone(),
-            sites: vec![self.host.clone()],
+            sites: vec![self.origin.clone().unwrap_or_else(|| self.host.clone())],
             name: self.user.clone(),
             has_totp: false,
             used: self.used,

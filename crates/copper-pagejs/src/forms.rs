@@ -58,6 +58,11 @@ pub fn submit() -> Call<Option<bool>> {
     Call::new(Script::FormsSubmit, json!({}))
 }
 
+/// Send the form the code box is in (a code page has no password box).
+pub fn submit_otp() -> Call<bool> {
+    Call::new(Script::FormsSubmitOtp, json!({}))
+}
+
 pub fn fill_otp(code: &str) -> Call<Option<bool>> {
     Call::new(Script::FormsFillOtp, json!({ "code": code }))
 }
