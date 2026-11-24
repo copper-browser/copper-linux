@@ -109,6 +109,40 @@ pub(crate) fn arg_f64(args: &Map<String, Value>, key: &str) -> Option<f64> {
     args.get(key).and_then(Value::as_f64)
 }
 
+/// A number argument: `None` when absent, else finite and within ±`limit`
+/// — or a Failure that names it (`Tools.number`).
+pub(crate) fn number(
+    args: &Map<String, Value>,
+    key: &str,
+    limit: f64,
+) -> Result<Option<f64>, Failure> {
+    let Some(raw) = args.get(key).filter(|v| !v.is_null()) else {
+        return Ok(None);
+    };
+    match raw.as_f64() {
+        Some(n) if n.is_finite() && n.abs() <= limit => Ok(Some(n)),
+        _ => {
+            let got = raw.as_str().map_or_else(|| raw.to_string(), str::to_string);
+            Err(Failure(format!(
+                "{key} must be a number from -{limit} to {limit}; got {got}"
+            )))
+        }
+    }
+}
+
+/// A helper's answer as a result (`Page.act`): its failures ("no element
+/// for …", "not editable: …", "no option matched …") are errors, never a
+/// quiet success.
+async fn act<P: Page>(page: &P, call: &Call<String>) -> Result<String, Failure> {
+    let said = js(page, call).await?;
+    if said.starts_with("no ") || said.starts_with("not ") {
+        return Err(Failure(format!(
+            "{said}. Take a fresh browser_snapshot and use a ref from it."
+        )));
+    }
+    Ok(said)
+}
+
 fn locator(args: &Map<String, Value>) -> Result<Locator, Failure> {
     Locator::from_args(arg_str(args, "ref"), arg_str(args, "selector"))
         .ok_or_else(|| Failure::new("ref (from browser_snapshot) or selector required"))
@@ -130,13 +164,25 @@ impl<H: Host> Mcp<H> {
             .ok_or_else(|| Failure::new("the tab has no page yet"))
     }
 
-    /// Scroll the target into view and answer its box in view points.
+    /// Scroll the target into view and answer its box in view points. With
+    /// `hit` (anything about to be clicked or typed into), a cookie wall or a
+    /// hidden field is an error naming it, never a click that lands on
+    /// something else; a cover on its way out gets three more looks.
     pub(crate) async fn prepare_target(
         &self,
         page: &H::Page,
         target: &Locator,
+        hit: bool,
     ) -> Result<Rect, Failure> {
-        let located = js(page, &pj::rect(target)).await?;
+        let call = pj::rect(target, hit);
+        let mut located = js(page, &call).await?;
+        for _ in 0..3 {
+            if !located.blocked() {
+                break;
+            }
+            self.host.sleep(Duration::from_millis(100)).await;
+            located = js(page, &call).await?;
+        }
         let rect = located.into_result(target).map_err(Failure)?;
         Ok(rect.scaled(page.zoom()))
     }
@@ -220,16 +266,22 @@ impl<H: Host> Mcp<H> {
                 ))]);
             }
             "browser_resize" => {
-                let (Some(w), Some(h)) = (arg_f64(args, "width"), arg_f64(args, "height")) else {
-                    return Err("width and height".into());
+                let (Some(w), Some(h)) = (
+                    number(args, "width", 20_000.0)?,
+                    number(args, "height", 20_000.0)?,
+                ) else {
+                    return Err("width and height required: points, 100 to 20000".into());
                 };
+                if w < 100.0 || h < 100.0 {
+                    return Err("width and height required: points, 100 to 20000".into());
+                }
                 self.host.resize_window(w, h).map_err(Failure)?;
                 return Ok(vec![Content::text(format!(
                     "Window is {}×{}",
                     w as i64, h as i64
                 ))]);
             }
-            "browser_groups" => return Ok(vec![Content::text(self.groups_tool(args, ctx))]),
+            "browser_groups" => return Ok(vec![Content::text(self.groups_tool(args, ctx)?)]),
             "jev_run" | "jev_step" | "jev_observe" | "jev_extract" => {
                 return self.jev_tool(name, args, ctx).await;
             }
@@ -288,19 +340,32 @@ impl<H: Host> Mcp<H> {
             }
             "browser_navigate" => {
                 let raw = arg_str(args, "url").ok_or("url required")?;
-                let url = copper_core::url_from_typed(raw)
-                    .ok_or_else(|| Failure(format!("not an address: {raw}")))?;
+                let url = copper_core::url_from_typed(raw).ok_or_else(|| {
+                    Failure(format!(
+                        "not an address: {raw} — pass a full URL such as https://example.com/page"
+                    ))
+                })?;
                 self.host.navigate(&id, url.as_str());
                 self.settle(&id, Duration::from_secs(15)).await;
                 Ok(vec![Content::Text(self.page_line(&id))])
             }
             "browser_navigate_back" => {
-                self.host.go_back(&id);
+                if !self.host.go_back(&id) {
+                    return Err(Failure(format!(
+                        "No page to go back to: this tab's history starts here. Use browser_navigate with the address you want. {}",
+                        self.page_line(&id)
+                    )));
+                }
                 self.settle(&id, Duration::from_secs(15)).await;
                 Ok(vec![Content::Text(self.page_line(&id))])
             }
             "browser_navigate_forward" => {
-                self.host.go_forward(&id);
+                if !self.host.go_forward(&id) {
+                    return Err(Failure(format!(
+                        "No page to go forward to: this is the newest page in the tab's history. Use browser_navigate with the address you want. {}",
+                        self.page_line(&id)
+                    )));
+                }
                 self.settle(&id, Duration::from_secs(15)).await;
                 Ok(vec![Content::Text(self.page_line(&id))])
             }
@@ -318,7 +383,7 @@ impl<H: Host> Mcp<H> {
             }
             "browser_click" => {
                 let target = locator(args)?;
-                let rect = self.prepare_target(&page, &target).await?;
+                let rect = self.prepare_target(&page, &target, true).await?;
                 let double = arg_bool(args, "doubleClick").unwrap_or(false);
                 let button_name = arg_str(args, "button").unwrap_or("left");
                 let mods = input::modifiers(&string_list(args.get("modifiers")));
@@ -350,7 +415,7 @@ impl<H: Host> Mcp<H> {
             }
             "browser_hover" => {
                 let target = locator(args)?;
-                let rect = self.prepare_target(&page, &target).await?;
+                let rect = self.prepare_target(&page, &target, true).await?;
                 let element = arg_str(args, "element");
                 self.trail_target(&page, &rect, element, "HOVER").await;
                 let z = page.zoom().max(0.01);
@@ -378,7 +443,7 @@ impl<H: Host> Mcp<H> {
                 let submit = arg_bool(args, "submit").unwrap_or(false);
                 let slowly = arg_bool(args, "slowly").unwrap_or(false);
                 let element = arg_str(args, "element");
-                let rect = self.prepare_target(&page, &target).await?;
+                let rect = self.prepare_target(&page, &target, true).await?;
                 self.trail_target(&page, &rect, element, "TYPE_TEXT").await;
                 let z = page.zoom().max(0.01);
                 let (cx, cy) = rect.center();
@@ -389,16 +454,16 @@ impl<H: Host> Mcp<H> {
                         .await
                         .map_err(Failure)?;
                     self.host.sleep(Duration::from_millis(60)).await;
-                    js(&page, &pj::focus(&target)).await?;
+                    act(&page, &pj::focus(&target)).await?;
                     if slowly {
                         page.input(InputEvent::Type(text.to_string()))
                             .await
                             .map_err(Failure)?;
                     } else {
-                        js(&page, &pj::set_value(&target, text)).await?;
+                        act(&page, &pj::set_value(&target, text)).await?;
                     }
                 } else {
-                    js(&page, &pj::set_value(&target, text)).await?;
+                    act(&page, &pj::set_value(&target, text)).await?;
                 }
                 let label = format!("{} {}", element.unwrap_or(""), target.script());
                 let shown = if looks_secret(&label) {
@@ -430,26 +495,49 @@ impl<H: Host> Mcp<H> {
                     .and_then(Value::as_array)
                     .ok_or("fields required")?;
                 let mut lines = Vec::new();
+                let mut failed = 0;
+                let none = Map::new();
                 for field in fields {
-                    let Some(field) = field.as_object() else {
-                        continue;
-                    };
-                    let Some(reference) = arg_str(field, "ref") else {
+                    let field = field.as_object().unwrap_or(&none);
+                    let name = arg_str(field, "name");
+                    let Some(reference) = arg_str(field, "ref").filter(|r| !r.is_empty()) else {
+                        failed += 1;
+                        lines.push(format!(
+                            "{}: not filled — no ref (take one from browser_snapshot)",
+                            name.unwrap_or("a field")
+                        ));
                         continue;
                     };
                     let value = arg_str(field, "value").unwrap_or("");
                     let kind = arg_str(field, "type").unwrap_or("textbox");
-                    let result = js_value(&page, &pj::fill(reference, kind, value)).await?;
-                    lines.push(format!(
-                        "{}: {}",
-                        arg_str(field, "name").unwrap_or(reference),
-                        render(Some(&result))
+                    let said = render(Some(
+                        &js_value(&page, &pj::fill(reference, kind, value)).await?,
                     ));
+                    if said.starts_with("no ") || said.starts_with("not ") {
+                        failed += 1;
+                    }
+                    lines.push(format!("{}: {said}", name.unwrap_or(reference)));
+                }
+                // Every field is tried; any that wasn't filled makes the call an error.
+                if failed > 0 {
+                    return Err(Failure(format!(
+                        "{failed} of {} fields not filled. Take a fresh browser_snapshot and retry those.\n{}",
+                        fields.len(),
+                        lines.join("\n")
+                    )));
                 }
                 Ok(vec![Content::Text(lines.join("\n"))])
             }
             "browser_press_key" => {
-                let key = arg_str(args, "key").ok_or("key required")?;
+                let key = arg_str(args, "key").filter(|k| !k.is_empty()).ok_or(
+                    "key required: a key name such as Enter, Tab, Escape, ArrowDown, or one character",
+                )?;
+                if !input::known(key) {
+                    return Err(Failure(format!(
+                        "Unknown key \"{key}\". Use a key name ({}), one character, or a combination such as Shift+Tab or Meta+a. To type text, use browser_type.",
+                        input::KEY_NAMES
+                    )));
+                }
                 let mods = input::modifiers(&string_list(args.get("modifiers")));
                 if real {
                     page.input(input::key(key, mods)).await.map_err(Failure)?;
@@ -465,16 +553,21 @@ impl<H: Host> Mcp<H> {
             "browser_select_option" => {
                 let target = locator(args)?;
                 let values = string_list(args.get("values"));
-                let result = js_value(&page, &pj::select(&target, &values)).await?;
-                Ok(vec![Content::Text(render(Some(&result)))])
+                Ok(vec![Content::Text(
+                    act(&page, &pj::select(&target, &values)).await?,
+                )])
             }
             "browser_drag" => {
                 let (Some(a), Some(b)) = (arg_str(args, "startRef"), arg_str(args, "endRef"))
                 else {
                     return Err("startRef and endRef".into());
                 };
-                let from = self.prepare_target(&page, &Locator::Ref(a.into())).await?;
-                let to = self.prepare_target(&page, &Locator::Ref(b.into())).await?;
+                let from = self
+                    .prepare_target(&page, &Locator::Ref(a.into()), true)
+                    .await?;
+                let to = self
+                    .prepare_target(&page, &Locator::Ref(b.into()), true)
+                    .await?;
                 self.trail_target(&page, &from, arg_str(args, "startElement"), "DRAG")
                     .await;
                 let z = page.zoom().max(0.01);
@@ -501,28 +594,50 @@ impl<H: Host> Mcp<H> {
             "browser_take_screenshot" => self.screenshot(&page, &id, args).await,
             "browser_evaluate" => {
                 let function = arg_str(args, "function").ok_or("function required")?;
-                let result = js_value(&page, &pj::evaluate(function, arg_str(args, "ref"))).await?;
-                Ok(vec![Content::Text(render(Some(&result)))])
+                let call = pj::evaluate(function, arg_str(args, "ref").filter(|r| !r.is_empty()));
+                let run = pin!(js_value(&page, &call));
+                let cap = pin!(self.host.sleep(Duration::from_secs(30)));
+                match select(run, cap).await {
+                    Either::Left((Ok(value), _)) => Ok(vec![Content::Text(render(Some(&value)))]),
+                    Either::Left((Err(Failure(text)), _)) if text.contains("SyntaxError") => Err(Failure(format!(
+                        "{text}. The function did not parse: pass one arrow function such as () => document.title, or a plain expression."
+                    ))),
+                    Either::Left((Err(e), _)) => Err(e),
+                    Either::Right(_) => Err("No answer after 30 s: the function's Promise never settled, or the page is busy. Return sooner, or poll with browser_wait_for.".into()),
+                }
             }
             "browser_wait_for" => {
-                if let Some(seconds) = arg_f64(args, "time") {
-                    self.host
-                        .sleep(Duration::from_secs_f64(seconds.clamp(0.0, 30.0)))
-                        .await;
+                let seconds = arg_f64(args, "time");
+                let text = arg_str(args, "text");
+                let gone = arg_str(args, "textGone");
+                if seconds.is_none() && text.is_none() && gone.is_none() {
+                    return Err("Nothing to wait for: pass text (to appear), textGone (to disappear) or time (seconds).".into());
+                }
+                if let Some(seconds) = seconds {
+                    if !(0.0..=30.0).contains(&seconds) {
+                        return Err(Failure(format!(
+                            "time must be a number of seconds, 0 or more (at most 30); got {seconds}"
+                        )));
+                    }
+                    self.host.sleep(Duration::from_secs_f64(seconds)).await;
                 }
                 let deadline = Instant::now() + Duration::from_secs(15);
-                if let Some(text) = arg_str(args, "text") {
-                    while Instant::now() < deadline {
-                        if js(&page, &pj::has_text(text)).await? == Some(true) {
-                            break;
-                        }
-                        self.host.sleep(Duration::from_millis(150)).await;
-                    }
-                }
-                if let Some(text) = arg_str(args, "textGone") {
-                    while Instant::now() < deadline {
-                        if js(&page, &pj::has_text(text)).await? == Some(false) {
-                            break;
+                for (needle, wanted) in [(text, true), (gone, false)] {
+                    let Some(needle) = needle else { continue };
+                    // Read failures count as "not yet": the page may be between documents.
+                    while js(&page, &pj::has_text(needle)).await.ok().flatten() != Some(wanted) {
+                        if Instant::now() >= deadline {
+                            return Err(Failure(if wanted {
+                                format!(
+                                    "Timed out after 15 s: \"{needle}\" never appeared. Take a browser_snapshot to see what the page shows instead, or call browser_wait_for again if it is still working. {}",
+                                    self.page_line(&id)
+                                )
+                            } else {
+                                format!(
+                                    "Timed out after 15 s: \"{needle}\" is still on the page. Take a browser_snapshot to see why, or call browser_wait_for again. {}",
+                                    self.page_line(&id)
+                                )
+                            }));
                         }
                         self.host.sleep(Duration::from_millis(150)).await;
                     }
@@ -530,10 +645,10 @@ impl<H: Host> Mcp<H> {
                 Ok(vec![Content::Text(self.page_line(&id))])
             }
             "browser_scroll" => {
-                let dy = arg_f64(args, "deltaY");
-                let dx = arg_f64(args, "deltaX").unwrap_or(0.0);
+                let dy = number(args, "deltaY", 1_000_000.0)?;
+                let dx = number(args, "deltaX", 1_000_000.0)?.unwrap_or(0.0);
                 if let (Some(reference), None) = (arg_str(args, "ref"), dy) {
-                    self.prepare_target(&page, &Locator::Ref(reference.into()))
+                    self.prepare_target(&page, &Locator::Ref(reference.into()), false)
                         .await?;
                     return Ok(vec![Content::Text(format!(
                         "Scrolled {reference} into view"
@@ -541,7 +656,7 @@ impl<H: Host> Mcp<H> {
                 }
                 let y = dy.unwrap_or_else(|| page.view_size().1 * 0.85);
                 cosmetic(&page, &trail::scroll(y)).await;
-                js_value(&page, &pj::scroll(arg_str(args, "ref"), dx, y)).await?;
+                act(&page, &pj::scroll(arg_str(args, "ref"), dx, y)).await?;
                 self.host.sleep(Duration::from_millis(120)).await;
                 Ok(vec![Content::Text(format!(
                     "Scrolled by {},{}. {}",
@@ -564,7 +679,9 @@ impl<H: Host> Mcp<H> {
                 let result = js_value(&page, &pj::find_text(text)).await?;
                 Ok(vec![Content::Text(render(Some(&result)))])
             }
-            _ => Err(Failure(format!("Unknown tool {name}"))),
+            _ => Err(Failure(format!(
+                "Unknown tool {name}. Call tools/list for the tools there are."
+            ))),
         }
     }
 
@@ -588,7 +705,7 @@ impl<H: Host> Mcp<H> {
         };
         let element = match &target {
             Some(target) => {
-                let r = self.prepare_target(page, target).await?;
+                let r = self.prepare_target(page, target, false).await?;
                 Some(ViewRect::new(
                     r.x / zoom,
                     r.y / zoom,
@@ -851,23 +968,28 @@ impl<H: Host> Mcp<H> {
         }
     }
 
-    fn groups_tool(&self, args: &Map<String, Value>, ctx: &CallCtx) -> String {
+    fn groups_tool(&self, args: &Map<String, Value>, ctx: &CallCtx) -> Result<String, Failure> {
+        let tab = || {
+            self.target(ctx)
+                .ok_or_else(|| Failure::new("no active tab"))
+        };
         match arg_str(args, "action").unwrap_or("list") {
             "assign" => {
-                let name = arg_str(args, "group").filter(|n| !n.is_empty());
-                match (self.target(ctx), name) {
-                    (Some(tab), Some(name)) => {
-                        self.host.group_assign(&tab.id, name);
-                        format!("Grouped into {name}")
-                    }
-                    _ => "group name required".into(),
-                }
+                let name = arg_str(args, "group").filter(|n| !n.is_empty()).ok_or(
+                    "group (a name) is required for assign; browser_groups list shows the ones there are",
+                )?;
+                self.host.group_assign(&tab()?.id, name);
+                Ok(format!("Grouped into {name}"))
             }
             "remove" => {
-                if let Some(tab) = self.target(ctx) {
-                    self.host.group_remove(&tab.id);
+                let tab = tab()?;
+                if tab.group.is_none() {
+                    return Err(
+                        "This tab is in no group. browser_groups list shows the groups".into(),
+                    );
                 }
-                "Removed from its group".into()
+                self.host.group_remove(&tab.id);
+                Ok("Removed from its group".into())
             }
             "list" => {
                 let lines: Vec<String> = self
@@ -886,13 +1008,13 @@ impl<H: Host> Mcp<H> {
                         )
                     })
                     .collect();
-                if lines.is_empty() {
+                Ok(if lines.is_empty() {
                     "No groups".into()
                 } else {
                     lines.join("\n")
-                }
+                })
             }
-            _ => "action must be list, assign or remove".into(),
+            _ => Err("action must be list, assign or remove".into()),
         }
     }
 }

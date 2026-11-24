@@ -139,7 +139,7 @@ Two deliberate Linux changes to the helper, both marked `// Linux:` in
 | `page/text.js` | `Text` | `Fork/MCP/Tools.swift:444` `Tools.dispatch` | call | page | `page/helper.js` |
 | `page/console.js` | `Console` | `Fork/MCP/Tools.swift:447` `Tools.dispatch` | call | page | `page/helper.js` |
 | `page/find_text.js` | `FindText` | `Fork/MCP/Tools.swift:451` `Tools.dispatch` | call | page | `page/helper.js` |
-| `page/element.js` | `Element` | `Fork/MCP/Tools.swift:405` `Tools.dispatch` | call | page | `page/helper.js` |
+| `page/element.js` | `Element` | `Fork/MCP/Tools.swift:613` `Tools.dispatch` (`browser_evaluate`'s wrapper) | call | page | `page/helper.js` |
 | `page/console_early.js` | `ConsoleEarly` | `Fork/MCP/Page.swift:138` `Page.helper` (its console capture) | user script: start, main frame | page |  |
 | `jev/fast.js` | `JevFast` | `Fork/MCP/Ultrafast.swift:132` `Ultrafast.script` | installer | page |  |
 | `jev/observe.js` | `JevObserve` | `Fork/MCP/Ultrafast.swift:365` `Ultrafast.observe` | call | page | `jev/fast.js` |

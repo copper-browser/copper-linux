@@ -218,7 +218,9 @@ impl<H: Host> Mcp<H> {
                     && (loopback || name != catalogue::CLOUD_HISTORY);
                 if !offered {
                     return reply(result(
-                        vec![Content::Text(format!("Unknown tool {name}"))],
+                        vec![Content::Text(format!(
+                            "Unknown tool {name}. Call tools/list for the tools there are."
+                        ))],
                         true,
                         None,
                     ));

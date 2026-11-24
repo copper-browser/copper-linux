@@ -22,6 +22,10 @@ pub fn main() {
         case!(mcp_console_from_document_start),
         case!(mcp_rect_on_smooth_scroll_page),
         case!(mcp_expression_path),
+        case!(mcp_evaluate_awaits_and_takes_expressions),
+        case!(mcp_click_names_what_is_in_the_way),
+        case!(mcp_locked_fields_are_errors),
+        case!(mcp_scroll_a_row_scrolls_its_list),
         case!(jev_observe_matches_mac),
         case!(jev_actions),
         case!(trail_layer),
@@ -199,7 +203,10 @@ async fn mcp_rect_and_centres(h: &H) -> Res {
     h.load("mcp.html").await?;
     h.run(&page::snapshot(None, true, 600)).await?;
     let target = r("e19");
-    let rect = h.run(&page::rect(&target)).await?.into_result(&target)?;
+    let rect = h
+        .run(&page::rect(&target, true))
+        .await?
+        .into_result(&target)?;
     ensure!(
         rect.width > 10.0 && rect.height > 5.0,
         "send button rect {rect:?}"
@@ -213,12 +220,12 @@ async fn mcp_rect_and_centres(h: &H) -> Res {
     ensure_eq!(hit, json!("go"));
     // A css locator works too, and a stale ref says what to do.
     let rect = h
-        .run(&page::rect(&css("#name")))
+        .run(&page::rect(&css("#name"), true))
         .await?
         .into_result(&css("#name"))?;
     ensure!(rect.width > 0.0, "name rect {rect:?}");
     let missing = h
-        .run(&page::rect(&r("e404")))
+        .run(&page::rect(&r("e404"), true))
         .await?
         .into_result(&r("e404"));
     ensure_eq!(
@@ -239,7 +246,10 @@ async fn mcp_click_hover_key(h: &H) -> Res {
     ensure_eq!(h.run(&page::click(&r("e23"), false, "right")).await?, "ok");
     ensure_eq!(h.run(&page::key("Escape")).await?, "ok");
     ensure_eq!(h.run(&page::focus(&r("e4"))).await?, "ok");
-    ensure_eq!(h.run(&page::focus(&r("e404"))).await?, "no element");
+    ensure_eq!(
+        h.run(&page::focus(&r("e404"))).await?,
+        "no element for ref:e404"
+    );
     ensure_eq!(h.run(&page::submit(&r("e4"))).await?, "ok");
     ensure_eq!(
         h.run(&page::click(&r("e404"), false, "left")).await?,
@@ -416,7 +426,7 @@ async fn mcp_rect_on_smooth_scroll_page(h: &H) -> Res {
     h.load("smooth.html").await?;
     ensure_eq!(h.js("window.scrollY").await?, json!(0));
     for day in ["d15", "d29", "d3"] {
-        let located = h.run(&page::rect(&css(&format!("#{day}")))).await?;
+        let located = h.run(&page::rect(&css(&format!("#{day}")), true)).await?;
         let rect = located
             .into_result(&css(day))
             .map_err(|e| format!("{day}: {e}"))?;
@@ -434,7 +444,7 @@ async fn mcp_rect_on_smooth_scroll_page(h: &H) -> Res {
         // Nothing still animating: the box is the same a beat later.
         sleep(250).await;
         let again = h
-            .run(&page::rect(&css(&format!("#{day}"))))
+            .run(&page::rect(&css(&format!("#{day}")), true))
             .await?
             .into_result(&css(day))?;
         ensure_eq!(again, rect);
@@ -455,6 +465,153 @@ async fn mcp_expression_path(h: &H) -> Res {
     let b = h.run(&page::snapshot(None, true, 600)).await?;
     ensure_eq!(a, b);
     ensure_eq!(h.run_expression(&forms::has_password()).await?, false);
+    Ok(())
+}
+
+/// Mac #181: browser_evaluate awaits a Promise, takes a plain expression,
+/// answers text (a string as is, the rest as JSON), and a thrown error comes
+/// back with its own message.
+async fn mcp_evaluate_awaits_and_takes_expressions(h: &H) -> Res {
+    h.load("mcp.html").await?;
+    let evaluate = async |function: &str, reference: Option<&str>| -> Result<String, String> {
+        let value = h.run(&page::evaluate(function, reference)).await?;
+        Ok(render(Some(&value)))
+    };
+    ensure_eq!(
+        evaluate("document.title", None).await?,
+        "Copper MCP fixture"
+    );
+    ensure_eq!(
+        evaluate(
+            "async () => { await new Promise(r => setTimeout(r, 20)); return {n: 1}; }",
+            None
+        )
+        .await?,
+        "{\"n\":1}"
+    );
+    ensure_eq!(evaluate("Promise.resolve(7)", None).await?, "7");
+    ensure_eq!(
+        evaluate("() => document.title // the title", None).await?,
+        "Copper MCP fixture"
+    );
+    let boom = evaluate("() => { throw new Error('pt-boom-17'); }", None).await;
+    ensure!(
+        boom.as_ref()
+            .is_err_and(|e| e.ends_with("Error: pt-boom-17")),
+        "a thrown error keeps its message: {boom:?}"
+    );
+    // With a ref: the element, or an error when it has gone.
+    h.run(&page::snapshot(None, true, 600)).await?;
+    ensure_eq!(evaluate("(el) => el.id", Some("e4")).await?, "name");
+    let gone = evaluate("(el) => el.id", Some("e404")).await;
+    ensure!(
+        gone.as_ref().is_err_and(
+            |e| e.ends_with("e404 is not on the page any more; take a fresh browser_snapshot")
+        ),
+        "{gone:?}"
+    );
+    Ok(())
+}
+
+/// Mac #181: a click under a cookie wall is an error naming the wall; a
+/// hidden element is "not visible"; a styled checkbox (its label on top) and
+/// a button in a shadow root still click.
+async fn mcp_click_names_what_is_in_the_way(h: &H) -> Res {
+    h.load("mcp.html").await?;
+    h.js("(function () { \
+          var wall = document.createElement('div'); wall.id = 'consent'; wall.textContent = 'Accept all'; \
+          wall.style.cssText = 'position:fixed;inset:0;background:#fff;z-index:9'; document.body.appendChild(wall); \
+          var host = document.createElement('div'); host.id = 'host'; document.querySelector('main').prepend(host); \
+          host.attachShadow({mode: 'open'}).innerHTML = '<button id=inner>Shadow</button>'; \
+          var box = document.getElementById('agree'); box.style.cssText = 'position:absolute;opacity:0.01'; \
+          return true; })()")
+        .await?;
+    let covered = h.run(&page::rect(&css("#go"), true)).await?;
+    ensure!(covered.blocked(), "{covered:?}");
+    ensure_eq!(
+        covered.into_result(&css("#go")),
+        Err::<page::Rect, String>("css:#go: covered by div#consent \"Accept all\" (it is on top, and would get the click). Close or dismiss what covers it first (find its button with browser_snapshot), then try again.".into())
+    );
+    // A picture or a scroll into view doesn't hit-test.
+    ensure!(
+        !h.run(&page::rect(&css("#go"), false)).await?.blocked(),
+        "no hit test"
+    );
+    h.js("document.getElementById('consent').remove(); true")
+        .await?;
+    ensure!(
+        !h.run(&page::rect(&css("#go"), true)).await?.blocked(),
+        "the wall is gone"
+    );
+    let hidden = h.run(&page::rect(&css("#gone"), true)).await?;
+    ensure_eq!(
+        hidden.into_result(&css("#gone")),
+        Err::<page::Rect, String>("css:#gone: not visible (display: none). Open or scroll to whatever reveals it first, or pick another ref from a fresh browser_snapshot.".into())
+    );
+    // Its label on top of a near-invisible checkbox counts as its own.
+    h.js("(function () { var l = document.getElementById('agree').parentElement; l.style.position = 'relative'; \
+          var cover = document.createElement('span'); cover.textContent = 'tick'; \
+          cover.style.cssText = 'position:absolute;left:0;top:0;width:40px;height:40px'; l.appendChild(cover); return true; })()")
+        .await?;
+    let agree = h.run(&page::rect(&css("#agree"), true)).await?;
+    ensure!(!agree.blocked(), "the label's own cover: {agree:?}");
+    // Through an open shadow root: the host is the element's.
+    let host = h.run(&page::rect(&css("#host"), true)).await?;
+    ensure!(!host.blocked(), "{host:?}");
+    Ok(())
+}
+
+/// Mac #181: typing into, filling or choosing in a read-only or disabled
+/// field is an error that says so, never a quiet write.
+async fn mcp_locked_fields_are_errors(h: &H) -> Res {
+    h.load("mcp.html").await?;
+    h.js("document.getElementById('name').readOnly = true; document.getElementById('color').disabled = true; true")
+        .await?;
+    let read_only = "not editable: INPUT is read-only (a picker may open when you click it)";
+    ensure_eq!(
+        h.run(&page::set_value(&css("#name"), "x")).await?,
+        read_only
+    );
+    ensure_eq!(h.run(&page::focus(&css("#name"))).await?, read_only);
+    ensure_eq!(
+        h.js("document.getElementById('name').value").await?,
+        json!("")
+    );
+    ensure_eq!(
+        h.run(&page::select(&css("#color"), &["Blue".into()]))
+            .await?,
+        "not editable: SELECT is disabled"
+    );
+    ensure_eq!(
+        h.js("document.getElementById('color').value").await?,
+        json!("r")
+    );
+    h.run(&page::snapshot(None, true, 600)).await?;
+    ensure_eq!(h.run(&page::fill("e4", "textbox", "Ada")).await?, read_only);
+    Ok(())
+}
+
+/// Mac #181: browser_scroll with a row's ref scrolls the list around it,
+/// not the row (which doesn't scroll); a ref that's gone is an error.
+async fn mcp_scroll_a_row_scrolls_its_list(h: &H) -> Res {
+    h.load("mcp.html").await?;
+    h.js("(function () { var list = document.createElement('ul'); list.id = 'list'; \
+          list.style.cssText = 'height:60px;overflow:auto;margin:0'; \
+          for (var i = 0; i < 20; i++) { var li = document.createElement('li'); li.textContent = 'Row ' + i; li.style.height = '20px'; list.appendChild(li); } \
+          document.querySelector('main').prepend(list); return true; })()")
+        .await?;
+    let before = h.js("window.scrollY").await?;
+    let row = ref_in(&h.run(&page::find_text("Row 2")).await?).ok_or("no ref for a row")?;
+    ensure_eq!(h.run(&page::scroll(Some(&row), 0.0, 40.0)).await?, "ok");
+    ensure_eq!(
+        h.js("document.getElementById('list').scrollTop").await?,
+        json!(40)
+    );
+    ensure_eq!(h.js("window.scrollY").await?, before);
+    ensure_eq!(
+        h.run(&page::scroll(Some("e404"), 0.0, 40.0)).await?,
+        "no element for ref:e404"
+    );
     Ok(())
 }
 

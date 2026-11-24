@@ -163,16 +163,22 @@ impl<P: Platform> Host for AppHost<P> {
         }
     }
 
-    fn go_back(&self, id: &TabId) {
-        if let Some(p) = self.shell().and_then(|s| s.page(id)) {
-            p.back();
-        }
+    fn go_back(&self, id: &TabId) -> bool {
+        let page = self.shell().and_then(|s| s.page(id));
+        let Some(p) = page.filter(|p| p.can_go_back()) else {
+            return false;
+        };
+        p.back();
+        true
     }
 
-    fn go_forward(&self, id: &TabId) {
-        if let Some(p) = self.shell().and_then(|s| s.page(id)) {
-            p.forward();
-        }
+    fn go_forward(&self, id: &TabId) -> bool {
+        let page = self.shell().and_then(|s| s.page(id));
+        let Some(p) = page.filter(|p| p.can_go_forward()) else {
+            return false;
+        };
+        p.forward();
+        true
     }
 
     fn is_loading(&self, id: &TabId) -> bool {

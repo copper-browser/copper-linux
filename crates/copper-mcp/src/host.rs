@@ -182,8 +182,10 @@ pub trait Host: 'static {
 
     /// Navigate the tab (`Tab.go(to:)`): `url` is already a full address.
     fn navigate(&self, id: &TabId, url: &str);
-    fn go_back(&self, id: &TabId);
-    fn go_forward(&self, id: &TabId);
+    /// Go back (forward) in the tab's history; false when there is no page
+    /// to go to, and nothing happened.
+    fn go_back(&self, id: &TabId) -> bool;
+    fn go_forward(&self, id: &TabId) -> bool;
 
     /// A load is in flight in the tab.
     fn is_loading(&self, id: &TabId) -> bool {
