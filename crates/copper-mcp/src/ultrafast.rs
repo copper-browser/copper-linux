@@ -2664,6 +2664,13 @@ impl<H: Host> Mcp<H> {
             out += &format!("\n{}", s.note);
         }
         out += &format!("\nGoal: {}", s.goal);
+        if let Some(answer) = &s.answer {
+            out += &format!("\nAnswer: {answer}");
+            out += &match &s.snippet {
+                Some(words) => format!("\nOn the page: \"{words}\""),
+                None => " (not found on the page — check it)".into(),
+            };
+        }
         if !s.history.is_empty() {
             out += "\n\n";
             out += &s
@@ -2682,6 +2689,9 @@ impl<H: Host> Mcp<H> {
         }
         if s.status == "blocked" {
             out += "\n\nBLOCKED: take over with the browser_* tools for this part, then jev_run again.";
+        }
+        if s.status == "unsure" {
+            out += "\n\nUNSURE: Jev did not show the goal met — check the page (browser_snapshot) and finish or retry.";
         }
         out
     }
