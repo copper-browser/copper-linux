@@ -86,9 +86,8 @@ pub struct Decision {
     /// literal/burst: every quoted value Jev matched to a field.
     pub assignments: Vec<Assignment>,
     pub input_tokens: i64,
-    /// The LLM decider's reply, as the router billed it (Jev bills input only).
+    /// The LLM decider's reply tokens, as the router billed them (Jev bills input only).
     pub output_tokens: i64,
-    pub cost_usd: f64,
     /// Who answered (`jev-1.14.0`, the LLM's name), when it says.
     pub model: String,
     /// How likely something is visibly left undone (`UNMET_STATEMENT`).
