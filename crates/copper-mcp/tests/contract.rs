@@ -43,6 +43,8 @@ struct World {
     button: Option<String>,
     fires: bool,
     covered: bool,
+    /// What `page/due.js` answers: a short timer the page started, ms.
+    due: f64,
     jev_endpoint: Option<String>,
     /// Where `copper/intelligence` keeps its files, when the test gives one.
     store: Option<copper_core::Store>,
@@ -234,6 +236,7 @@ impl Page for FakePage {
                 Script::JevCovered if world.borrow().covered => json!([1]),
                 Script::JevCovered => json!([]),
                 Script::JevFired => json!(world.borrow().fires && world.borrow().clicked),
+                Script::Due => json!(world.borrow().due),
                 Script::JevSettle => json!(true),
                 _ => Value::Null,
             })
@@ -805,9 +808,15 @@ async fn scripted_session_tabs_navigate_snapshot_click_type() {
                 assert_eq!(args, &json!({"selector": "", "interactive": true, "limit": 600}));
             }
 
+            // A short timer the click started (a navigation a moment later) is
+            // waited for: 400 ms here, past the settle's own beat (Tools.late).
+            r.host.0.borrow_mut().due = 400.0;
+            let started = std::time::Instant::now();
             let (clicked, error) = tool(port, "browser_click", json!({"ref": "e1", "element": "Search", "reason": "search"})).await;
             assert!(!error, "{clicked}");
             assert!(clicked.starts_with("Clicked Search. ### Page\n- URL: https://example.org/a"), "{clicked}");
+            assert!(started.elapsed() >= Duration::from_millis(700), "{:?}", started.elapsed());
+            r.host.0.borrow_mut().due = 0.0;
 
             let (typed, error) = tool(port, "browser_type", json!({"ref": "e2", "text": "copper", "submit": true})).await;
             assert!(!error, "{typed}");

@@ -148,6 +148,8 @@ scripts! {
     /// The helper's console capture from document start (`window.__copperLogs`),
     /// so `browser_console_messages` also has what the page logged while loading.
     ConsoleEarly = "page/console_early.js", UserScript(DocumentStart, MainFrame), Page, None;
+    /// After a click: how long until a short timer the page started fires (`late`).
+    Due = "page/due.js", Call, Page, None;
 
     // ---- Jev (Fork/MCP/Ultrafast.swift) ----
     /// `window.__jevFast`: observe, marker, check, resolve, covered, reveal, insert, arm, settle, … and the page's own net log.

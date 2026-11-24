@@ -14,7 +14,11 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value};
 
+use copper_pagejs::page as pj;
+
 use crate::host::{Host, TabId, TabInfo};
+use crate::tools::js;
+use crate::ultrafast::{NetMark, net};
 use crate::{CallCtx, Failure, Mcp};
 
 /// How long a page stays staged after the agent's last call on it.
@@ -331,6 +335,36 @@ impl<H: Host> Mcp<H> {
             tab.title,
             short(&tab.id)
         )
+    }
+
+    /// After an input: a navigation it set off a moment later — from a short
+    /// timer started as it landed, or once a data call it made came back — is
+    /// waited for until it starts, a second at most (`Tools.late`). `mark`:
+    /// where the page's request log stood before the input, `at` when.
+    pub(crate) async fn late(&self, id: &TabId, at: Instant, mark: Option<NetMark>) {
+        let Some(page) = self.host.page(id) else {
+            return;
+        };
+        let window = at.elapsed().as_secs_f64() * 1000.0 + 20.0;
+        // The page's own number: it can only make this wait, and never past the cap.
+        let due = js(&page, &pj::due(window)).await.unwrap_or(0.0);
+        let now = Instant::now();
+        let timer = now + Duration::from_secs_f64(due.clamp(0.0, 1000.0) / 1000.0);
+        let cap = now + Duration::from_secs(1);
+        let calling = || async {
+            if mark.is_none() {
+                return false;
+            }
+            self.data_calls(id, mark).await.is_some_and(|(calls, now)| {
+                calls.iter().any(|c| net::pending(c, now, net::EXPIRE_MS))
+            })
+        };
+        while !self.host.is_loading(id)
+            && Instant::now() < cap
+            && (Instant::now() < timer || calling().await)
+        {
+            self.host.sleep(Duration::from_millis(10)).await;
+        }
     }
 
     /// Until the page stops loading, plus a beat, or the budget is spent.

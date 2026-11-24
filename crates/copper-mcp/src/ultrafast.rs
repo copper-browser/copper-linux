@@ -1009,7 +1009,7 @@ impl<H: Host> Mcp<H> {
     }
 
     /// Where the log is now: requests after this are the next action's.
-    async fn net_mark(&self, tab: &TabId) -> Option<NetMark> {
+    pub(crate) async fn net_mark(&self, tab: &TabId) -> Option<NetMark> {
         let page = self.host.page(tab)?;
         let s = self.net_snapshot(&page, u64::MAX).await?;
         Some(NetMark {
@@ -1032,7 +1032,7 @@ impl<H: Host> Mcp<H> {
 
     /// The page's data calls since `mark`, less its bookkeeping, and the
     /// page's clock; `None` when the page left for another since `mark`.
-    async fn data_calls(
+    pub(crate) async fn data_calls(
         &self,
         tab: &TabId,
         mark: Option<NetMark>,

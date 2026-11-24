@@ -410,10 +410,18 @@ async fn mcp_console_from_document_start(h: &H) -> Res {
         .await?,
         json!(true)
     );
+    // Short timers are counted (Tools.late): one of 600 ms started now is due
+    // in about that long; one of 5 s, or one started before the window, is not.
+    h.js("setTimeout(() => {}, 5000); true").await?;
+    ensure_eq!(h.run(&page::due(50.0)).await?, 0.0);
+    h.js("setTimeout(() => {}, 600); true").await?;
+    let due = h.run(&page::due(50.0)).await?;
+    ensure!(due > 450.0 && due <= 600.0, "due {due}");
     // Without the user script: the Mac's lazy capture, unchanged.
     h.clear_user_scripts();
     h.load("console.html").await?;
     ensure_eq!(h.run(&page::console()).await?, "[]");
+    ensure_eq!(h.run(&page::due(1000.0)).await?, 0.0);
     Ok(())
 }
 

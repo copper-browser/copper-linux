@@ -328,6 +328,7 @@ impl<H: Host> Mcp<H> {
                 let (cx, cy) = rect.center();
                 self.glide(&page, cx / z, cy / z).await;
                 cosmetic(&page, &trail::click(cx / z, cy / z)).await;
+                let (at, mark) = (Instant::now(), self.net_mark(&id).await);
                 if real {
                     page.input(InputEvent::Click {
                         x: cx / z,
@@ -341,6 +342,7 @@ impl<H: Host> Mcp<H> {
                 } else {
                     js(&page, &pj::click(&target, double, button_name)).await?;
                 }
+                self.late(&id, at, mark).await;
                 self.settle(&id, Duration::from_secs(3)).await;
                 Ok(vec![Content::Text(format!(
                     "Clicked {}. {}",

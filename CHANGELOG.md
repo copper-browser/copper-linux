@@ -47,6 +47,10 @@ release dates.
   (arXiv's search panel) is left out and Jev uses what is on top instead of
   calling the page one that "kept changing". As on the Mac
   (copper-browser/Copper#182).
+- **An agent's click waits for a page that leaves a moment later.** A
+  click whose page navigates from a short timer or once a data request
+  comes back now answers on the new page (a second at most), not the old
+  one. As on the Mac (copper-browser/Copper#181).
 
 ## 0.6.4 — 2026-11-17
 
