@@ -7,7 +7,7 @@
 //! colours and the thread-safe [`control`] API automation drives it with;
 //! and the lanes on top of it — the copper-cloud sync ([`cloud`]), Canvas
 //! ([`canvas`]), the agents' MCP server ([`agents`]), the agent in the
-//! window ([`chat`]) and its Claude account ([`claude`]), the Calendar pin's card ([`calendar`]), passwords
+//! window ([`chat`]) and its Claude account ([`claude`]), the Calendar pin's card ([`calendar`]), the morning page ([`daily`]), passwords
 //! and form fill ([`forms`]), the ad blocker ([`shield`]), hide-anything
 //! ([`curtain`]), the update check ([`updates`]), the palette's matching
 //! ([`palette`]) and the shell's words for times and sizes ([`format`](mod@format)).
@@ -41,6 +41,7 @@ pub mod control;
 pub mod cover;
 pub mod crash;
 pub mod curtain;
+pub mod daily;
 pub mod downloads;
 pub mod folders;
 pub mod format;
@@ -49,6 +50,7 @@ pub mod main_loop;
 pub mod options;
 pub mod palette;
 pub mod permit;
+pub mod pinlight;
 pub mod private;
 pub mod recent;
 pub mod session;
@@ -57,6 +59,7 @@ pub mod shield;
 pub mod sidedrop;
 pub mod sleep;
 pub mod spaces;
+pub mod tidy;
 pub mod updates;
 pub mod util;
 pub mod view;

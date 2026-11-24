@@ -313,7 +313,7 @@ fn pin(shell: &Shell, t: &TabView) -> Pill {
     mark.set_halign(gtk::Align::Center);
     mark.set_valign(gtk::Align::Center);
     mark.set_hexpand(true);
-    root.append(&mark);
+    root.append(&tabs::with_pin_light(&mark, 3));
     root.set_hexpand(false);
     root.set_tooltip_text(Some(&t.label));
     tabs::wire_activation(shell, root.upcast_ref(), &t.id);
@@ -329,7 +329,11 @@ fn pin(shell: &Shell, t: &TabView) -> Pill {
 }
 
 fn fill(shell: &Shell, p: &Pill, t: &TabView, compact: bool) {
-    for (on, class) in [(t.live, "live"), (t.sleeping, "sleeping")] {
+    for (on, class) in [
+        (t.live, "live"),
+        (t.sleeping, "sleeping"),
+        (t.lit, "unread"),
+    ] {
         if on {
             p.root.add_css_class(class);
         } else {
@@ -348,6 +352,9 @@ fn fill(shell: &Shell, p: &Pill, t: &TabView, compact: bool) {
     let mut name = t.label.clone();
     if p.pin {
         name.push_str(", pinned");
+    }
+    if t.lit && !t.live {
+        name.push_str(", new");
     }
     if t.sleeping {
         name.push_str(", asleep");

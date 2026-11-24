@@ -76,6 +76,9 @@ window.copper { background: transparent; }
 }
 .pin:focus-visible { outline: 2px solid alpha(@accent_color, .6); outline-offset: -2px; }
 .pin .letter { font-size: 13px; font-weight: 600; }
+/* the pin light (Mac `PinLightDot`): an unread count in a pin's title, hidden on the live tab */
+.pin-light { min-width: 6px; min-height: 6px; border-radius: 99px; opacity: 0; transition: opacity 120ms ease-out; }
+.unread:not(.live) .pin-light { opacity: 1; }
 
 .space-head {
   min-height: 30px; padding: 0 6px 0 4px; border-radius: 8px; margin: 2px 0 4px 0;
@@ -87,6 +90,11 @@ window.copper { background: transparent; }
 button.clear-seam {
   min-width: 12px; min-height: 12px; padding: 0; border-radius: 99px;
   box-shadow: none; transition: opacity 120ms ease-out;
+}
+button.tidy-seam {
+  min-height: 18px; padding: 0 6px; border-radius: 99px; background: transparent;
+  box-shadow: none; font-size: 11px; font-weight: 500;
+  transition: background-color 120ms ease-out, color 120ms ease-out;
 }
 
 .space-chip {
@@ -258,6 +266,7 @@ row.copper-suggestion:selected {{ background-color: {selected}; }}
 row.copper-suggestion .detail, row.copper-suggestion .hint, row.copper-suggestion .mark {{ color: {muted}; }}
 .suggestion-header {{ color: {muted}; }}
 .copper-dropdown {{ background-color: {card}; box-shadow: 0 0 0 1px {rim}, 0 8px 28px {deep}; }}
+.pin-light {{ background-color: {copper}; }}
 "#,
         ground = p.ground.hex(),
         ink = p.ink.hex(),
@@ -275,6 +284,8 @@ row.copper-suggestion .detail, row.copper-suggestion .hint, row.copper-suggestio
         pwash = private.ground().mixed(p.ground, if dark { 0.35 } else { 0.55 }).hex(),
         ptag = private.dot().css(if dark { 0.30 } else { 0.18 }),
         ptag_ink = if dark { private.dot().mixed(Rgb::WHITE, 0.5).hex() } else { private.dot().mixed(Rgb::BLACK, 0.35).hex() },
+        // The Mac's `Palette.accent`: Copper's one colour.
+        copper = if dark { "#e07a52" } else { "#a9461f" },
     ));
     css
 }
@@ -305,6 +316,8 @@ fn surface(scope: &str, t: &Tint) -> String {
 {scope} .pin:hover {{ background-color: {hover2}; }}
 {scope} .pin.live {{ background-color: {pill}; box-shadow: inset 0 0 0 1px {rim}, 0 1px 2px {lift}; }}
 {scope} button.clear-seam {{ background-color: {hover}; color: {muted}; }}
+{scope} button.tidy-seam {{ color: {muted}; }}
+{scope} button.tidy-seam:hover, {scope} button.tidy-seam:disabled {{ background-color: {hover}; color: {ink}; }}
 {scope} .new-tab-row {{ color: {faint}; }}
 {scope} .new-tab-row:hover {{ color: {muted}; background-color: {hover}; }}
 {scope} .drop-before {{ box-shadow: inset 0 2px {dot}; }}

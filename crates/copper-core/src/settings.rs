@@ -73,6 +73,13 @@ pub mod keys {
     pub const ZOOM_PREFIX: &str = "zoom.";
     /// Last open settings page.
     pub const SETTINGS_PAGE: &str = "settings.page";
+    /// The morning page's address (Mac `Fork/DailyPage.swift`); empty or
+    /// absent is off, the default.
+    pub const DAILY_URL: &str = "daily.url";
+    /// The hour (0–23, local) the morning page's day turns over. Default 3.
+    pub const DAILY_HOUR: &str = "daily.hour";
+    /// When the morning page last opened (Unix seconds).
+    pub const DAILY_SHOWN: &str = "daily.shown";
     /// Linux only: search engine id (see [`crate::address::ENGINES`]).
     pub const SEARCH_ENGINE: &str = "search.engine";
 }
@@ -404,6 +411,26 @@ impl Settings {
         }
     }
 
+    /// The morning page: an `http(s)` address with a host, else off
+    /// (`DailyPage.address`).
+    pub fn daily_url(&self) -> Option<url::Url> {
+        let typed = self.string(keys::DAILY_URL)?.trim();
+        let url = url::Url::parse(typed).ok()?;
+        (url.scheme().starts_with("http") && url.host_str().is_some_and(|h| !h.is_empty()))
+            .then_some(url)
+    }
+    /// The hour the morning page's day turns over: `daily.hour` when it is
+    /// a whole 0–23, else 3 (`DailyPage.hour`).
+    pub fn daily_hour(&self) -> u32 {
+        self.number(keys::DAILY_HOUR)
+            .filter(|h| h.fract() == 0.0 && (0.0..=23.0).contains(h))
+            .map_or(3, |h| h as u32)
+    }
+    /// When the morning page last opened (Unix seconds).
+    pub fn daily_shown(&self) -> Option<f64> {
+        self.number(keys::DAILY_SHOWN)
+    }
+
     /// The search engine (Linux addition; Google by default).
     pub fn search_engine(&self) -> &'static crate::address::SearchEngine {
         crate::address::SearchEngine::by_id(self.string(keys::SEARCH_ENGINE).unwrap_or("google"))
@@ -522,5 +549,48 @@ mod tests {
         assert!(s.get("zoom.www.example.com").is_none());
         assert_eq!(ArchiveAfter::H48.hours(), Some(48.0));
         assert_eq!(ArchiveAfter::Never.hours(), None);
+    }
+
+    #[test]
+    fn morning_page_settings() {
+        let mut s = Settings::default();
+        assert_eq!(s.daily_url(), None, "off by default");
+        assert_eq!(s.daily_hour(), 3);
+        assert_eq!(s.daily_shown(), None);
+        for off in [
+            "",
+            "  ",
+            "example.com",
+            "ftp://example.com/",
+            "file:///tmp/x",
+        ] {
+            s.set(keys::DAILY_URL, off);
+            assert_eq!(s.daily_url(), None, "{off:?}");
+        }
+        s.set(keys::DAILY_URL, " https://paper.example/today ");
+        assert_eq!(
+            s.daily_url().map(String::from).as_deref(),
+            Some("https://paper.example/today")
+        );
+        for (stored, hour) in [
+            (4.0, 4),
+            (0.0, 0),
+            (23.0, 23),
+            (24.0, 3),
+            (-1.0, 3),
+            (4.5, 3),
+        ] {
+            s.set(keys::DAILY_HOUR, stored);
+            assert_eq!(s.daily_hour(), hour, "{stored}");
+        }
+        s.set(keys::DAILY_HOUR, "4");
+        assert_eq!(
+            s.daily_hour(),
+            3,
+            "a string is not an Int on the Mac either"
+        );
+        s.set(keys::DAILY_SHOWN, 1_763_700_000.0);
+        assert_eq!(s.daily_shown(), Some(1_763_700_000.0));
+        assert!(!s.cloud_values().contains_key(keys::DAILY_URL));
     }
 }

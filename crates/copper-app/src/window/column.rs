@@ -53,9 +53,13 @@ pub struct Column {
     pins: gtk::FlowBox,
     head: gtk::Box,
     saved: gtk::Box,
-    /// The hairline between Saved and Today, with "↓ Clear" over its end.
+    /// The hairline between Saved and Today, with "↓ Clear" over its end
+    /// and, from three loose tabs, "Tidy" after it.
     seam: gtk::Overlay,
+    rule: gtk::Box,
     clear: gtk::Button,
+    tidy: gtk::Button,
+    tidy_label: gtk::Label,
     /// While a tab is dragged and Saved is empty: where to drop it to save.
     slot: gtk::Revealer,
     new_tab: gtk::Box,
@@ -155,6 +159,29 @@ impl Column {
         let seam = gtk::Overlay::new();
         seam.set_child(Some(&rule));
         seam.add_overlay(&clear);
+        // Mac `TidyButton`: over the seam's end rather than in it, so a
+        // space with loose tabs never pushes its rows down.
+        let tidy_label = gtk::Label::new(Some("Tidy"));
+        let tidy_mark = gtk::Image::from_icon_name("folder-new-symbolic");
+        tidy_mark.set_pixel_size(10);
+        let tidy_inner = gtk::Box::new(gtk::Orientation::Horizontal, 3);
+        tidy_inner.append(&tidy_mark);
+        tidy_inner.append(&tidy_label);
+        let tidy = gtk::Button::new();
+        tidy.set_child(Some(&tidy_inner));
+        tidy.add_css_class("tidy-seam");
+        tidy.set_action_name(Some("win.tidy-tabs"));
+        tidy.set_halign(gtk::Align::End);
+        tidy.set_valign(gtk::Align::Center);
+        tidy.set_margin_end(4);
+        tidy.set_focusable(false);
+        tidy.set_tooltip_text(Some("Sort these tabs into folders"));
+        tidy.update_property(&[
+            gtk::accessible::Property::Label("Tidy tabs"),
+            gtk::accessible::Property::Description("Files loose tabs in this space into folders"),
+        ]);
+        tidy.set_visible(false);
+        seam.add_overlay(&tidy);
         let hover = gtk::EventControllerMotion::new();
         let c = clear.clone();
         hover.connect_enter(move |_, _, _| {
@@ -250,7 +277,10 @@ impl Column {
             head,
             saved,
             seam,
+            rule,
             clear,
+            tidy,
+            tidy_label,
             slot,
             new_tab,
             today,
@@ -536,6 +566,21 @@ impl Column {
         self.clear.set_tooltip_text(Some(&words));
         self.clear
             .update_property(&[gtk::accessible::Property::Label(&words)]);
+        let tidy = shell.tidy_candidates().len() >= copper_shell_core::tidy::LEAST;
+        let busy = shell.tidy_busy();
+        self.tidy.set_visible(tidy);
+        self.tidy.set_sensitive(!busy);
+        self.tidy_label
+            .set_label(if busy { "Tidying…" } else { "Tidy" });
+        // The hairline and its "↓ Clear" end 4 px before "Tidy" (the
+        // hairline's own 6 px margin included).
+        let room = if tidy {
+            self.tidy.measure(gtk::Orientation::Horizontal, -1).1 + 2
+        } else {
+            0
+        };
+        self.rule.set_margin_end(room);
+        self.clear.set_margin_end(6 + room);
     }
 
     /// Move the live pill without rebuilding.
@@ -817,7 +862,7 @@ fn pin_square(shell: &Shell, t: &TabView) -> Row {
     mark.set_halign(gtk::Align::Center);
     mark.set_valign(gtk::Align::Center);
     mark.set_hexpand(true);
-    root.append(&mark);
+    root.append(&tabs::with_pin_light(&mark, 5));
     let title = gtk::Label::new(None);
     let badge = gtk::Image::new();
     tabs::wire_activation(shell, root.upcast_ref(), &t.id);
@@ -846,6 +891,7 @@ fn fill(shell: &Shell, row: &Row, t: &TabView) {
     set(t.sleeping, "sleeping");
     set(t.crashed, "crashed");
     set(t.private, "private-tab");
+    set(t.lit, "unread");
     while let Some(c) = row.mark.first_child() {
         row.mark.remove(&c);
     }
@@ -862,9 +908,10 @@ fn fill(shell: &Shell, row: &Row, t: &TabView) {
         // A Calendar pin's card says more than its name would.
         let tip = (!copper_shell_core::calendar::peeks(&t.url)).then_some(t.label.as_str());
         row.root.set_tooltip_text(tip);
+        let new = if t.lit && !t.live { ", new" } else { "" };
         row.root
             .update_property(&[gtk::accessible::Property::Label(&format!(
-                "{}, pinned",
+                "{}, pinned{new}",
                 t.label
             ))]);
         return;
