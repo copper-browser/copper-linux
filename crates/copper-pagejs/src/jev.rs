@@ -103,6 +103,31 @@ impl Observation {
     }
 }
 
+/// One request the page made for data (`window.__jevFast.net`, the page-side
+/// stand-in for the Mac's `NetLog.Entry`). Times are the page's
+/// `performance.now()`, ms.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct NetEntry {
+    /// Order of asking, per document.
+    pub seq: u64,
+    pub method: String,
+    pub url: String,
+    /// `fetch` or `xhr` (what the page's own calls are), `beacon`.
+    pub kind: String,
+    /// When it was asked.
+    pub at: f64,
+    /// When its answer began (a status) or it ended.
+    #[serde(default, rename = "answeredAt", skip_serializing_if = "Option::is_none")]
+    pub answered_at: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
+    /// Ended (answered in full, failed or aborted).
+    #[serde(default)]
+    pub done: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// A point to put input, viewport CSS pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Point {
