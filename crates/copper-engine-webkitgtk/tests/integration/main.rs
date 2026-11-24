@@ -791,7 +791,15 @@ async fn check_cookies(ctx: &mut Ctx) -> Res {
         .set_cookie(&manual)
         .await
         .map_err(|e| e.to_string())?;
-    let jb2 = ctx.b.js("document.cookie").await?;
+    // WebKit hands a cookie set in the store to the page's process a moment later.
+    let mut jb2 = ctx.b.js("document.cookie").await?;
+    for _ in 0..50 {
+        if jb2.as_str().is_some_and(|s| s.contains("manual=1")) {
+            break;
+        }
+        sleep(20).await;
+        jb2 = ctx.b.js("document.cookie").await?;
+    }
     let ja2 = ctx.a.js("document.cookie").await?;
     let all_b = names(&ctx.beta.all_cookies().await.map_err(|e| e.to_string())?);
     ensure(
